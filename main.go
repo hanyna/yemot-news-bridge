@@ -40,13 +40,12 @@ func main() {
 		log.Fatal("חסר משתנה סביבה TGPOPUP_KEY")
 	}
 
-	yemotNumber := envOr("YEMOT_NUMBER", "0772263731")
-	yemotPassword := os.Getenv("YEMOT_PASSWORD")
-	if yemotPassword == "" {
-		log.Fatal("חסר משתנה סביבה YEMOT_PASSWORD (סיסמת הגישה שהוגדרה בהגדרות משתמש)")
+	yemotAPIKey := os.Getenv("YEMOT_API_KEY")
+	if yemotAPIKey == "" {
+		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
-	yemotExt := envOr("YEMOT_EXT", "1")          // מספר השלוחה
-	yemotFile := envOr("YEMOT_FILE", "001.tts")  // שם קובץ ה-TTS בתוך השלוחה
+	yemotExt := envOr("YEMOT_EXT", "1")         // מספר השלוחה
+	yemotFile := envOr("YEMOT_FILE", "001.tts") // שם קובץ ה-TTS בתוך השלוחה
 
 	client := &http.Client{Timeout: 20 * time.Second}
 
@@ -65,7 +64,7 @@ func main() {
 		return
 	}
 
-	if err := pushToYemot(client, yemotNumber, yemotPassword, yemotExt, yemotFile, text); err != nil {
+	if err := pushToYemot(client, yemotAPIKey, yemotExt, yemotFile, text); err != nil {
 		log.Fatalf("שגיאה בשליחה לימות המשיח: %v", err)
 	}
 
@@ -107,9 +106,10 @@ func fetchLatest(client *http.Client, feedURL, key string) (*FeedItem, error) {
 	return &parsed.Items[0], nil
 }
 
-// pushToYemot מעלה טקסט לקובץ TTS בשלוחה נתונה, דרך ה-API הקלאסי
-// של ימות המשיח (www.call2all.co.il/ym/api/UploadTextFile).
-func pushToYemot(client *http.Client, number, password, ext, file, text string) error {
+// pushToYemot מעלה טקסט לקובץ TTS בשלוחה נתונה, דרך ה-API הרשמי
+// של ימות המשיח (www.call2all.co.il/ym/api/UploadTextFile), עם מפתח
+// API קבוע שנוצר בעמוד "מפתחות גישה" (נשלח בכותרת Authorization).
+func pushToYemot(client *http.Client, apiKey, ext, file, text string) error {
 	base := "https://www.call2all.co.il/ym/api/UploadTextFile"
 
 	// חיתוך למקרה שהטקסט ארוך במיוחד — TTS ארוך מדי עלול להיכשל/להשתתק.
@@ -124,12 +124,17 @@ func pushToYemot(client *http.Client, number, password, ext, file, text string) 
 		return err
 	}
 	q := u.Query()
-	q.Set("token", number+":"+password)
 	q.Set("what", "ivr2:/"+ext+"/"+file)
 	q.Set("contents", text)
 	u.RawQuery = q.Encode()
 
-	resp, err := client.Get(u.String())
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("authorization", apiKey)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -139,12 +144,15 @@ func pushToYemot(client *http.Client, number, password, ext, file, text string) 
 	if err != nil {
 		return err
 	}
-	respText := strings.TrimSpace(string(body))
-
-	// ימות המשיח מחזיר "OK" (או משהו שמתחיל ב-OK) בהצלחה,
-	// ותיאור שגיאה בעברית/קוד שגיאה אחרת.
-	if !strings.HasPrefix(strings.ToUpper(respText), "OK") {
-		return fmt.Errorf("תגובת שגיאה מימות המשיח: %s", respText)
+	var parsed struct {
+		ResponseStatus string `json:"responseStatus"`
+		Message        string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return fmt.Errorf("תגובה לא צפויה מימות המשיח: %s", strings.TrimSpace(string(body)))
+	}
+	if parsed.ResponseStatus != "OK" {
+		return fmt.Errorf("שגיאה מימות המשיח (%s): %s", parsed.ResponseStatus, parsed.Message)
 	}
 	return nil
 }

@@ -15,8 +15,8 @@
 3. **מלא שני משתני סביבה סודיים** (בעמוד Environment של השירות ב-Render,
    בדיוק כמו שעשית עבור `telegram-popup`):
    - `TGPOPUP_KEY` — אותו מפתח שכבר יש לך ב-Environment של `telegram-popup`
-   - `YEMOT_PASSWORD` — סיסמת הגישה שהגדרת בימות המשיח, בעמוד
-     "הגדרות משתמש" (השדה עם אייקון העין 👁)
+   - `YEMOT_API_KEY` — המפתח הקבוע שנוצר בעמוד "מפתחות גישה" בימות המשיח
+     (חייב הרשאה ל-`/api/UploadTextFile` ברשימה הלבנה של המפתח)
 
 4. שאר המשתנים (`YEMOT_NUMBER`, `YEMOT_EXT`, `YEMOT_FILE`) כבר מוגדרים
    בברירת מחדל ל-0772263731 / שלוחה 1 / קובץ 001.tts — אפשר לשנות
@@ -39,6 +39,6 @@
 ## בדיקה ידנית מקומית (לא חובה)
 ```
 export TGPOPUP_KEY=...
-export YEMOT_PASSWORD=...
+export YEMOT_API_KEY=...
 go run .
 ```
