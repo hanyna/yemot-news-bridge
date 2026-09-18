@@ -1,0 +1,19 @@
+services:
+  - type: cron
+    name: yemot-news-bridge
+    runtime: go
+    plan: free
+    schedule: "* * * * *"    # כל דקה
+    buildCommand: go build -o bridge .
+    startCommand: ./bridge
+    envVars:
+      - key: TGPOPUP_KEY
+        sync: false           # ימולא ידנית ב-Render Environment
+      - key: YEMOT_PASSWORD
+        sync: false           # ימולא ידנית ב-Render Environment
+      - key: YEMOT_NUMBER
+        value: "0772263731"
+      - key: YEMOT_EXT
+        value: "1"
+      - key: YEMOT_FILE
+        value: "001.tts"
