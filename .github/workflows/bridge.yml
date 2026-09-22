@@ -1,13 +1,23 @@
 name: Telegram to Yemot bridge
 
+# כל הפעלה נשארת פתוחה עד שעתיים ובודקת הודעות חדשות כל דקה.
+# כל 30 דקות מופעלת הפעלה חדשה שמחליפה את הקודמת (cancel-in-progress),
+# כך שיש תמיד הפעלה אחת פעילה — גם אם GitHub מאחר ריצה מתוזמנת.
 on:
   schedule:
-    - cron: "*/5 * * * *"   # כל 5 דקות (GitHub Actions לא מבטיח דיוק מושלם)
-  workflow_dispatch: {}       # מאפשר גם הרצה ידנית מהטאב Actions, לבדיקות
+    - cron: "*/30 * * * *"
+  push:
+    branches: [main]      # עדכון קוד נכנס לתוקף מיד
+  workflow_dispatch: {}   # הפעלה ידנית מהטאב Actions
+
+concurrency:
+  group: yemot-bridge
+  cancel-in-progress: true
 
 jobs:
   run-bridge:
     runs-on: ubuntu-latest
+    timeout-minutes: 130
     steps:
       - uses: actions/checkout@v5
 
@@ -16,8 +26,13 @@ jobs:
           go-version: "1.22"
           cache: false   # אין תלויות חיצוניות (אין go.sum), אז אין מה לשמור במטמון
 
-      - name: Run bridge
+      - name: Build
+        run: go build -o bridge .
+
+      - name: Run bridge (loop)
         env:
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
-        run: go run .
+          RUN_MINUTES: "120"       # כמה זמן ההפעלה נשארת פתוחה
+          INTERVAL_SECONDS: "60"   # כל כמה שניות לבדוק הודעות חדשות
+        run: ./bridge

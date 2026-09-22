@@ -43,49 +43,101 @@ var knownNames = map[string]string{
 	"elisha_yered": "אלישע ירד",
 }
 
+// כתובת ה-API של ימות המשיח.
+var yemotBase = "https://www.call2all.co.il/ym/api/"
+
 // הודעת הפתיחה בתפריט הראשי של הקו.
 const defaultWelcome = "ברוכים הבאים לקו עדכוני ארץ ישראל. לעדכונים שוטפים, הקישו 1."
 
 func main() {
 	// --- קריאת הגדרות מתוך משתני סביבה ---
-	feedURL := envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages")
-	feedKey := strings.TrimSpace(os.Getenv("TGPOPUP_KEY"))
-	if feedKey == "" {
+	cfg := config{
+		feedURL: envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
+		feedKey: strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
+		apiKey:  cleanKey(os.Getenv("YEMOT_API_KEY")),
+		ext:     envOr("YEMOT_EXT", "1"),      // מספר השלוחה
+		maxMsgs: envInt("YEMOT_MAX_MSGS", 10), // כמה הודעות אחרונות להקריא (קובץ לכל הודעה)
+		newest:  envOr("YEMOT_ORDER", "oldest") == "newest",
+	}
+	if cfg.feedKey == "" {
 		log.Fatal("חסר משתנה סביבה TGPOPUP_KEY")
 	}
-
-	yemotAPIKey := cleanKey(os.Getenv("YEMOT_API_KEY"))
-	if yemotAPIKey == "" {
+	if cfg.apiKey == "" {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
-	yemotExt := envOr("YEMOT_EXT", "1")     // מספר השלוחה
-	maxMsgs := envInt("YEMOT_MAX_MSGS", 10) // כמה הודעות אחרונות להקריא (קובץ לכל הודעה)
-	if maxMsgs > 99 {
-		maxMsgs = 99
+	if cfg.maxMsgs > 99 {
+		cfg.maxMsgs = 99
 	}
-	newestFirst := envOr("YEMOT_ORDER", "oldest") == "newest"
-
-	client := &http.Client{Timeout: 30 * time.Second}
+	var err error
+	cfg.loc, err = time.LoadLocation("Asia/Jerusalem")
+	if err != nil {
+		cfg.loc = time.FixedZone("IL", 3*3600)
+	}
+	cfg.client = &http.Client{Timeout: 30 * time.Second}
+	// שרת Render בחבילה החינמית נרדם כשאין שימוש, וההתעוררות לוקחת 30–60 שניות.
+	cfg.feedClient = &http.Client{Timeout: 90 * time.Second}
 
 	// הודעת פתיחה בתפריט הראשי (קובץ M1000.tts בשלוחה הראשית).
-	// מתעדכנת בכל ריצה, כך ששינוי הטקסט כאן נכנס לתוקף לבד.
 	// YEMOT_WELCOME=off מכבה.
 	if welcome := envOr("YEMOT_WELCOME", defaultWelcome); welcome != "off" {
-		if err := pushToYemot(client, yemotAPIKey, "", "M1000.tts", welcome); err != nil {
+		if err := pushToYemot(cfg.client, cfg.apiKey, "", "M1000.tts", welcome); err != nil {
 			log.Printf("הערה: עדכון הודעת הפתיחה נכשל: %v", err)
 		} else {
 			log.Printf("הודעת פתיחה (M1000.tts בשלוחה הראשית): %s", welcome)
 		}
-		checkRootIsMenu(client, yemotAPIKey)
+		checkRootIsMenu(cfg.client, cfg.apiKey)
 	}
 
-	// שרת Render בחבילה החינמית נרדם כשאין שימוש, וההתעוררות לוקחת 30–60 שניות.
-	// לכן ל-feed יש זמן המתנה ארוך יותר, ועד 3 ניסיונות.
-	feedClient := &http.Client{Timeout: 90 * time.Second}
+	// מצב לולאה: RUN_MINUTES > 0 — התוכנית נשארת פתוחה ובודקת כל
+	// INTERVAL_SECONDS שניות, ומעלה לימות המשיח רק קבצים שהשתנו.
+	// בלי RUN_MINUTES — ריצה אחת וסיום (כמו קודם).
+	runFor := time.Duration(envInt("RUN_MINUTES", 0)) * time.Minute
+	interval := time.Duration(envInt("INTERVAL_SECONDS", 60)) * time.Second
+
+	st := &state{}
+	if runFor == 0 {
+		if err := syncOnce(&cfg, st); err != nil {
+			log.Fatalf("%v", err)
+		}
+		return
+	}
+
+	deadline := time.Now().Add(runFor)
+	log.Printf("מצב לולאה: בדיקה כל %v, עד %s (שעון ישראל).", interval, deadline.In(cfg.loc).Format("15:04"))
+	for {
+		if err := syncOnce(&cfg, st); err != nil {
+			log.Printf("שגיאה בסבב (ממשיך לסבב הבא): %v", err)
+		}
+		if time.Now().Add(interval).After(deadline) {
+			log.Println("זמן הריצה הסתיים — ההפעלה הבאה של ה-Workflow תמשיך מכאן.")
+			return
+		}
+		time.Sleep(interval)
+	}
+}
+
+type config struct {
+	feedURL, feedKey, apiKey, ext string
+	maxMsgs                       int
+	newest                        bool
+	loc                           *time.Location
+	client, feedClient            *http.Client
+}
+
+// state — מה נמצא כרגע בשלוחה (לפי מה שהעלינו בהפעלה הזו), כדי להעלות
+// רק קבצים שהשתנו.
+type state struct {
+	uploaded []string          // תוכן כל קובץ לפי הסדר: [0]=001.tts ...
+	known    bool              // האם כבר סונכרנו פעם אחת בהפעלה הזו
+	titles   map[string]string // שמות ערוצים אחרונים שנשלפו
+}
+
+// syncOnce: שליפה מה-feed, בניית הטקסטים, והעלאת מה שהשתנה בלבד.
+func syncOnce(cfg *config, st *state) error {
 	var items []FeedItem
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
-		items, err = fetchFeed(feedClient, feedURL, feedKey)
+		items, err = fetchFeed(cfg.feedClient, cfg.feedURL, cfg.feedKey)
 		if err == nil {
 			break
 		}
@@ -95,48 +147,57 @@ func main() {
 		}
 	}
 	if err != nil {
-		log.Fatalf("שגיאה בשליפת ההודעות: %v", err)
+		return fmt.Errorf("שגיאה בשליפת ההודעות: %w", err)
 	}
 
-	// שמות הערוצים (השרת כבר ער בשלב הזה). כישלון כאן לא עוצר — יש גיבוי.
-	titles, err := fetchTitles(client, feedURL, feedKey)
-	if err != nil {
+	// שמות הערוצים. כישלון לא עוצר — נשארים עם הקודמים / השמות הקבועים.
+	if t, err := fetchTitles(cfg.client, cfg.feedURL, cfg.feedKey); err == nil {
+		st.titles = t
+	} else if st.titles == nil {
 		log.Printf("לא הצלחתי לשלוף שמות ערוצים (משתמש בשמות הקבועים): %v", err)
 	}
 
-	loc, err := time.LoadLocation("Asia/Jerusalem")
-	if err != nil {
-		loc = time.FixedZone("IL", 3*3600)
-	}
-
-	parts := buildScript(items, titles, loc, maxMsgs, newestFirst)
+	parts := buildScript(items, st.titles, cfg.loc, cfg.maxMsgs, cfg.newest)
 	if len(parts) == 0 {
 		log.Println("אין הודעות טקסט זמינות — לא נשלח כלום.")
-		return
+		return nil
 	}
 
-	// כל הודעה לקובץ משלה: 001.tts, 002.tts, ...
+	// כל הודעה לקובץ משלה: 001.tts, 002.tts, ... — רק מה שהשתנה.
+	changed := 0
 	for i, part := range parts {
+		if st.known && i < len(st.uploaded) && st.uploaded[i] == part {
+			continue
+		}
 		file := fmt.Sprintf("%03d.tts", i+1)
-		if err := pushToYemot(client, yemotAPIKey, yemotExt, file, part); err != nil {
-			log.Fatalf("שגיאה בשליחה לימות המשיח (%s): %v", file, err)
+		if err := pushToYemot(cfg.client, cfg.apiKey, cfg.ext, file, part); err != nil {
+			st.known = false // לא בטוחים מה נמצא בשלוחה — בסבב הבא מעלים הכול
+			return fmt.Errorf("שגיאה בשליחה לימות המשיח (%s): %w", file, err)
 		}
 		log.Printf("%s (%d תווים): %.80s", file, len([]rune(part)), part)
+		changed++
 	}
 
-	// אם הפעם יש פחות הודעות מהמקסימום — מוחקים קבצים ישנים שנשארו מריצה
-	// קודמת, כדי שלא יוקראו הודעות ישנות בסוף.
-	var stale []string
-	for i := len(parts) + 1; i <= maxMsgs; i++ {
-		stale = append(stale, fmt.Sprintf("ivr2:/%s/%03d.tts", yemotExt, i))
-	}
-	if len(stale) > 0 {
-		if err := deleteYemotFiles(client, yemotAPIKey, stale); err != nil {
-			log.Printf("הערה: מחיקת קבצים ישנים לא הצליחה (לא קריטי): %v", err)
+	// קבצים עודפים מריצה קודמת (כשיש עכשיו פחות הודעות) — מוחקים,
+	// כדי שלא יוקראו הודעות ישנות בסוף.
+	if !st.known || len(parts) < len(st.uploaded) {
+		var stale []string
+		for i := len(parts) + 1; i <= cfg.maxMsgs; i++ {
+			stale = append(stale, fmt.Sprintf("ivr2:/%s/%03d.tts", cfg.ext, i))
+		}
+		if len(stale) > 0 {
+			if err := deleteYemotFiles(cfg.client, cfg.apiKey, stale); err != nil {
+				log.Printf("הערה: מחיקת קבצים ישנים לא הצליחה (לא קריטי): %v", err)
+			}
 		}
 	}
 
-	log.Printf("נשלח בהצלחה: %d הודעות, כל אחת בקובץ נפרד.", len(parts))
+	st.uploaded = parts
+	st.known = true
+	if changed > 0 {
+		log.Printf("עודכנו %d קבצים (סה\"כ %d הודעות בשלוחה).", changed, len(parts))
+	}
+	return nil
 }
 
 // buildScript בונה את טקסטי ההקראה — אחד לכל הודעה:
@@ -317,7 +378,7 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 // של ימות המשיח (www.call2all.co.il/ym/api/UploadTextFile), עם מפתח
 // API קבוע שנוצר בעמוד "מפתחות גישה" (נשלח בכותרת Authorization).
 func pushToYemot(client *http.Client, apiKey, ext, file, text string) error {
-	base := "https://www.call2all.co.il/ym/api/UploadTextFile"
+	base := yemotBase + "UploadTextFile"
 
 	// שליחה ב-POST (טופס מקודד) במקום GET — כך טקסט ארוך בעברית לא נחתך
 	// בגלל אורך הכתובת, והתוכן לא נחשף בלוגים של כתובות.
@@ -370,7 +431,7 @@ func cleanKey(k string) string {
 // checkRootIsMenu בודק (רק לצורך הלוג) שהשלוחה הראשית מוגדרת כתפריט —
 // אחרת קובץ M1000 לא יושמע. לא משנה שום הגדרה בעצמו.
 func checkRootIsMenu(client *http.Client, apiKey string) {
-	req, err := http.NewRequest(http.MethodGet, "https://www.call2all.co.il/ym/api/GetTextFile?what="+url.QueryEscape("ivr2:/ext.ini"), nil)
+	req, err := http.NewRequest(http.MethodGet, yemotBase+"GetTextFile?what="+url.QueryEscape("ivr2:/ext.ini"), nil)
 	if err != nil {
 		return
 	}
@@ -400,7 +461,7 @@ func deleteYemotFiles(client *http.Client, apiKey string, paths []string) error 
 	for i, p := range paths {
 		form.Set(fmt.Sprintf("what%d", i), p)
 	}
-	req, err := http.NewRequest(http.MethodPost, "https://www.call2all.co.il/ym/api/FileAction", strings.NewReader(form.Encode()))
+	req, err := http.NewRequest(http.MethodPost, yemotBase+"FileAction", strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
