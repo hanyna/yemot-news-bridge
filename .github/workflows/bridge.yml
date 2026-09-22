@@ -37,7 +37,7 @@ jobs:
           INTERVAL_SECONDS: "60"   # כל כמה שניות לבדוק הודעות חדשות
           YEMOT_MAX_MSGS: "10"     # כמה הודעות בשלוחה 1 (כל הערוצים)
           YEMOT_PER_CHANNEL: "5"   # כמה הודעות בשלוחה של כל ערוץ (2 ומעלה)
-          YEMOT_ORDER: "newest"    # newest = החדשה ראשונה, oldest = לפי סדר השעות
+          YEMOT_ORDER: "oldest"    # oldest = 001 הישנה והמספר הגבוה החדשה. ימות המשיח משמיע מהגבוה לנמוך, כך שהחדשה נשמעת ראשונה
           CHANNEL_EXTS: "on"       # off = בלי שלוחה לכל ערוץ
           YEMOT_VOICE: ""          # קול: Jacob / Sivan / Osnat (ריק = לא לשנות)
           YEMOT_RATE: ""           # מהירות: מ -10 (איטי) עד 10 (מהיר), ריק = לא לשנות

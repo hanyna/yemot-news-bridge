@@ -4,7 +4,7 @@
 // רץ ב-GitHub Actions ובודק הודעות חדשות כל דקה. כל הודעה נשלחת לקובץ TTS
 // נפרד (001.tts, 002.tts, ...), כי קובץ TTS אחד מוגבל לכ-1,300 תווים:
 //
-//	שלוחה 1      — כל הערוצים יחד (החדשה ביותר ראשונה)
+//	שלוחה 1      — כל הערוצים יחד (החדשה נשמעת ראשונה)
 //	שלוחות 2..9  — שלוחה לכל ערוץ ("לעדכוני אלישע ירד הקישו 2")
 //	תפריט ראשי   — הודעת פתיחה (M1000.tts) שמפרטת את השלוחות
 package main
@@ -82,7 +82,10 @@ func main() {
 		ext:         envOr("YEMOT_EXT", "1"),
 		maxMsgs:     envInt("YEMOT_MAX_MSGS", 10),
 		perChan:     envInt("YEMOT_PER_CHANNEL", 5),
-		newestFirst: envOr("YEMOT_ORDER", "newest") != "oldest",
+		// ימות המשיח משמיע את הקבצים בשלוחה מהמספר הגבוה לנמוך. לכן ברירת
+		// המחדל: 001 = הישנה, המספר הגבוה = החדשה — והמאזין שומע את החדשה ראשונה.
+		// YEMOT_ORDER=newest הופך (001 = החדשה).
+		newestFirst: envOr("YEMOT_ORDER", "oldest") == "newest",
 		channelExts: envOr("CHANNEL_EXTS", "on") != "off",
 		welcome:     strings.TrimSpace(os.Getenv("YEMOT_WELCOME")),
 		voice:       strings.TrimSpace(os.Getenv("YEMOT_VOICE")),
@@ -215,7 +218,12 @@ func syncOnce(cfg *config, st *state) error {
 			if len(parts) == 0 {
 				parts = []string{"אין כרגע עדכונים חדשים מ" + name + "."}
 			} else {
-				parts[0] = "עדכוני " + name + ". " + parts[0]
+				// הכותרת נכנסת להודעה שנשמעת ראשונה — החדשה ביותר.
+				first := len(parts) - 1
+				if cfg.newestFirst {
+					first = 0
+				}
+				parts[first] = "עדכוני " + name + ". " + parts[first]
 			}
 			if err := syncExt(cfg, st, ext, parts, cfg.perChan); err != nil {
 				log.Printf("הערה: עדכון שלוחה %s (%s) נכשל: %v", ext, name, err)

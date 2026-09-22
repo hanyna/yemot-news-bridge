@@ -123,7 +123,7 @@ func TestFullSync(t *testing.T) {
 	yemotBase = srv.URL + "/ym/api/"
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
 	cfg := config{feedURL: srv.URL + "/api/messages", feedKey: "k", ext: "1", maxMsgs: 10, perChan: 5,
-		newestFirst: true, channelExts: true, voice: "Sivan", loc: loc,
+		newestFirst: false, channelExts: true, voice: "Sivan", loc: loc,
 		y: &yemot{client: srv.Client(), apiKey: "KEY"}, client: srv.Client(), feedClient: srv.Client()}
 	diagnoseRoot(cfg.y)
 	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
@@ -131,7 +131,8 @@ func TestFullSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := fy.files
-	if !strings.HasPrefix(f["ivr2:/1/001.tts"], "hakol, ") || !strings.Contains(f["ivr2:/1/002.tts"], "אלישע ירד, ") || !strings.Contains(f["ivr2:/1/002.tts"], "ביהודה ושומרון") {
+	// 001 = הישנה (אלישע), 002 = החדשה (hakol) — ימות המשיח משמיע מ-002.
+	if !strings.HasPrefix(f["ivr2:/1/002.tts"], "hakol, ") || !strings.Contains(f["ivr2:/1/001.tts"], "אלישע ירד, ") || !strings.Contains(f["ivr2:/1/001.tts"], "ביהודה ושומרון") {
 		t.Fatalf("ext1: %q | %q", f["ivr2:/1/001.tts"], f["ivr2:/1/002.tts"])
 	}
 	if f["ivr2:/2/ext.ini"] != "type=playfile\nvoice=Sivan" || !strings.HasPrefix(f["ivr2:/2/001.tts"], "עדכוני אלישע ירד. בשעה") {
