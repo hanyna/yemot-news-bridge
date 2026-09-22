@@ -1,10 +1,12 @@
 // yemot-news-bridge
 //
-// תוכנית קטנה שרצה כ-Cron Job (ב-GitHub Actions, כל 5 דקות): שולפת את
-// ההודעות האחרונות מה-API של Telegram Popup ("ערוץ חי"), ובונה מהן טקסט
-// אחד שבו כל הודעה נפרדת: קודם מי פרסם (שם הערוץ), אחר כך באיזו שעה,
-// ואז מה נאמר. כל הודעה נשלחת לקובץ TTS נפרד בשלוחה בימות המשיח
-// (001.tts, 002.tts, ...), כי קובץ TTS אחד מוגבל לכ-1,300 תווים.
+// גשר בין Telegram Popup ("ערוץ חי") לבין קו טלפון בימות המשיח.
+// רץ ב-GitHub Actions ובודק הודעות חדשות כל דקה. כל הודעה נשלחת לקובץ TTS
+// נפרד (001.tts, 002.tts, ...), כי קובץ TTS אחד מוגבל לכ-1,300 תווים:
+//
+//	שלוחה 1      — כל הערוצים יחד (החדשה ביותר ראשונה)
+//	שלוחות 2..9  — שלוחה לכל ערוץ ("לעדכוני אלישע ירד הקישו 2")
+//	תפריט ראשי   — הודעת פתיחה (M1000.tts) שמפרטת את השלוחות
 package main
 
 import (
@@ -15,17 +17,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata" // שעון ישראל עובד גם אם בשרת אין קבצי אזורי זמן
-	"unicode"
 )
 
 // FeedItem משקף פריט בודד שחוזר מ-/api/messages של Telegram Popup.
-// רק השדות שבהם אנחנו משתמשים כאן.
 type FeedItem struct {
 	ID      int    `json:"id"`
 	Channel string `json:"channel"`
@@ -33,68 +32,88 @@ type FeedItem struct {
 	Text    string `json:"text"`
 }
 
-type FeedResponse struct {
-	Items []FeedItem `json:"items"`
+type Channel struct {
+	Name  string `json:"name"`
+	Title string `json:"title"`
 }
 
 // שמות קריאים לערוצים — גיבוי למקרה שהשרת לא מחזיר שם ערוץ.
-// אפשר להוסיף כאן ערוצים נוספים: "שם_משתמש": "שם בעברית".
 var knownNames = map[string]string{
 	"elisha_yered": "אלישע ירד",
 }
 
-// כתובת ה-API של ימות המשיח.
-var yemotBase = "https://www.call2all.co.il/ym/api/"
+const (
+	welcomeHead = "ברוכים הבאים לקו עדכוני ארץ ישראל. לעדכונים שוטפים, הקישו 1."
+	maxPerFile  = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
+	firstChExt  = 2    // שלוחת הערוץ הראשון
+	lastChExt   = 9    // שלוחת הערוץ האחרון האפשרי
+	failLimit   = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
+)
 
-// הודעת הפתיחה בתפריט הראשי של הקו.
-const defaultWelcome = "ברוכים הבאים לקו עדכוני ארץ ישראל. לעדכונים שוטפים, הקישו 1."
+type config struct {
+	feedURL, feedKey string
+	ext              string // שלוחת "כל העדכונים"
+	maxMsgs, perChan int
+	newestFirst      bool
+	channelExts      bool
+	welcome          string // "" = אוטומטי, "off" = כבוי
+	voice, rate      string
+	loc              *time.Location
+	y                *yemot
+	client           *http.Client // ל-API של ערוץ חי
+	feedClient       *http.Client // זמן המתנה ארוך — Render מתעורר לאט
+}
+
+type state struct {
+	files    map[string][]string // לכל שלוחה: תוכן הקבצים שהועלו (001, 002, ...)
+	known    map[string]bool     // האם הקבצים בשלוחה ידועים לנו (אחרי סנכרון מוצלח)
+	channels []Channel           // רשימת הערוצים האחרונה
+	chExt    map[string]string   // ערוץ → שלוחה שהוכנה עבורו
+	blocked  map[string]bool     // שלוחות תפוסות ע"י הגדרה אחרת — לא נוגעים
+	welcome  string              // הודעת הפתיחה שהועלתה
+	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
+	failures int
+}
 
 func main() {
-	// --- קריאת הגדרות מתוך משתני סביבה ---
 	cfg := config{
-		feedURL: envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
-		feedKey: strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
-		apiKey:  cleanKey(os.Getenv("YEMOT_API_KEY")),
-		ext:     envOr("YEMOT_EXT", "1"),      // מספר השלוחה
-		maxMsgs: envInt("YEMOT_MAX_MSGS", 10), // כמה הודעות אחרונות להקריא (קובץ לכל הודעה)
-		newest:  envOr("YEMOT_ORDER", "oldest") == "newest",
+		feedURL:     envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
+		feedKey:     strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
+		ext:         envOr("YEMOT_EXT", "1"),
+		maxMsgs:     envInt("YEMOT_MAX_MSGS", 10),
+		perChan:     envInt("YEMOT_PER_CHANNEL", 5),
+		newestFirst: envOr("YEMOT_ORDER", "newest") != "oldest",
+		channelExts: envOr("CHANNEL_EXTS", "on") != "off",
+		welcome:     strings.TrimSpace(os.Getenv("YEMOT_WELCOME")),
+		voice:       strings.TrimSpace(os.Getenv("YEMOT_VOICE")),
+		rate:        strings.TrimSpace(os.Getenv("YEMOT_RATE")),
+		client:      &http.Client{Timeout: 30 * time.Second},
+		feedClient:  &http.Client{Timeout: 90 * time.Second},
 	}
+	apiKey := cleanKey(os.Getenv("YEMOT_API_KEY"))
 	if cfg.feedKey == "" {
 		log.Fatal("חסר משתנה סביבה TGPOPUP_KEY")
 	}
-	if cfg.apiKey == "" {
+	if apiKey == "" {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
+	cfg.y = &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: apiKey}
 	if cfg.maxMsgs > 99 {
 		cfg.maxMsgs = 99
 	}
 	var err error
-	cfg.loc, err = time.LoadLocation("Asia/Jerusalem")
-	if err != nil {
+	if cfg.loc, err = time.LoadLocation("Asia/Jerusalem"); err != nil {
 		cfg.loc = time.FixedZone("IL", 3*3600)
 	}
-	cfg.client = &http.Client{Timeout: 30 * time.Second}
-	// שרת Render בחבילה החינמית נרדם כשאין שימוש, וההתעוררות לוקחת 30–60 שניות.
-	cfg.feedClient = &http.Client{Timeout: 90 * time.Second}
 
-	// הודעת פתיחה בתפריט הראשי (קובץ M1000.tts בשלוחה הראשית).
-	// YEMOT_WELCOME=off מכבה.
-	if welcome := envOr("YEMOT_WELCOME", defaultWelcome); welcome != "off" {
-		if err := pushToYemot(cfg.client, cfg.apiKey, "", "M1000.tts", welcome); err != nil {
-			log.Printf("הערה: עדכון הודעת הפתיחה נכשל: %v", err)
-		} else {
-			log.Printf("הודעת פתיחה (M1000.tts בשלוחה הראשית): %s", welcome)
-		}
-		checkRootIsMenu(cfg.client, cfg.apiKey)
-	}
+	diagnoseRoot(cfg.y)
 
-	// מצב לולאה: RUN_MINUTES > 0 — התוכנית נשארת פתוחה ובודקת כל
-	// INTERVAL_SECONDS שניות, ומעלה לימות המשיח רק קבצים שהשתנו.
-	// בלי RUN_MINUTES — ריצה אחת וסיום (כמו קודם).
+	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+
+	// מצב לולאה: RUN_MINUTES > 0 — נשארים פתוחים ובודקים כל INTERVAL_SECONDS.
+	// בלי RUN_MINUTES — סבב אחד וסיום.
 	runFor := time.Duration(envInt("RUN_MINUTES", 0)) * time.Minute
 	interval := time.Duration(envInt("INTERVAL_SECONDS", 60)) * time.Second
-
-	st := &state{}
 	if runFor == 0 {
 		if err := syncOnce(&cfg, st); err != nil {
 			log.Fatalf("%v", err)
@@ -106,7 +125,14 @@ func main() {
 	log.Printf("מצב לולאה: בדיקה כל %v, עד %s (שעון ישראל).", interval, deadline.In(cfg.loc).Format("15:04"))
 	for {
 		if err := syncOnce(&cfg, st); err != nil {
-			log.Printf("שגיאה בסבב (ממשיך לסבב הבא): %v", err)
+			st.failures++
+			log.Printf("שגיאה בסבב (%d ברצף): %v", st.failures, err)
+			if st.failures >= failLimit {
+				// הכשלת הריצה → GitHub שולח מייל על ריצה שנכשלה.
+				log.Fatalf("הגשר נכשל %d פעמים ברצף — עוצר כדי שתישלח התראה. שגיאה אחרונה: %v", st.failures, err)
+			}
+		} else {
+			st.failures = 0
 		}
 		if time.Now().Add(interval).After(deadline) {
 			log.Println("זמן הריצה הסתיים — ההפעלה הבאה של ה-Workflow תמשיך מכאן.")
@@ -116,29 +142,12 @@ func main() {
 	}
 }
 
-type config struct {
-	feedURL, feedKey, apiKey, ext string
-	maxMsgs                       int
-	newest                        bool
-	loc                           *time.Location
-	client, feedClient            *http.Client
-}
-
-// state — מה נמצא כרגע בשלוחה (לפי מה שהעלינו בהפעלה הזו), כדי להעלות
-// רק קבצים שהשתנו.
-type state struct {
-	uploaded []string          // תוכן כל קובץ לפי הסדר: [0]=001.tts ...
-	known    bool              // האם כבר סונכרנו פעם אחת בהפעלה הזו
-	titles   map[string]string // שמות ערוצים אחרונים שנשלפו
-}
-
-// syncOnce: שליפה מה-feed, בניית הטקסטים, והעלאת מה שהשתנה בלבד.
+// syncOnce: סבב אחד — שליפה, בנייה, והעלאת מה שהשתנה בלבד.
 func syncOnce(cfg *config, st *state) error {
 	var items []FeedItem
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
-		items, err = fetchFeed(cfg.feedClient, cfg.feedURL, cfg.feedKey)
-		if err == nil {
+		if items, err = fetchFeed(cfg.feedClient, cfg.feedURL, cfg.feedKey); err == nil {
 			break
 		}
 		log.Printf("ניסיון %d לשליפה מה-feed נכשל: %v", attempt, err)
@@ -149,79 +158,122 @@ func syncOnce(cfg *config, st *state) error {
 	if err != nil {
 		return fmt.Errorf("שגיאה בשליפת ההודעות: %w", err)
 	}
-
-	// שמות הערוצים. כישלון לא עוצר — נשארים עם הקודמים / השמות הקבועים.
-	if t, err := fetchTitles(cfg.client, cfg.feedURL, cfg.feedKey); err == nil {
-		st.titles = t
-	} else if st.titles == nil {
-		log.Printf("לא הצלחתי לשלוף שמות ערוצים (משתמש בשמות הקבועים): %v", err)
+	if chs, err := fetchChannels(cfg.client, cfg.feedURL, cfg.feedKey); err == nil {
+		st.channels = chs
+	} else if st.channels == nil {
+		log.Printf("לא הצלחתי לשלוף את רשימת הערוצים (ממשיך בלי שלוחות לפי ערוץ): %v", err)
+	}
+	titles := map[string]string{}
+	for _, c := range st.channels {
+		if c.Title != "" && !strings.HasPrefix(c.Title, "@") {
+			titles[c.Name] = c.Title
+		}
 	}
 
-	parts := buildScript(items, st.titles, cfg.loc, cfg.maxMsgs, cfg.newest)
-	if len(parts) == 0 {
-		log.Println("אין הודעות טקסט זמינות — לא נשלח כלום.")
-		return nil
-	}
+	now := time.Now().In(cfg.loc)
+	items = prepare(items)
 
-	// כל הודעה לקובץ משלה: 001.tts, 002.tts, ... — רק מה שהשתנה.
-	changed := 0
-	for i, part := range parts {
-		if st.known && i < len(st.uploaded) && st.uploaded[i] == part {
-			continue
-		}
-		file := fmt.Sprintf("%03d.tts", i+1)
-		if err := pushToYemot(cfg.client, cfg.apiKey, cfg.ext, file, part); err != nil {
-			st.known = false // לא בטוחים מה נמצא בשלוחה — בסבב הבא מעלים הכול
-			return fmt.Errorf("שגיאה בשליחה לימות המשיח (%s): %w", file, err)
-		}
-		log.Printf("%s (%d תווים): %.80s", file, len([]rune(part)), part)
-		changed++
-	}
-
-	// קבצים עודפים מריצה קודמת (כשיש עכשיו פחות הודעות) — מוחקים,
-	// כדי שלא יוקראו הודעות ישנות בסוף.
-	if !st.known || len(parts) < len(st.uploaded) {
-		var stale []string
-		for i := len(parts) + 1; i <= cfg.maxMsgs; i++ {
-			stale = append(stale, fmt.Sprintf("ivr2:/%s/%03d.tts", cfg.ext, i))
-		}
-		if len(stale) > 0 {
-			if err := deleteYemotFiles(cfg.client, cfg.apiKey, stale); err != nil {
-				log.Printf("הערה: מחיקת קבצים ישנים לא הצליחה (לא קריטי): %v", err)
+	// קול ומהירות — פעם אחת בכל הפעלה, בשלוחה הראשית ובשלוחת כל העדכונים.
+	if !st.voiceSet && (cfg.voice != "" || cfg.rate != "") {
+		st.voiceSet = true
+		for _, ext := range []string{"", cfg.ext} {
+			if err := applyVoice(cfg, ext); err != nil {
+				log.Printf("הערה: עדכון קול/מהירות בשלוחה %q נכשל: %v", ext, err)
 			}
 		}
 	}
 
-	st.uploaded = parts
-	st.known = true
-	if changed > 0 {
-		log.Printf("עודכנו %d קבצים (סה\"כ %d הודעות בשלוחה).", changed, len(parts))
+	// שלוחה 1: כל הערוצים.
+	all := buildParts(items, titles, cfg.loc, now, cfg.maxMsgs, cfg.newestFirst, true)
+	if len(all) == 0 {
+		all = []string{"אין כרגע עדכונים."}
+	}
+	if err := syncExt(cfg, st, cfg.ext, all, cfg.maxMsgs); err != nil {
+		return err
+	}
+
+	// שלוחה לכל ערוץ.
+	var menu []string
+	if cfg.channelExts {
+		for i, ch := range st.channels {
+			extNum := firstChExt + i
+			if extNum > lastChExt {
+				break
+			}
+			ext := strconv.Itoa(extNum)
+			if ext == cfg.ext || !ensureChannelExt(cfg, st, ch.Name, ext) {
+				continue
+			}
+			name := speakerName(ch.Name, titles)
+			var mine []FeedItem
+			for _, it := range items {
+				if it.Channel == ch.Name {
+					mine = append(mine, it)
+				}
+			}
+			parts := buildParts(mine, titles, cfg.loc, now, cfg.perChan, cfg.newestFirst, false)
+			if len(parts) == 0 {
+				parts = []string{"אין כרגע עדכונים חדשים מ" + name + "."}
+			} else {
+				parts[0] = "עדכוני " + name + ". " + parts[0]
+			}
+			if err := syncExt(cfg, st, ext, parts, cfg.perChan); err != nil {
+				log.Printf("הערה: עדכון שלוחה %s (%s) נכשל: %v", ext, name, err)
+				continue
+			}
+			menu = append(menu, fmt.Sprintf("לעדכוני %s הקישו %s.", name, ext))
+		}
+	}
+
+	// הודעת פתיחה בתפריט הראשי — רק כשהשתנתה.
+	if cfg.welcome != "off" {
+		w := cfg.welcome
+		if w == "" {
+			w = strings.Join(append([]string{welcomeHead}, menu...), " ")
+		}
+		if r := []rune(w); len(r) > maxPerFile {
+			w = cutAtWord(r[:maxPerFile])
+		}
+		if w != st.welcome {
+			if err := cfg.y.upload("", "M1000.tts", w); err != nil {
+				log.Printf("הערה: עדכון הודעת הפתיחה נכשל: %v", err)
+			} else {
+				st.welcome = w
+				log.Printf("הודעת פתיחה: %s", w)
+				checkRootIsMenu(cfg.y)
+			}
+		}
 	}
 	return nil
 }
 
-// buildScript בונה את טקסטי ההקראה — אחד לכל הודעה:
-// "<שם הערוץ>, בשעה <שעה>. <תוכן ההודעה>".
-func buildScript(items []FeedItem, titles map[string]string, loc *time.Location, maxMsgs int, newestFirst bool) []string {
-	// ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים. משאירים מרווח ביטחון.
-	const maxPerFile = 1000
-
-	// רק הודעות עם טקסט, מהחדשה לישנה.
-	var withText []FeedItem
+// prepare: ניקוי טקסט להקראה, השמטת הודעות בלי טקסט, וסינון כפילויות.
+func prepare(items []FeedItem) []FeedItem {
+	var out []FeedItem
 	for _, it := range items {
 		it.Text = cleanForSpeech(it.Text)
 		if it.Text != "" {
-			withText = append(withText, it)
+			out = append(out, it)
 		}
 	}
-	sort.SliceStable(withText, func(i, j int) bool { return withText[i].TS > withText[j].TS })
-	if len(withText) > maxMsgs {
-		withText = withText[:maxMsgs]
-	}
+	return dedupe(out)
+}
 
+// buildParts בונה את טקסטי ההקראה — אחד לכל הודעה:
+// "<שם הערוץ>, <מתי>. <תוכן ההודעה>" (withName=false: בלי שם הערוץ).
+func buildParts(items []FeedItem, titles map[string]string, loc *time.Location, now time.Time, max int, newestFirst, withName bool) []string {
+	sorted := append([]FeedItem(nil), items...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].TS > sorted[j].TS })
+	if len(sorted) > max {
+		sorted = sorted[:max]
+	}
 	var parts []string
-	for _, it := range withText {
-		head := fmt.Sprintf("%s, %s. ", speakerName(it.Channel, titles), spokenTime(time.Unix(it.TS, 0).In(loc)))
+	for _, it := range sorted {
+		when := spokenWhen(time.Unix(it.TS, 0).In(loc), now)
+		head := when + ". "
+		if withName {
+			head = speakerName(it.Channel, titles) + ", " + head
+		}
 		body := it.Text
 		const cutNote = ". סוף ההודעה נחתך."
 		room := maxPerFile - len([]rune(head)) - len([]rune(cutNote))
@@ -230,8 +282,6 @@ func buildScript(items []FeedItem, titles map[string]string, loc *time.Location,
 		}
 		parts = append(parts, head+body)
 	}
-
-	// ברירת מחדל: לפי סדר השעות — מהמוקדמת למאוחרת.
 	if !newestFirst {
 		for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
 			parts[i], parts[j] = parts[j], parts[i]
@@ -240,22 +290,149 @@ func buildScript(items []FeedItem, titles map[string]string, loc *time.Location,
 	return parts
 }
 
-// spokenTime כותב שעה בצורה שמנוע ההקראה קורא טבעי ("בשעה 20 ו 5 דקות")
-// במקום "20:05", שעלול להיקרא כסימנים.
-func spokenTime(t time.Time) string {
-	if t.Minute() == 0 {
-		return fmt.Sprintf("בשעה %d בדיוק", t.Hour())
+// syncExt מעלה לשלוחה רק קבצים שהשתנו, ומוחק קבצים עודפים מריצה קודמת.
+func syncExt(cfg *config, st *state, ext string, parts []string, maxFiles int) error {
+	prev, known := st.files[ext], st.known[ext]
+	changed := 0
+	for i, part := range parts {
+		if known && i < len(prev) && prev[i] == part {
+			continue
+		}
+		file := fmt.Sprintf("%03d.tts", i+1)
+		if err := cfg.y.upload(ext, file, part); err != nil {
+			st.known[ext] = false // לא בטוחים מה יש בשלוחה — בסבב הבא מעלים הכול
+			return fmt.Errorf("שליחה לשלוחה %s (%s): %w", ext, file, err)
+		}
+		log.Printf("שלוחה %s / %s (%d תווים): %.80s", ext, file, len([]rune(part)), part)
+		changed++
 	}
-	return fmt.Sprintf("בשעה %d ו %d דקות", t.Hour(), t.Minute())
+	if !known || len(parts) < len(prev) {
+		var stale []string
+		for i := len(parts) + 1; i <= maxFiles; i++ {
+			stale = append(stale, ivrPath(ext, fmt.Sprintf("%03d.tts", i)))
+		}
+		if err := cfg.y.remove(stale); err != nil {
+			log.Printf("הערה: מחיקת קבצים ישנים בשלוחה %s לא הצליחה (לא קריטי): %v", ext, err)
+		}
+	}
+	st.files[ext] = parts
+	st.known[ext] = true
+	if changed > 0 {
+		log.Printf("שלוחה %s: עודכנו %d קבצים.", ext, changed)
+	}
+	return nil
 }
 
-// cutAtWord חותך בסוף מילה שלמה, כדי לא לקטוע באמצע מילה.
-func cutAtWord(r []rune) string {
-	s := string(r)
-	if i := strings.LastIndex(s, " "); i > len(s)/2 {
-		s = s[:i]
+// ensureChannelExt מכין שלוחת השמעה לערוץ. יוצר אותה רק אם היא לא קיימת,
+// או אם היא כבר שלוחה שהגשר יצר (type=playfile בלבד). שלוחה עם הגדרות
+// אחרות — לא נוגעים בה ולא מפרסמים אותה בתפריט.
+func ensureChannelExt(cfg *config, st *state, channel, ext string) bool {
+	if st.chExt[channel] == ext {
+		return true
 	}
-	return strings.TrimSpace(s)
+	if st.blocked[ext] {
+		return false
+	}
+	ini, exists, err := cfg.y.read(ext, "ext.ini")
+	if err != nil {
+		st.blocked[ext] = true
+		log.Printf("הערה: לא הצלחתי לבדוק את שלוחה %s, ולכן לא יוצר בה שלוחת ערוץ (אם המפתח לא מורשה ל-GetTextFile — צריך להוסיף לו הרשאה): %v", ext, err)
+		return false
+	}
+	if exists && !isBridgeIni(ini) {
+		st.blocked[ext] = true
+		log.Printf("אזהרה: שלוחה %s כבר קיימת עם הגדרות אחרות — לא נוגע בה. ext.ini: %.150s", ext, ini)
+		return false
+	}
+	want, _ := setIniValues("type=playfile", [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+	if !exists || strings.TrimSpace(ini) != want {
+		if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
+			log.Printf("הערה: יצירת שלוחה %s נכשלה: %v", ext, err)
+			return false
+		}
+		log.Printf("שלוחה %s הוגדרה לערוץ %s.", ext, channel)
+	}
+	st.chExt[channel] = ext
+	return true
+}
+
+// isBridgeIni: ext.ini שנראה כמו מה שהגשר יוצר — type=playfile ואולי voice/rate.
+func isBridgeIni(ini string) bool {
+	sawType := false
+	for _, l := range strings.Split(strings.ReplaceAll(ini, "\r\n", "\n"), "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case t == "":
+		case t == "type=playfile":
+			sawType = true
+		case strings.HasPrefix(t, "voice="), strings.HasPrefix(t, "rate="):
+		default:
+			return false
+		}
+	}
+	return sawType
+}
+
+// applyVoice מעדכן voice/rate בקובץ ext.ini קיים, בלי לגעת בשאר ההגדרות.
+func applyVoice(cfg *config, ext string) error {
+	ini, exists, err := cfg.y.read(ext, "ext.ini")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("אין ext.ini בשלוחה — לא יוצר אחד חדש")
+	}
+	updated, changed := setIniValues(ini, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+	if !changed {
+		return nil
+	}
+	if err := cfg.y.upload(ext, "ext.ini", updated); err != nil {
+		return err
+	}
+	log.Printf("קול/מהירות עודכנו בשלוחה %q.", ext)
+	return nil
+}
+
+// checkRootIsMenu בודק (רק לצורך הלוג) שהשלוחה הראשית מוגדרת כתפריט —
+// אחרת הודעת הפתיחה והמקשים לא יעבדו. לא משנה שום הגדרה בעצמו.
+func checkRootIsMenu(y *yemot) {
+	ini, exists, err := y.read("", "ext.ini")
+	if err != nil || !exists {
+		return
+	}
+	if iniValue(ini, "type") != "menu" {
+		log.Printf("אזהרה: השלוחה הראשית אינה מוגדרת type=menu, ולכן הודעת הפתיחה לא תושמע. ext.ini: %.200s", ini)
+	}
+}
+
+// diagnoseRoot רושם בלוג מה יש בשלוחה הראשית — כדי לאבחן בעיות בתפריט.
+func diagnoseRoot(y *yemot) {
+	if names, err := y.listDir(""); err != nil {
+		log.Printf("אבחון: לא הצלחתי לקרוא את רשימת הקבצים בשלוחה הראשית: %v", err)
+	} else {
+		log.Printf("אבחון: קבצים בשלוחה הראשית: %s", strings.Join(names, ", "))
+		for _, n := range names {
+			l := strings.ToLower(n)
+			if strings.HasPrefix(l, "m1000.") && l != "m1000.tts" {
+				log.Printf("אבחון: יש בשלוחה הראשית קובץ %s — הוא קודם להקראה של M1000.tts. צריך למחוק אותו כדי שהודעת הפתיחה החדשה תושמע.", n)
+			}
+		}
+	}
+	ini, exists, err := y.read("", "ext.ini")
+	switch {
+	case err != nil:
+		log.Printf("אבחון: לא הצלחתי לקרוא את ext.ini של השלוחה הראשית: %v", err)
+	case !exists:
+		log.Println("אבחון: אין ext.ini בשלוחה הראשית.")
+	default:
+		log.Printf("אבחון: ext.ini של השלוחה הראשית: %s", strings.ReplaceAll(strings.TrimSpace(ini), "\n", " | "))
+		if iniValue(ini, "type") != "menu" {
+			log.Println("אבחון: השלוחה הראשית אינה type=menu — לכן הודעת הפתיחה (M1000) לא מושמעת.")
+		}
+		if iniValue(ini, "say_menu_voice") == "yes" || iniValue(ini, "menu_voice") != "" {
+			log.Println("אבחון: בשלוחה הראשית מוגדר menu_voice — המערכת מקריאה אותו במקום הקובץ M1000.tts.")
+		}
+	}
 }
 
 // speakerName מחזיר שם קריא למי שפרסם את ההודעה.
@@ -269,41 +446,13 @@ func speakerName(channel string, titles map[string]string) string {
 	return strings.ReplaceAll(channel, "_", " ")
 }
 
-var (
-	reURL    = regexp.MustCompile(`https?://\S+|t\.me/\S+|www\.\S+|@\w+`)
-	reSpaces = regexp.MustCompile(`\s+`)
-	reDots   = regexp.MustCompile(`([.!?,])[\s.!?,]*[.,]`)
-)
-
-// cleanForSpeech מכין טקסט להקראה: מסיר קישורים ותיוגים, אימוג'ים וסמלים
-// שהמנוע מקריא כמילים (כוכבית, סולמית...), והופך ירידות שורה לנקודה —
-// קובץ TTS צריך להיות רצף טקסט אחד פשוט.
-func cleanForSpeech(s string) string {
-	s = reURL.ReplaceAllString(s, " ")
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '\n' || r == '\r':
-			b.WriteString(". ")
-		case unicode.IsLetter(r), unicode.IsDigit(r):
-			b.WriteRune(r)
-		case unicode.IsSpace(r):
-			b.WriteRune(' ')
-		case strings.ContainsRune(".,!?:;()'\"-–—%₪/", r):
-			if r == '–' || r == '—' {
-				r = '-'
-			}
-			b.WriteRune(r)
-		default:
-			// אימוג'ים, * # _ | ~ ^ ועוד — מוחלפים ברווח.
-			b.WriteRune(' ')
-		}
+// cutAtWord חותך בסוף מילה שלמה, כדי לא לקטוע באמצע מילה.
+func cutAtWord(r []rune) string {
+	s := string(r)
+	if i := strings.LastIndex(s, " "); i > len(s)/2 {
+		s = s[:i]
 	}
-	s = reSpaces.ReplaceAllString(b.String(), " ")
-	s = strings.ReplaceAll(s, " .", ".")
-	s = reDots.ReplaceAllString(s, "$1")
-	s = strings.Trim(s, " .,-")
-	return s
+	return strings.TrimSpace(s)
 }
 
 // fetchFeed שולף את רשימת ההודעות מה-API של Telegram Popup.
@@ -312,15 +461,17 @@ func fetchFeed(client *http.Client, feedURL, key string) ([]FeedItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	var parsed FeedResponse
+	var parsed struct {
+		Items []FeedItem `json:"items"`
+	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("JSON לא תקין מה-feed: %w", err)
 	}
 	return parsed.Items, nil
 }
 
-// fetchTitles שולף את שמות התצוגה של הערוצים (/api/channels באותו שרת).
-func fetchTitles(client *http.Client, feedURL, key string) (map[string]string, error) {
+// fetchChannels שולף את רשימת הערוצים ושמותיהם (/api/channels), לפי הסדר באתר.
+func fetchChannels(client *http.Client, feedURL, key string) ([]Channel, error) {
 	u, err := url.Parse(feedURL)
 	if err != nil {
 		return nil, err
@@ -331,22 +482,12 @@ func fetchTitles(client *http.Client, feedURL, key string) (map[string]string, e
 		return nil, err
 	}
 	var parsed struct {
-		Channels []struct {
-			Name  string `json:"name"`
-			Title string `json:"title"`
-		} `json:"channels"`
+		Channels []Channel `json:"channels"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	m := map[string]string{}
-	for _, c := range parsed.Channels {
-		// "@שם" פירושו שהשרת עוד לא יודע את השם האמיתי — מדלגים.
-		if c.Title != "" && !strings.HasPrefix(c.Title, "@") {
-			m[c.Name] = c.Title
-		}
-	}
-	return m, nil
+	return parsed.Channels, nil
 }
 
 func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
@@ -357,13 +498,11 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 	q := u.Query()
 	q.Set("k", key)
 	u.RawQuery = q.Encode()
-
 	resp, err := client.Get(u.String())
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -374,116 +513,12 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 	return body, nil
 }
 
-// pushToYemot מעלה טקסט לקובץ TTS בשלוחה נתונה, דרך ה-API הרשמי
-// של ימות המשיח (www.call2all.co.il/ym/api/UploadTextFile), עם מפתח
-// API קבוע שנוצר בעמוד "מפתחות גישה" (נשלח בכותרת Authorization).
-func pushToYemot(client *http.Client, apiKey, ext, file, text string) error {
-	base := yemotBase + "UploadTextFile"
-
-	// שליחה ב-POST (טופס מקודד) במקום GET — כך טקסט ארוך בעברית לא נחתך
-	// בגלל אורך הכתובת, והתוכן לא נחשף בלוגים של כתובות.
-	form := url.Values{}
-	what := "ivr2:/" + file // שלוחה ראשית
-	if ext != "" {
-		what = "ivr2:/" + ext + "/" + file
-	}
-	form.Set("what", what)
-	form.Set("contents", text)
-
-	req, err := http.NewRequest(http.MethodPost, base, strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-	req.Header.Set("Authorization", apiKey)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	var parsed struct {
-		ResponseStatus string `json:"responseStatus"`
-		Message        string `json:"message"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("תגובה לא צפויה מימות המשיח: %s", strings.TrimSpace(string(body)))
-	}
-	if parsed.ResponseStatus != "OK" {
-		return fmt.Errorf("שגיאה מימות המשיח (%s): %s", parsed.ResponseStatus, parsed.Message)
-	}
-	return nil
-}
-
-// cleanKey מנקה את המפתח מרווחים בקצוות, מירידות שורה (\r \n) ומתווי
-// BOM/רווח בלתי נראים שנכנסים לפעמים כשמדביקים Secret ב-GitHub.
+// cleanKey מנקה את המפתח מרווחים בקצוות, מירידות שורה ומתווים בלתי נראים
+// (BOM, רווח ברוחב אפס) שנכנסים לפעמים כשמדביקים Secret ב-GitHub.
 func cleanKey(k string) string {
 	k = strings.TrimSpace(k)
-	k = strings.NewReplacer("\r", "", "\n", "", "\xef\xbb\xbf", "", "\xe2\x80\x8b", "").Replace(k) // BOM, רווח ברוחב אפס
+	k = strings.NewReplacer("\r", "", "\n", "", "\xef\xbb\xbf", "", "\xe2\x80\x8b", "").Replace(k)
 	return strings.TrimSpace(k)
-}
-
-// checkRootIsMenu בודק (רק לצורך הלוג) שהשלוחה הראשית מוגדרת כתפריט —
-// אחרת קובץ M1000 לא יושמע. לא משנה שום הגדרה בעצמו.
-func checkRootIsMenu(client *http.Client, apiKey string) {
-	req, err := http.NewRequest(http.MethodGet, yemotBase+"GetTextFile?what="+url.QueryEscape("ivr2:/ext.ini"), nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("Authorization", apiKey)
-	resp, err := client.Do(req)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var parsed struct {
-		ResponseStatus string `json:"responseStatus"`
-		Contents       string `json:"contents"`
-	}
-	if json.Unmarshal(body, &parsed) != nil || parsed.ResponseStatus != "OK" {
-		return // אין הרשאה לקריאה או שאין קובץ — לא קריטי
-	}
-	if !strings.Contains(strings.ReplaceAll(parsed.Contents, " ", ""), "type=menu") {
-		log.Printf("אזהרה: השלוחה הראשית אינה מוגדרת type=menu, ולכן הודעת הפתיחה לא תושמע. ext.ini הנוכחי: %.200s", parsed.Contents)
-	}
-}
-
-// deleteYemotFiles מוחק קבצים במערכת (FileAction?action=delete).
-func deleteYemotFiles(client *http.Client, apiKey string, paths []string) error {
-	form := url.Values{}
-	form.Set("action", "delete")
-	for i, p := range paths {
-		form.Set(fmt.Sprintf("what%d", i), p)
-	}
-	req, err := http.NewRequest(http.MethodPost, yemotBase+"FileAction", strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-	req.Header.Set("Authorization", apiKey)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var parsed struct {
-		ResponseStatus string `json:"responseStatus"`
-		Message        string `json:"message"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("תגובה לא צפויה: %.200s", strings.TrimSpace(string(body)))
-	}
-	if parsed.ResponseStatus != "OK" {
-		return fmt.Errorf("%s: %s", parsed.ResponseStatus, parsed.Message)
-	}
-	return nil
 }
 
 func envOr(key, fallback string) string {
