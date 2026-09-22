@@ -43,6 +43,9 @@ var knownNames = map[string]string{
 	"elisha_yered": "אלישע ירד",
 }
 
+// הודעת הפתיחה בתפריט הראשי של הקו.
+const defaultWelcome = "ברוכים הבאים לקו עדכוני ארץ ישראל. לעדכונים שוטפים, הקישו 1."
+
 func main() {
 	// --- קריאת הגדרות מתוך משתני סביבה ---
 	feedURL := envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages")
@@ -63,6 +66,18 @@ func main() {
 	newestFirst := envOr("YEMOT_ORDER", "oldest") == "newest"
 
 	client := &http.Client{Timeout: 30 * time.Second}
+
+	// הודעת פתיחה בתפריט הראשי (קובץ M1000.tts בשלוחה הראשית).
+	// מתעדכנת בכל ריצה, כך ששינוי הטקסט כאן נכנס לתוקף לבד.
+	// YEMOT_WELCOME=off מכבה.
+	if welcome := envOr("YEMOT_WELCOME", defaultWelcome); welcome != "off" {
+		if err := pushToYemot(client, yemotAPIKey, "", "M1000.tts", welcome); err != nil {
+			log.Printf("הערה: עדכון הודעת הפתיחה נכשל: %v", err)
+		} else {
+			log.Printf("הודעת פתיחה (M1000.tts בשלוחה הראשית): %s", welcome)
+		}
+		checkRootIsMenu(client, yemotAPIKey)
+	}
 
 	// שרת Render בחבילה החינמית נרדם כשאין שימוש, וההתעוררות לוקחת 30–60 שניות.
 	// לכן ל-feed יש זמן המתנה ארוך יותר, ועד 3 ניסיונות.
@@ -307,7 +322,11 @@ func pushToYemot(client *http.Client, apiKey, ext, file, text string) error {
 	// שליחה ב-POST (טופס מקודד) במקום GET — כך טקסט ארוך בעברית לא נחתך
 	// בגלל אורך הכתובת, והתוכן לא נחשף בלוגים של כתובות.
 	form := url.Values{}
-	form.Set("what", "ivr2:/"+ext+"/"+file)
+	what := "ivr2:/" + file // שלוחה ראשית
+	if ext != "" {
+		what = "ivr2:/" + ext + "/" + file
+	}
+	form.Set("what", what)
 	form.Set("contents", text)
 
 	req, err := http.NewRequest(http.MethodPost, base, strings.NewReader(form.Encode()))
@@ -346,6 +365,32 @@ func cleanKey(k string) string {
 	k = strings.TrimSpace(k)
 	k = strings.NewReplacer("\r", "", "\n", "", "\xef\xbb\xbf", "", "\xe2\x80\x8b", "").Replace(k) // BOM, רווח ברוחב אפס
 	return strings.TrimSpace(k)
+}
+
+// checkRootIsMenu בודק (רק לצורך הלוג) שהשלוחה הראשית מוגדרת כתפריט —
+// אחרת קובץ M1000 לא יושמע. לא משנה שום הגדרה בעצמו.
+func checkRootIsMenu(client *http.Client, apiKey string) {
+	req, err := http.NewRequest(http.MethodGet, "https://www.call2all.co.il/ym/api/GetTextFile?what="+url.QueryEscape("ivr2:/ext.ini"), nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", apiKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var parsed struct {
+		ResponseStatus string `json:"responseStatus"`
+		Contents       string `json:"contents"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || parsed.ResponseStatus != "OK" {
+		return // אין הרשאה לקריאה או שאין קובץ — לא קריטי
+	}
+	if !strings.Contains(strings.ReplaceAll(parsed.Contents, " ", ""), "type=menu") {
+		log.Printf("אזהרה: השלוחה הראשית אינה מוגדרת type=menu, ולכן הודעת הפתיחה לא תושמע. ext.ini הנוכחי: %.200s", parsed.Contents)
+	}
 }
 
 // deleteYemotFiles מוחק קבצים במערכת (FileAction?action=delete).
