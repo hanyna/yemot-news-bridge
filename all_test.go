@@ -234,6 +234,8 @@ func TestChannelExtsWithoutGetTextFile(t *testing.T) {
 }
 
 func TestMediaFlashCut(t *testing.T) {
+	flashEnabled = true
+	defer func() { flashEnabled = false }()
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
 	now := time.Date(2026, 9, 22, 21, 0, 0, 0, loc)
 	vid := `<article class="msg"><div class="photo"><div class="vidwrap"><video></video><span class="durbadge">1:05</span></div></div></article>`
@@ -282,5 +284,13 @@ func TestMediaFlashCut(t *testing.T) {
 	}
 	if !isAd("הספר החדש לרכישה באתר") || isAd("מבצע צבאי נרחב בשומרון") {
 		t.Error("isAd")
+	}
+}
+
+func TestFlashDisabledByDefault(t *testing.T) {
+	now := time.Now()
+	items := prepare([]FeedItem{{Channel: "a", TS: now.Unix(), Text: "פיגוע ירי בצומת"}})
+	if items[0].Flash || strings.HasPrefix(buildParts(items, nil, time.UTC, now, 10, true, true)[0], "מבזק") {
+		t.Fatal("flash should be off")
 	}
 }

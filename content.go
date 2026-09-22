@@ -40,7 +40,13 @@ var flashWords = []string{
 
 const flashFor = 30 * time.Minute
 
+// flashEnabled — מבזקים כבויים (לבקשת המשתמש). true מחזיר אותם.
+var flashEnabled = false
+
 func isFlashText(text string) bool {
+	if !flashEnabled {
+		return false
+	}
 	for _, w := range flashWords {
 		if strings.Contains(text, w) {
 			return true
