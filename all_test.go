@@ -294,3 +294,18 @@ func TestFlashDisabledByDefault(t *testing.T) {
 		t.Fatal("flash should be off")
 	}
 }
+
+func TestDictionary(t *testing.T) {
+	cases := map[string]string{
+		`סא"ל (מיל') פלוני`:               "סגן אלוף במילואים פלוני",
+		`עלה ל-2 מיל' ש"ח`:                "עלה ל-2 מיליון שקלים",
+		`רה"מ נפגש עם שהב"ט ויו"ר ועה"ח`:  "ראש הממשלה נפגש עם שר הביטחון ויושב ראש ועדת החוץ והביטחון",
+		`בס"ד. בע"ה אחה"צ בבית הכנ' בק"א`: "בעזרת השם אחר הצהריים בבית הכנסת בקריית ארבע",
+		`IDF: RPG found, watch LIVE`:      "צהל: אר פי גי found, watch שידור חי",
+	}
+	for in, want := range cases {
+		if got := cleanForSpeech(in); got != want {
+			t.Errorf("\nin:   %s\ngot:  %s\nwant: %s", in, got, want)
+		}
+	}
+}

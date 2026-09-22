@@ -77,6 +77,12 @@ type pronRule struct {
 
 func init() {
 	// קיצורים ארוכים קודם, כדי ש"חה"כ" לא ייתפס כ"ח"כ".
+	// המילון הבסיסי + המילון המורחב (dictionary.go). בסיסי קודם במקרה של כפילות.
+	for k, v := range pronunciationMore {
+		if _, ok := pronunciation[k]; !ok {
+			pronunciation[k] = v
+		}
+	}
 	keys := make([]string, 0, len(pronunciation))
 	for k := range pronunciation {
 		keys = append(keys, k)
