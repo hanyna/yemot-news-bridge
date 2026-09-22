@@ -257,17 +257,9 @@ func syncOnce(cfg *config, st *state) error {
 	if cfg.welcome != "off" {
 		w := cfg.welcome
 		if w == "" {
+			// הודעת הפתיחה = ברכה ותפריט בלבד. (מבזקים לא מוקראים כאן —
+			// המתקשר צריך לשמוע קודם את התפריט.)
 			parts := []string{welcomeGreeting}
-			// מבזק פעיל (עד חצי שעה) — מוקרא כבר בפתיחה.
-			var flash *FeedItem
-			for i := range items {
-				if flashActive(items[i], now) && (flash == nil || items[i].TS > flash.TS) {
-					flash = &items[i]
-				}
-			}
-			if flash != nil {
-				parts = append(parts, spokenItem(*flash, titles, cfg.loc, now, true, 400))
-			}
 			parts = append(parts, welcomeHead)
 			w = strings.Join(append(parts, menu...), " ")
 		}
