@@ -343,9 +343,8 @@ func ensureChannelExt(cfg *config, st *state, channel, ext string) bool {
 	}
 	ini, exists, err := cfg.y.read(ext, "ext.ini")
 	if err != nil {
-		st.blocked[ext] = true
-		log.Printf("הערה: לא הצלחתי לבדוק את שלוחה %s, ולכן לא יוצר בה שלוחת ערוץ (אם המפתח לא מורשה ל-GetTextFile — צריך להוסיף לו הרשאה): %v", ext, err)
-		return false
+		// המפתח לא מורשה לקרוא הגדרות — בודקים לפי רשימת הקבצים בשלוחה.
+		return ensureChannelExtByFiles(cfg, st, channel, ext, err)
 	}
 	if exists && !isBridgeIni(ini) {
 		st.blocked[ext] = true
@@ -362,6 +361,56 @@ func ensureChannelExt(cfg *config, st *state, channel, ext string) bool {
 	}
 	st.chExt[channel] = ext
 	return true
+}
+
+// ensureChannelExtByFiles: כשאי אפשר לקרוא ext.ini. שלוחה קיימת משמשת רק
+// אם יש בה לכל היותר ext.ini וקבצי NNN.tts (של הגשר) — כלומר אין בה קבצים
+// של המשתמש. לא נוגעים ב-ext.ini שלה. שלוחה שלא קיימת — נוצרת כשלוחת השמעה.
+func ensureChannelExtByFiles(cfg *config, st *state, channel, ext string, readErr error) bool {
+	names, err := cfg.y.listDir(ext)
+	if err != nil {
+		if looksNotFound(err.Error()) {
+			want, _ := setIniValues("type=playfile", [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+			if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
+				st.blocked[ext] = true
+				log.Printf("הערה: יצירת שלוחה %s נכשלה: %v", ext, err)
+				return false
+			}
+			log.Printf("שלוחה %s נוצרה לערוץ %s.", ext, channel)
+			st.chExt[channel] = ext
+			return true
+		}
+		st.blocked[ext] = true
+		log.Printf("הערה: לא הצלחתי לבדוק את שלוחה %s (%v; %v) — לא משתמש בה.", ext, readErr, err)
+		return false
+	}
+	for _, n := range names {
+		if !isBridgeFile(n) {
+			st.blocked[ext] = true
+			log.Printf("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה.", ext, n)
+			return false
+		}
+	}
+	log.Printf("שלוחה %s (קיימת, בלי קבצים אחרים) משמשת לערוץ %s.", ext, channel)
+	st.chExt[channel] = ext
+	return true
+}
+
+// isBridgeFile: קבצים שהגשר עצמו יוצר בשלוחה — ext.ini ו-NNN.tts.
+func isBridgeFile(name string) bool {
+	n := strings.ToLower(name)
+	if n == "ext.ini" {
+		return true
+	}
+	if len(n) == 7 && strings.HasSuffix(n, ".tts") {
+		for _, c := range n[:3] {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // isBridgeIni: ext.ini שנראה כמו מה שהגשר יוצר — type=playfile ואולי voice/rate.

@@ -170,3 +170,59 @@ func TestFullSync(t *testing.T) {
 		t.Fatalf("second round uploaded: %v", fy.uploads)
 	}
 }
+
+func TestChannelExtsWithoutGetTextFile(t *testing.T) {
+	dirs := map[string][]string{"ivr2:/2": {"ext.ini"}, "ivr2:/3": {"ext.ini", "001.wav"}}
+	uploaded := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		switch {
+		case r.URL.Path == "/api/messages":
+			json.NewEncoder(w).Encode(map[string]any{"items": []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}})
+		case r.URL.Path == "/api/channels":
+			w.Write([]byte(`{"channels":[{"name":"a","title":"אלף"},{"name":"b","title":"בית"},{"name":"c","title":"גימל"}]}`))
+		case strings.HasSuffix(r.URL.Path, "GetTextFile"):
+			w.Write([]byte(`{"responseStatus":"FORBIDDEN","message":"API_KEY_ACL_REJECT"}`))
+		case strings.HasSuffix(r.URL.Path, "GetIVR2Dir"):
+			names, ok := dirs[r.PostForm.Get("path")]
+			if !ok {
+				w.Write([]byte(`{"responseStatus":"ERROR","message":"path not found"}`))
+				return
+			}
+			var fs []map[string]string
+			for _, n := range names {
+				fs = append(fs, map[string]string{"name": n})
+			}
+			json.NewEncoder(w).Encode(map[string]any{"responseStatus": "OK", "files": fs})
+		case strings.HasSuffix(r.URL.Path, "UploadTextFile"):
+			uploaded[r.PostForm.Get("what")] = r.PostForm.Get("contents")
+			w.Write([]byte(`{"responseStatus":"OK"}`))
+		default:
+			w.Write([]byte(`{"responseStatus":"OK"}`))
+		}
+	}))
+	defer srv.Close()
+	yemotBase = srv.URL + "/ym/api/"
+	cfg := config{feedURL: srv.URL + "/api/messages", feedKey: "k", ext: "1", maxMsgs: 10, perChan: 5,
+		channelExts: true, loc: time.UTC, y: &yemot{client: srv.Client(), apiKey: "K"}, client: srv.Client(), feedClient: srv.Client()}
+	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := uploaded["ivr2:/2/ext.ini"]; ok {
+		t.Fatal("rewrote ext.ini of existing ext 2")
+	}
+	if !strings.Contains(uploaded["ivr2:/2/001.tts"], "עדכוני אלף") {
+		t.Fatalf("ext2: %q", uploaded["ivr2:/2/001.tts"])
+	}
+	if _, ok := uploaded["ivr2:/3/001.tts"]; ok {
+		t.Fatal("touched ext 3 with user files")
+	}
+	if uploaded["ivr2:/4/ext.ini"] != "type=playfile" || uploaded["ivr2:/4/001.tts"] == "" {
+		t.Fatalf("ext4 not created: %q", uploaded["ivr2:/4/ext.ini"])
+	}
+	w := uploaded["ivr2:/M1000.tts"]
+	if !strings.Contains(w, "הקישו 2") || strings.Contains(w, "הקישו 3") || !strings.Contains(w, "הקישו 4") {
+		t.Fatalf("welcome: %q", w)
+	}
+}
