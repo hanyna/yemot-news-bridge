@@ -164,12 +164,9 @@ var weekdays = [...]string{"ראשון", "שני", "שלישי", "רביעי", "
 var months = [...]string{"", "בינואר", "בפברואר", "במרץ", "באפריל", "במאי", "ביוני", "ביולי", "באוגוסט", "בספטמבר", "באוקטובר", "בנובמבר", "בדצמבר"}
 
 // spokenWhen מנסח מתי נשלחה ההודעה, יחסית לעכשיו (בשעון ישראל):
-// "בשעה 20 ו 5 דקות" / "אתמול בשעה ..." / "ביום שני בשעה ..." / "ב 3 בספטמבר בשעה ...".
+// "בשעה 8 ו 5 דקות בלילה" / "אתמול בשעה ..." / "ביום שני בשעה ..." / "ב 3 בספטמבר בשעה ...".
 func spokenWhen(t, now time.Time) string {
-	clock := fmt.Sprintf("בשעה %d ו %d דקות", t.Hour(), t.Minute())
-	if t.Minute() == 0 {
-		clock = fmt.Sprintf("בשעה %d בדיוק", t.Hour())
-	}
+	clock := spokenClock(t)
 	day := func(x time.Time) time.Time { return time.Date(x.Year(), x.Month(), x.Day(), 0, 0, 0, 0, x.Location()) }
 	days := int(day(now).Sub(day(t)).Hours()/24 + 0.5)
 	switch {
@@ -182,6 +179,43 @@ func spokenWhen(t, now time.Time) string {
 	default:
 		return fmt.Sprintf("ב %d %s %s", t.Day(), months[t.Month()], clock)
 	}
+}
+
+// spokenClock: שעה בשעון של 12 שעות, כמו שאומרים בדיבור —
+// "בשעה 8 בלילה", "בשעה 8 ורבע בבוקר", "בשעה 2 וחצי בצהריים", "בשעה 5 ו 10 דקות אחר הצהריים".
+func spokenClock(t time.Time) string {
+	h, m := t.Hour(), t.Minute()
+	var part string
+	switch {
+	case h >= 5 && h < 12:
+		part = "בבוקר"
+	case h >= 12 && h < 15:
+		part = "בצהריים"
+	case h >= 15 && h < 18:
+		part = "אחר הצהריים"
+	case h >= 18 && h < 20:
+		part = "בערב"
+	default: // 20:00–04:59
+		part = "בלילה"
+	}
+	h12 := h % 12
+	if h12 == 0 {
+		h12 = 12
+	}
+	var mins string
+	switch m {
+	case 0:
+		mins = ""
+	case 15:
+		mins = " ורבע"
+	case 30:
+		mins = " וחצי"
+	case 1:
+		mins = " ודקה"
+	default:
+		mins = fmt.Sprintf(" ו %d דקות", m)
+	}
+	return fmt.Sprintf("בשעה %d%s %s", h12, mins, part)
 }
 
 // dedupe מסיר הודעות כפולות (אותה הודעה שהועברה בכמה ערוצים). נשארת
