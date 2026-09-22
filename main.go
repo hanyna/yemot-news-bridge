@@ -47,9 +47,23 @@ func main() {
 	yemotExt := envOr("YEMOT_EXT", "1")         // מספר השלוחה
 	yemotFile := envOr("YEMOT_FILE", "001.tts") // שם קובץ ה-TTS בתוך השלוחה
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
+	var err error
 
-	item, err := fetchLatest(client, feedURL, feedKey)
+	// שרת Render בחבילה החינמית נרדם כשאין שימוש, וההתעוררות לוקחת 30–60 שניות.
+	// לכן ל-feed יש זמן המתנה ארוך יותר, ועד 3 ניסיונות.
+	feedClient := &http.Client{Timeout: 90 * time.Second}
+	var item *FeedItem
+	for attempt := 1; attempt <= 3; attempt++ {
+		item, err = fetchLatest(feedClient, feedURL, feedKey)
+		if err == nil {
+			break
+		}
+		log.Printf("ניסיון %d לשליפה מה-feed נכשל: %v", attempt, err)
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 10 * time.Second)
+		}
+	}
 	if err != nil {
 		log.Fatalf("שגיאה בשליפת ההודעה האחרונה: %v", err)
 	}
