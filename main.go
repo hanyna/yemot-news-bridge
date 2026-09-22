@@ -40,7 +40,7 @@ func main() {
 		log.Fatal("חסר משתנה סביבה TGPOPUP_KEY")
 	}
 
-	yemotAPIKey := os.Getenv("YEMOT_API_KEY")
+	yemotAPIKey := cleanKey(os.Getenv("YEMOT_API_KEY"))
 	if yemotAPIKey == "" {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
@@ -119,20 +119,18 @@ func pushToYemot(client *http.Client, apiKey, ext, file, text string) error {
 		text = string(r[:maxRunes]) + "..."
 	}
 
-	u, err := url.Parse(base)
-	if err != nil {
-		return err
-	}
-	q := u.Query()
-	q.Set("what", "ivr2:/"+ext+"/"+file)
-	q.Set("contents", text)
-	u.RawQuery = q.Encode()
+	// שליחה ב-POST (טופס מקודד) במקום GET — כך טקסט ארוך בעברית לא נחתך
+	// בגלל אורך הכתובת, והתוכן לא נחשף בלוגים של כתובות.
+	form := url.Values{}
+	form.Set("what", "ivr2:/"+ext+"/"+file)
+	form.Set("contents", text)
 
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	req, err := http.NewRequest(http.MethodPost, base, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("authorization", apiKey)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+	req.Header.Set("Authorization", apiKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -155,6 +153,14 @@ func pushToYemot(client *http.Client, apiKey, ext, file, text string) error {
 		return fmt.Errorf("שגיאה מימות המשיח (%s): %s", parsed.ResponseStatus, parsed.Message)
 	}
 	return nil
+}
+
+// cleanKey מנקה את המפתח מרווחים בקצוות, מירידות שורה (\r \n) ומתווי
+// BOM/רווח בלתי נראים שנכנסים לפעמים כשמדביקים Secret ב-GitHub.
+func cleanKey(k string) string {
+	k = strings.TrimSpace(k)
+	k = strings.NewReplacer("\r", "", "\n", "", "\ufeff", "", "\u200b", "").Replace(k)
+	return strings.TrimSpace(k)
 }
 
 func envOr(key, fallback string) string {
