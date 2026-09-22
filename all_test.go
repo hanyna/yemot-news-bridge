@@ -309,3 +309,10 @@ func TestDictionary(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyNotInErrors(t *testing.T) {
+	_, err := getJSON(&http.Client{Timeout: time.Second}, "http://127.0.0.1:1/api/messages", "SECRET-KEY-123")
+	if err == nil || strings.Contains(err.Error(), "SECRET-KEY-123") {
+		t.Fatalf("key leaked in error: %v", err)
+	}
+}

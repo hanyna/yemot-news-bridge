@@ -10,6 +10,10 @@ on:
     branches: [main]      # עדכון קוד נכנס לתוקף מיד
   workflow_dispatch: {}   # הפעלה ידנית מהטאב Actions
 
+# הרשאות מינימליות: הגשר רק קורא את הקוד (לא כותב למאגר).
+permissions:
+  contents: read
+
 concurrency:
   group: yemot-bridge
   cancel-in-progress: true

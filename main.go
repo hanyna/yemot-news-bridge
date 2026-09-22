@@ -689,6 +689,10 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 	u.RawQuery = q.Encode()
 	resp, err := client.Get(u.String())
 	if err != nil {
+		// שגיאת רשת כוללת את הכתובת המלאה — עם המפתח. מסתירים אותו.
+		if ue, ok := err.(*url.Error); ok {
+			ue.URL = strings.Replace(ue.URL, url.QueryEscape(key), "***", -1)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
