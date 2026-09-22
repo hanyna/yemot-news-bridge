@@ -73,6 +73,9 @@ type state struct {
 	welcome  string              // הודעת הפתיחה שהועלתה
 	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
 	failures int
+
+	lastNewest int64     // לוג טריות: ההודעה החדשה ביותר שדווחה
+	lastStatus time.Time // לוג טריות: מתי דווח לאחרונה
 }
 
 func main() {
@@ -174,6 +177,7 @@ func syncOnce(cfg *config, st *state) error {
 	}
 
 	now := time.Now().In(cfg.loc)
+	logFreshness(cfg, st, items, now)
 	items = prepare(items)
 
 	// קול ומהירות — פעם אחת בכל הפעלה, בשלוחה הראשית ובשלוחת כל העדכונים.
@@ -253,6 +257,65 @@ func syncOnce(cfg *config, st *state) error {
 		}
 	}
 	return nil
+}
+
+// logFreshness רושם בלוג (פעם ב-10 דקות, ובכל פעם שהחדשה ביותר משתנה) כמה
+// טריות ההודעות שמגיעות משרת ערוץ חי, ומצב כל ערוץ בשרת (/api/status) —
+// כדי לדעת אם עיכוב נובע מהשרת/טלגרם או מהגשר.
+func logFreshness(cfg *config, st *state, items []FeedItem, now time.Time) {
+	var newest FeedItem
+	for _, it := range items {
+		if it.TS > newest.TS {
+			newest = it
+		}
+	}
+	if newest.TS == st.lastNewest && now.Sub(st.lastStatus) < 10*time.Minute {
+		return
+	}
+	st.lastNewest, st.lastStatus = newest.TS, now
+	if newest.TS > 0 {
+		age := now.Sub(time.Unix(newest.TS, 0)).Round(time.Minute)
+		log.Printf("טריות: ההודעה החדשה ביותר בשרת ערוץ חי — %s, %s (לפני %v).", newest.Channel, time.Unix(newest.TS, 0).In(cfg.loc).Format("15:04"), age)
+	}
+	u, err := url.Parse(cfg.feedURL)
+	if err != nil {
+		return
+	}
+	u.Path = "/api/status"
+	body, err := getJSON(cfg.client, u.String(), cfg.feedKey)
+	if err != nil {
+		log.Printf("טריות: לא הצלחתי לקרוא את מצב השרת: %v", err)
+		return
+	}
+	var stat struct {
+		Channels []struct {
+			Channel string `json:"channel"`
+			OK      bool   `json:"ok"`
+			Blocked bool   `json:"blocked"`
+			Error   string `json:"error"`
+			LastOK  int64  `json:"last_ok"`
+		} `json:"channels"`
+		Banner string `json:"banner"`
+	}
+	if json.Unmarshal(body, &stat) != nil {
+		return
+	}
+	if stat.Banner != "" {
+		log.Printf("טריות: הודעת השרת: %s", stat.Banner)
+	}
+	for _, c := range stat.Channels {
+		last := "אף פעם"
+		if c.LastOK > 0 {
+			last = "לפני " + now.Sub(time.Unix(c.LastOK, 0)).Round(time.Minute).String()
+		}
+		flag := "תקין"
+		if c.Blocked {
+			flag = "חסום זמנית ע\"י טלגרם"
+		} else if !c.OK {
+			flag = "נכשל"
+		}
+		log.Printf("טריות: ערוץ %s — %s, נקרא בהצלחה לאחרונה %s %s", c.Channel, flag, last, c.Error)
+	}
 }
 
 // prepare: ניקוי טקסט להקראה, השמטת הודעות בלי טקסט, וסינון כפילויות.
