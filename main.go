@@ -3,8 +3,8 @@
 // תוכנית קטנה שרצה כ-Cron Job (ב-GitHub Actions, כל 5 דקות): שולפת את
 // ההודעות האחרונות מה-API של Telegram Popup ("ערוץ חי"), ובונה מהן טקסט
 // אחד שבו כל הודעה נפרדת: קודם מי פרסם (שם הערוץ), אחר כך באיזו שעה,
-// ואז מה נאמר. הטקסט נשלח לקובץ TTS בשלוחה בימות המשיח, כדי שמתקשרים
-// ישמעו אותו מוקרא.
+// ואז מה נאמר. כל הודעה נשלחת לקובץ TTS נפרד בשלוחה בימות המשיח
+// (001.tts, 002.tts, ...), כי קובץ TTS אחד מוגבל לכ-1,300 תווים.
 package main
 
 import (
@@ -55,9 +55,11 @@ func main() {
 	if yemotAPIKey == "" {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
-	yemotExt := envOr("YEMOT_EXT", "1")         // מספר השלוחה
-	yemotFile := envOr("YEMOT_FILE", "001.tts") // שם קובץ ה-TTS בתוך השלוחה
-	maxMsgs := envInt("YEMOT_MAX_MSGS", 10)     // כמה הודעות אחרונות להקריא
+	yemotExt := envOr("YEMOT_EXT", "1")     // מספר השלוחה
+	maxMsgs := envInt("YEMOT_MAX_MSGS", 10) // כמה הודעות אחרונות להקריא (קובץ לכל הודעה)
+	if maxMsgs > 99 {
+		maxMsgs = 99
+	}
 	newestFirst := envOr("YEMOT_ORDER", "oldest") == "newest"
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -92,28 +94,41 @@ func main() {
 		loc = time.FixedZone("IL", 3*3600)
 	}
 
-	text, count := buildScript(items, titles, loc, maxMsgs, newestFirst)
-	if count == 0 {
+	parts := buildScript(items, titles, loc, maxMsgs, newestFirst)
+	if len(parts) == 0 {
 		log.Println("אין הודעות טקסט זמינות — לא נשלח כלום.")
 		return
 	}
 
-	if err := pushToYemot(client, yemotAPIKey, yemotExt, yemotFile, text); err != nil {
-		log.Fatalf("שגיאה בשליחה לימות המשיח: %v", err)
+	// כל הודעה לקובץ משלה: 001.tts, 002.tts, ...
+	for i, part := range parts {
+		file := fmt.Sprintf("%03d.tts", i+1)
+		if err := pushToYemot(client, yemotAPIKey, yemotExt, file, part); err != nil {
+			log.Fatalf("שגיאה בשליחה לימות המשיח (%s): %v", file, err)
+		}
+		log.Printf("%s (%d תווים): %.80s", file, len([]rune(part)), part)
 	}
 
-	log.Printf("נשלח בהצלחה: %d הודעות, %d תווים.", count, len([]rune(text)))
-	log.Printf("תחילת הטקסט: %.200s", text)
+	// אם הפעם יש פחות הודעות מהמקסימום — מוחקים קבצים ישנים שנשארו מריצה
+	// קודמת, כדי שלא יוקראו הודעות ישנות בסוף.
+	var stale []string
+	for i := len(parts) + 1; i <= maxMsgs; i++ {
+		stale = append(stale, fmt.Sprintf("ivr2:/%s/%03d.tts", yemotExt, i))
+	}
+	if len(stale) > 0 {
+		if err := deleteYemotFiles(client, yemotAPIKey, stale); err != nil {
+			log.Printf("הערה: מחיקת קבצים ישנים לא הצליחה (לא קריטי): %v", err)
+		}
+	}
+
+	log.Printf("נשלח בהצלחה: %d הודעות, כל אחת בקובץ נפרד.", len(parts))
 }
 
-// buildScript בונה את טקסט ההקראה: כל הודעה בפסקה נפרדת —
+// buildScript בונה את טקסטי ההקראה — אחד לכל הודעה:
 // "<שם הערוץ>, בשעה <שעה>. <תוכן ההודעה>".
-// מחזיר את הטקסט ואת מספר ההודעות שנכנסו.
-func buildScript(items []FeedItem, titles map[string]string, loc *time.Location, maxMsgs int, newestFirst bool) (string, int) {
-	const (
-		maxPerMsg = 500  // תווים מקסימליים להודעה בודדת
-		maxTotal  = 5000 // תווים מקסימליים לכל הקובץ
-	)
+func buildScript(items []FeedItem, titles map[string]string, loc *time.Location, maxMsgs int, newestFirst bool) []string {
+	// ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים. משאירים מרווח ביטחון.
+	const maxPerFile = 1000
 
 	// רק הודעות עם טקסט, מהחדשה לישנה.
 	var withText []FeedItem
@@ -124,35 +139,47 @@ func buildScript(items []FeedItem, titles map[string]string, loc *time.Location,
 		}
 	}
 	sort.SliceStable(withText, func(i, j int) bool { return withText[i].TS > withText[j].TS })
+	if len(withText) > maxMsgs {
+		withText = withText[:maxMsgs]
+	}
 
-	// בוחרים את החדשות ביותר, עד שנגמרת המכסה.
-	var chosen []string
-	total := 0
+	var parts []string
 	for _, it := range withText {
-		if len(chosen) >= maxMsgs {
-			break
-		}
+		head := fmt.Sprintf("%s, %s. ", speakerName(it.Channel, titles), spokenTime(time.Unix(it.TS, 0).In(loc)))
 		body := it.Text
-		if r := []rune(body); len(r) > maxPerMsg {
-			body = strings.TrimSpace(string(r[:maxPerMsg])) + "..."
+		const cutNote = ". סוף ההודעה נחתך."
+		room := maxPerFile - len([]rune(head)) - len([]rune(cutNote))
+		if r := []rune(body); len(r) > room {
+			body = cutAtWord(r[:room]) + cutNote
 		}
-		when := time.Unix(it.TS, 0).In(loc).Format("15:04")
-		part := fmt.Sprintf("%s, בשעה %s.\n%s", speakerName(it.Channel, titles), when, body)
-		n := len([]rune(part))
-		if total+n > maxTotal && len(chosen) > 0 {
-			break
-		}
-		chosen = append(chosen, part)
-		total += n
+		parts = append(parts, head+body)
 	}
 
 	// ברירת מחדל: לפי סדר השעות — מהמוקדמת למאוחרת.
 	if !newestFirst {
-		for i, j := 0, len(chosen)-1; i < j; i, j = i+1, j-1 {
-			chosen[i], chosen[j] = chosen[j], chosen[i]
+		for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+			parts[i], parts[j] = parts[j], parts[i]
 		}
 	}
-	return strings.Join(chosen, "\n\n"), len(chosen)
+	return parts
+}
+
+// spokenTime כותב שעה בצורה שמנוע ההקראה קורא טבעי ("בשעה 20 ו 5 דקות")
+// במקום "20:05", שעלול להיקרא כסימנים.
+func spokenTime(t time.Time) string {
+	if t.Minute() == 0 {
+		return fmt.Sprintf("בשעה %d בדיוק", t.Hour())
+	}
+	return fmt.Sprintf("בשעה %d ו %d דקות", t.Hour(), t.Minute())
+}
+
+// cutAtWord חותך בסוף מילה שלמה, כדי לא לקטוע באמצע מילה.
+func cutAtWord(r []rune) string {
+	s := string(r)
+	if i := strings.LastIndex(s, " "); i > len(s)/2 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 // speakerName מחזיר שם קריא למי שפרסם את ההודעה.
@@ -167,32 +194,40 @@ func speakerName(channel string, titles map[string]string) string {
 }
 
 var (
-	reURL    = regexp.MustCompile(`https?://\S+|t\.me/\S+|www\.\S+`)
-	reSpaces = regexp.MustCompile(`[ \t]+`)
-	reLines  = regexp.MustCompile(`\n{2,}`)
+	reURL    = regexp.MustCompile(`https?://\S+|t\.me/\S+|www\.\S+|@\w+`)
+	reSpaces = regexp.MustCompile(`\s+`)
+	reDots   = regexp.MustCompile(`([.!?,])[\s.!?,]*[.,]`)
 )
 
-// cleanForSpeech מסיר מה שלא נשמע טוב בהקראה: קישורים, אימוג'ים וסמלים,
-// ורווחים/שורות כפולים.
+// cleanForSpeech מכין טקסט להקראה: מסיר קישורים ותיוגים, אימוג'ים וסמלים
+// שהמנוע מקריא כמילים (כוכבית, סולמית...), והופך ירידות שורה לנקודה —
+// קובץ TTS צריך להיות רצף טקסט אחד פשוט.
 func cleanForSpeech(s string) string {
-	s = reURL.ReplaceAllString(s, "")
+	s = reURL.ReplaceAllString(s, " ")
 	var b strings.Builder
 	for _, r := range s {
 		switch {
-		case unicode.IsLetter(r), unicode.IsDigit(r), unicode.IsSpace(r), unicode.IsPunct(r):
+		case r == '\n' || r == '\r':
+			b.WriteString(". ")
+		case unicode.IsLetter(r), unicode.IsDigit(r):
 			b.WriteRune(r)
-		case r == '%' || r == '+' || r == '₪' || r == '$':
+		case unicode.IsSpace(r):
+			b.WriteRune(' ')
+		case strings.ContainsRune(".,!?:;()'\"-–—%₪/", r):
+			if r == '–' || r == '—' {
+				r = '-'
+			}
 			b.WriteRune(r)
+		default:
+			// אימוג'ים, * # _ | ~ ^ ועוד — מוחלפים ברווח.
+			b.WriteRune(' ')
 		}
-		// כל השאר (אימוג'ים, סמלים גרפיים, תווים בלתי נראים) — מושמט.
 	}
 	s = reSpaces.ReplaceAllString(b.String(), " ")
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = strings.TrimSpace(lines[i])
-	}
-	s = reLines.ReplaceAllString(strings.Join(lines, "\n"), "\n")
-	return strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, " .", ".")
+	s = reDots.ReplaceAllString(s, "$1")
+	s = strings.Trim(s, " .,-")
+	return s
 }
 
 // fetchFeed שולף את רשימת ההודעות מה-API של Telegram Popup.
@@ -311,6 +346,38 @@ func cleanKey(k string) string {
 	k = strings.TrimSpace(k)
 	k = strings.NewReplacer("\r", "", "\n", "", "\xef\xbb\xbf", "", "\xe2\x80\x8b", "").Replace(k) // BOM, רווח ברוחב אפס
 	return strings.TrimSpace(k)
+}
+
+// deleteYemotFiles מוחק קבצים במערכת (FileAction?action=delete).
+func deleteYemotFiles(client *http.Client, apiKey string, paths []string) error {
+	form := url.Values{}
+	form.Set("action", "delete")
+	for i, p := range paths {
+		form.Set(fmt.Sprintf("what%d", i), p)
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://www.call2all.co.il/ym/api/FileAction", strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+	req.Header.Set("Authorization", apiKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var parsed struct {
+		ResponseStatus string `json:"responseStatus"`
+		Message        string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return fmt.Errorf("תגובה לא צפויה: %.200s", strings.TrimSpace(string(body)))
+	}
+	if parsed.ResponseStatus != "OK" {
+		return fmt.Errorf("%s: %s", parsed.ResponseStatus, parsed.Message)
+	}
+	return nil
 }
 
 func envOr(key, fallback string) string {
