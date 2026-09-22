@@ -226,6 +226,10 @@ func dedupe(items []FeedItem) []FeedItem {
 	var keys []string
 	var out []FeedItem
 	for _, it := range sorted {
+		if it.MediaOnly { // "פורסמה תמונה" — שתי תמונות שונות אינן כפילות
+			out = append(out, it)
+			continue
+		}
 		k := dedupeKey(it.Text)
 		dup := false
 		for _, prev := range keys {

@@ -30,6 +30,10 @@ type FeedItem struct {
 	Channel string `json:"channel"`
 	TS      int64  `json:"ts"`
 	Text    string `json:"text"`
+	HTML    string `json:"html"` // לזיהוי מדיה (תמונה/סרטון/קולית/סקר)
+
+	Flash     bool `json:"-"` // מכיל מילת מבזק
+	MediaOnly bool `json:"-"` // אין טקסט — רק מדיה (לא עובר סינון כפילויות)
 }
 
 type Channel struct {
@@ -43,11 +47,12 @@ var knownNames = map[string]string{
 }
 
 const (
-	welcomeHead = "ברוכים הבאים לקו עדכוני ארץ ישראל. לעדכונים שוטפים, הקישו 1."
-	maxPerFile  = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
-	firstChExt  = 2    // שלוחת הערוץ הראשון
-	lastChExt   = 9    // שלוחת הערוץ האחרון האפשרי
-	failLimit   = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
+	welcomeGreeting = "ברוכים הבאים לקו עדכוני ארץ ישראל."
+	welcomeHead     = "לעדכונים שוטפים, הקישו 1."
+	maxPerFile      = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
+	firstChExt      = 2    // שלוחת הערוץ הראשון
+	lastChExt       = 9    // שלוחת הערוץ האחרון האפשרי
+	failLimit       = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
 )
 
 type config struct {
@@ -241,7 +246,19 @@ func syncOnce(cfg *config, st *state) error {
 	if cfg.welcome != "off" {
 		w := cfg.welcome
 		if w == "" {
-			w = strings.Join(append([]string{welcomeHead}, menu...), " ")
+			parts := []string{welcomeGreeting}
+			// מבזק פעיל (עד חצי שעה) — מוקרא כבר בפתיחה.
+			var flash *FeedItem
+			for i := range items {
+				if flashActive(items[i], now) && (flash == nil || items[i].TS > flash.TS) {
+					flash = &items[i]
+				}
+			}
+			if flash != nil {
+				parts = append(parts, spokenItem(*flash, titles, cfg.loc, now, true, 400))
+			}
+			parts = append(parts, welcomeHead)
+			w = strings.Join(append(parts, menu...), " ")
 		}
 		if r := []rune(w); len(r) > maxPerFile {
 			w = cutAtWord(r[:maxPerFile])
@@ -318,40 +335,51 @@ func logFreshness(cfg *config, st *state, items []FeedItem, now time.Time) {
 	}
 }
 
-// prepare: ניקוי טקסט להקראה, השמטת הודעות בלי טקסט, וסינון כפילויות.
+// prepare: ניקוי טקסט להקראה, תיאור מדיה, סינון פרסומות, סימון מבזקים,
+// השמטת הודעות בלי תוכן, וסינון כפילויות.
 func prepare(items []FeedItem) []FeedItem {
 	var out []FeedItem
 	for _, it := range items {
-		it.Text = cleanForSpeech(it.Text)
-		if it.Text != "" {
-			out = append(out, it)
+		note, onlyMedia, skip := mediaNote(it.HTML)
+		if skip {
+			continue
 		}
+		text := cleanForSpeech(it.Text)
+		switch {
+		case onlyMedia && note != "":
+			text = cleanForSpeech("פורסם " + note)
+			it.MediaOnly = true
+		case note != "" && text != "":
+			text += ". מצורף להודעה: " + cleanForSpeech(note)
+		}
+		if text == "" || isAd(text) {
+			continue
+		}
+		it.Text = text
+		it.Flash = isFlashText(text)
+		out = append(out, it)
 	}
 	return dedupe(out)
 }
 
 // buildParts בונה את טקסטי ההקראה — אחד לכל הודעה:
 // "<שם הערוץ>, <מתי>. <תוכן ההודעה>" (withName=false: בלי שם הערוץ).
+// מבזק פעיל (חצי שעה מפרסומו) נשמע ראשון ומתחיל ב"מבזק".
 func buildParts(items []FeedItem, titles map[string]string, loc *time.Location, now time.Time, max int, newestFirst, withName bool) []string {
 	sorted := append([]FeedItem(nil), items...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].TS > sorted[j].TS })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		fi, fj := flashActive(sorted[i], now), flashActive(sorted[j], now)
+		if fi != fj {
+			return fi
+		}
+		return sorted[i].TS > sorted[j].TS
+	})
 	if len(sorted) > max {
 		sorted = sorted[:max]
 	}
 	var parts []string
 	for _, it := range sorted {
-		when := spokenWhen(time.Unix(it.TS, 0).In(loc), now)
-		head := when + ". "
-		if withName {
-			head = speakerName(it.Channel, titles) + ", " + head
-		}
-		body := it.Text
-		const cutNote = ". סוף ההודעה נחתך."
-		room := maxPerFile - len([]rune(head)) - len([]rune(cutNote))
-		if r := []rune(body); len(r) > room {
-			body = cutAtWord(r[:room]) + cutNote
-		}
-		parts = append(parts, head+body)
+		parts = append(parts, spokenItem(it, titles, loc, now, withName, maxPerFile))
 	}
 	if !newestFirst {
 		for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
@@ -359,6 +387,24 @@ func buildParts(items []FeedItem, titles map[string]string, loc *time.Location, 
 		}
 	}
 	return parts
+}
+
+// spokenItem: הודעה אחת כטקסט להקראה, עד limit תווים.
+func spokenItem(it FeedItem, titles map[string]string, loc *time.Location, now time.Time, withName bool, limit int) string {
+	head := spokenWhen(time.Unix(it.TS, 0).In(loc), now) + ". "
+	if withName {
+		head = speakerName(it.Channel, titles) + ", " + head
+	}
+	if flashActive(it, now) {
+		head = "מבזק. " + head
+	}
+	body := it.Text
+	const cutNote = " המשך ההודעה לא הוקרא."
+	room := limit - len([]rune(head)) - len([]rune(cutNote))
+	if r := []rune(body); len(r) > room {
+		body = cutAtSentence(r[:room]) + cutNote
+	}
+	return head + body
 }
 
 // syncExt מעלה לשלוחה רק קבצים שהשתנו, ומוחק קבצים עודפים מריצה קודמת.
@@ -564,6 +610,17 @@ func speakerName(channel string, titles map[string]string) string {
 		return n
 	}
 	return strings.ReplaceAll(channel, "_", " ")
+}
+
+// cutAtSentence חותך בסוף משפט שלם (. ! ?) אם יש כזה בחצי השני של הטקסט,
+// אחרת בסוף מילה.
+func cutAtSentence(r []rune) string {
+	for i := len(r) - 1; i > len(r)*2/5; i-- {
+		if r[i] == '.' || r[i] == '!' || r[i] == '?' {
+			return strings.TrimSpace(string(r[:i+1]))
+		}
+	}
+	return cutAtWord(r) + "."
 }
 
 // cutAtWord חותך בסוף מילה שלמה, כדי לא לקטוע באמצע מילה.

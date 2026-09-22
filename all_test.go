@@ -61,8 +61,8 @@ func TestDedupe(t *testing.T) {
 		{Channel: "x", TS: 1, Text: "אורי מלמד עם תיק עזה ביד, לא תקח גם? לרכישה במחיר מיוחד היכנסו עכשיו לאתר הרשמי t.me/a"},
 		{Channel: "y", TS: 2, Text: "אורי מלמד עם תיק עזה ביד, לא תקח גם? לרכישה במחיר מיוחד היכנסו עכשיו לאתר הרשמי 👇 הזמינו"},
 	})
-	if len(ad) != 1 {
-		t.Fatalf("ad not deduped: %+v", ad)
+	if len(ad) != 0 {
+		t.Fatalf("ad not filtered: %+v", ad)
 	}
 	if len(items) != 2 || items[0].Channel != "a" {
 		t.Fatalf("%+v", items)
@@ -230,5 +230,57 @@ func TestChannelExtsWithoutGetTextFile(t *testing.T) {
 	w := uploaded["ivr2:/M1000.tts"]
 	if !strings.Contains(w, "הקישו 2") || strings.Contains(w, "הקישו 3") || !strings.Contains(w, "הקישו 4") {
 		t.Fatalf("welcome: %q", w)
+	}
+}
+
+func TestMediaFlashCut(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Jerusalem")
+	now := time.Date(2026, 9, 22, 21, 0, 0, 0, loc)
+	vid := `<article class="msg"><div class="photo"><div class="vidwrap"><video></video><span class="durbadge">1:05</span></div></div></article>`
+	album := `<article class="msg"><div class="msgtext">תמונות מהשטח</div><div class="photo"><div class="grid"><img src="a"><img src="b"><img src="c"></div></div></article>`
+	sticker := `<article class="msg"><div class="stickerbox"><img src="s"></div></article>`
+	poll := `<article class="msg"><div class="pollbox"><div class="pollq">📊 האם לצאת?</div><div class="pollopt"><span>כן</span> <b>60%</b></div><div class="pollopt"><span>לא</span> <b>40%</b></div></div></article>`
+	items := prepare([]FeedItem{
+		{Channel: "a", TS: now.Add(-10 * time.Minute).Unix(), Text: "סרטון", HTML: vid},
+		{Channel: "b", TS: now.Add(-20 * time.Minute).Unix(), Text: "תמונות מהשטח", HTML: album},
+		{Channel: "c", TS: now.Add(-5 * time.Minute).Unix(), Text: "סטיקר", HTML: sticker},
+		{Channel: "d", TS: now.Add(-3 * time.Minute).Unix(), Text: "האם לצאת?", HTML: poll},
+		{Channel: "e", TS: now.Add(-50 * time.Minute).Unix(), Text: "פיגוע ירי בצומת, פצועים"},
+		{Channel: "f", TS: now.Add(-15 * time.Minute).Unix(), Text: "אזעקה בשומרון"},
+	})
+	got := map[string]FeedItem{}
+	for _, it := range items {
+		got[it.Channel] = it
+	}
+	if _, ok := got["c"]; ok {
+		t.Error("sticker should be skipped")
+	}
+	if got["a"].Text != "פורסם סרטון באורך דקה ו 5 שניות" {
+		t.Errorf("video: %q", got["a"].Text)
+	}
+	if got["b"].Text != "תמונות מהשטח. מצורף להודעה: 3 תמונות" {
+		t.Errorf("album: %q", got["b"].Text)
+	}
+	if !strings.HasPrefix(got["d"].Text, "פורסם סקר: האם לצאת? האפשרויות: כן 60 אחוז, לא 40 אחוז") {
+		t.Errorf("poll: %q", got["d"].Text)
+	}
+	// e: מבזק ישן (50 דק') — לא פעיל; f: מבזק פעיל — ראשון גם שאינו החדש ביותר.
+	parts := buildParts(items, nil, loc, now, 10, true, true)
+	if !strings.HasPrefix(parts[0], "מבזק. f, ") {
+		t.Errorf("flash not first: %q", parts[0])
+	}
+	for _, p := range parts[1:] {
+		if strings.HasPrefix(p, "מבזק") {
+			t.Errorf("expired flash still marked: %q", p)
+		}
+	}
+	// חיתוך בסוף משפט
+	long := strings.Repeat("זה משפט ארוך מאוד עם הרבה מילים. ", 60)
+	p := spokenItem(FeedItem{Channel: "x", TS: now.Unix(), Text: long}, nil, loc, now, true, 1000)
+	if len([]rune(p)) > 1000 || !strings.HasSuffix(p, "מילים. המשך ההודעה לא הוקרא.") {
+		t.Errorf("cut: len=%d tail=%q", len([]rune(p)), string([]rune(p)[len([]rune(p))-40:]))
+	}
+	if !isAd("הספר החדש לרכישה באתר") || isAd("מבצע צבאי נרחב בשומרון") {
+		t.Error("isAd")
 	}
 }
