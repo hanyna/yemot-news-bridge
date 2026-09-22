@@ -40,6 +40,6 @@ jobs:
           YEMOT_PER_CHANNEL: "5"   # כמה הודעות בשלוחה של כל ערוץ (2 ומעלה)
           YEMOT_ORDER: "oldest"    # oldest = 001 הישנה והמספר הגבוה החדשה. ימות המשיח משמיע מהגבוה לנמוך, כך שהחדשה נשמעת ראשונה
           CHANNEL_EXTS: "on"       # off = בלי שלוחה לכל ערוץ
-          YEMOT_VOICE: ""          # קול: Jacob / Sivan / Osnat (ריק = לא לשנות)
-          YEMOT_RATE: ""           # מהירות: מ -10 (איטי) עד 10 (מהיר), ריק = לא לשנות
+          YEMOT_VOICE: "Jacob"     # קול: Jacob (גבר) / Elik_2100 (גבר, ברירת מחדל) / Sivan / Osnat (נשים). ריק = לא לשנות
+          YEMOT_RATE: "2"          # מהירות: מ -10 (איטי) עד 10 (מהיר), ריק = לא לשנות
         run: ./bridge

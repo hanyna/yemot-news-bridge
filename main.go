@@ -196,16 +196,6 @@ func syncOnce(cfg *config, st *state) error {
 	logFreshness(cfg, st, items, now)
 	items = prepare(items)
 
-	// קול ומהירות — פעם אחת בכל הפעלה, בשלוחה הראשית ובשלוחת כל העדכונים.
-	if !st.voiceSet && (cfg.voice != "" || cfg.rate != "") {
-		st.voiceSet = true
-		for _, ext := range []string{"", cfg.ext} {
-			if err := applyVoice(cfg, ext); err != nil {
-				log.Printf("הערה: עדכון קול/מהירות בשלוחה %q נכשל: %v", ext, err)
-			}
-		}
-	}
-
 	// שלוחה 1: כל הערוצים.
 	all := buildParts(items, titles, cfg.loc, now, cfg.maxMsgs, cfg.newestFirst, true)
 	if len(all) == 0 {
@@ -250,6 +240,25 @@ func syncOnce(cfg *config, st *state) error {
 				continue
 			}
 			menu = append(menu, fmt.Sprintf("לעדכוני %s הקישו %s.", name, ext))
+		}
+	}
+
+	// קול ומהירות — פעם אחת בכל הפעלה: בשלוחה הראשית, בשלוחת כל העדכונים
+	// ובשלוחות הכתבים. משנה רק את השורות voice/rate ב-ext.ini הקיים.
+	if !st.voiceSet && (cfg.voice != "" || cfg.rate != "") {
+		st.voiceSet = true
+		exts := []string{"", cfg.ext}
+		for _, e := range st.chExt {
+			exts = append(exts, e)
+		}
+		for _, ext := range exts {
+			if err := applyVoice(cfg, ext); err != nil {
+				log.Printf("הערה: עדכון קול/מהירות בשלוחה %q נכשל: %v", ext, err)
+				if strings.Contains(err.Error(), "ACL") {
+					log.Println("הערה: מפתח ה-API לא מורשה ל-GetTextFile — צריך להוסיף /api/GetTextFile לרשימת ההרשאות של המפתח.")
+					break
+				}
+			}
 		}
 	}
 
