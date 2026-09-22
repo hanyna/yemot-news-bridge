@@ -51,6 +51,13 @@ func TestDedupe(t *testing.T) {
 		{Channel: "c", TS: 300, Text: long + " הצטרפו"},
 		{Channel: "d", TS: 400, Text: "משהו אחר לגמרי"},
 	})
+	ad := prepare([]FeedItem{
+		{Channel: "x", TS: 1, Text: "אורי מלמד עם תיק עזה ביד, לא תקח גם? לרכישה במחיר מיוחד היכנסו עכשיו לאתר הרשמי t.me/a"},
+		{Channel: "y", TS: 2, Text: "אורי מלמד עם תיק עזה ביד, לא תקח גם? לרכישה במחיר מיוחד היכנסו עכשיו לאתר הרשמי 👇 הזמינו"},
+	})
+	if len(ad) != 1 {
+		t.Fatalf("ad not deduped: %+v", ad)
+	}
 	if len(items) != 2 || items[0].Channel != "a" {
 		t.Fatalf("%+v", items)
 	}

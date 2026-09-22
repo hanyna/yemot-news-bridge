@@ -60,6 +60,9 @@ var pronunciation = map[string]string{
 	`מ"פ`:    "מפקד פלוגה",
 	`מח"ט`:   "מחט",
 	`מג"ד`:   "מגד",
+	`אמל"ח`:  "אמלח",
+	`מחב"ל`:  "מחבל",
+	`רש"פ`:   "הרשות הפלסטינית",
 }
 
 // אותיות שימוש שיכולות להופיע לפני קיצור (ו, ב, ל, ה, מ, ש, כ), עד שתיים.
@@ -107,7 +110,7 @@ func applyPronunciation(s string) string {
 var (
 	reURL     = regexp.MustCompile(`https?://\S+|t\.me/\S+|www\.\S+|@\w+`)
 	reSpaces  = regexp.MustCompile(`\s+`)
-	reDots    = regexp.MustCompile(`([.!?,])[\s.!?,]*[.,]`)
+	reDots    = regexp.MustCompile(`([.!?,:;])[\s.!?,:;]*[.,:;]`)
 	reNumPct  = regexp.MustCompile(`(\d)\s*%`)
 	reNumNIS  = regexp.MustCompile(`(\d)\s*₪|₪\s*(\d[\d,.]*)`)
 	quoteLike = strings.NewReplacer("״", `"`, "”", `"`, "“", `"`, "„", `"`, "׳", "'", "’", "'", "‘", "'")
@@ -216,8 +219,9 @@ func dedupeKey(s string) string {
 	return b.String()
 }
 
-// similar: זהות מלאה, או שאחת מכילה את השנייה והתוספת קטנה (עד רבע)
-// — למשל "הועבר מ..." או חתימת ערוץ שנוספה בסוף.
+// similar: זהות מלאה; או שאחת מכילה את השנייה והתוספת קטנה (עד רבע) —
+// למשל "הועבר מ..." או חתימת ערוץ שנוספה בסוף; או שהן זהות ב-80% הראשונים
+// (אותה מודעה/הודעה עם סיום שונה, כמו קישור או חתימה אחרים).
 func similar(a, b string) bool {
 	if a == b {
 		return true
@@ -231,5 +235,13 @@ func similar(a, b string) bool {
 	if la > lb {
 		short, long, ls, ll = b, a, lb, la
 	}
-	return strings.Contains(long, short) && float64(ls) >= 0.75*float64(ll)
+	if strings.Contains(long, short) && float64(ls) >= 0.75*float64(ll) {
+		return true
+	}
+	ra, rb := []rune(short), []rune(long)
+	same := 0
+	for same < len(ra) && ra[same] == rb[same] {
+		same++
+	}
+	return same >= 40 && float64(same) >= 0.8*float64(ls)
 }
