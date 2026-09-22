@@ -77,11 +77,11 @@ type state struct {
 
 func main() {
 	cfg := config{
-		feedURL:     envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
-		feedKey:     strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
-		ext:         envOr("YEMOT_EXT", "1"),
-		maxMsgs:     envInt("YEMOT_MAX_MSGS", 10),
-		perChan:     envInt("YEMOT_PER_CHANNEL", 5),
+		feedURL: envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
+		feedKey: strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
+		ext:     envOr("YEMOT_EXT", "1"),
+		maxMsgs: envInt("YEMOT_MAX_MSGS", 10),
+		perChan: envInt("YEMOT_PER_CHANNEL", 5),
 		// ימות המשיח משמיע את הקבצים בשלוחה מהמספר הגבוה לנמוך. לכן ברירת
 		// המחדל: 001 = הישנה, המספר הגבוה = החדשה — והמאזין שומע את החדשה ראשונה.
 		// YEMOT_ORDER=newest הופך (001 = החדשה).
