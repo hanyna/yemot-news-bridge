@@ -134,7 +134,18 @@ func main() {
 
 	deadline := time.Now().Add(runFor)
 	log.Printf("מצב לולאה: בדיקה כל %v, עד %s (שעון ישראל).", interval, deadline.In(cfg.loc).Format("15:04"))
+	mySHA := os.Getenv("GITHUB_SHA")
+	var lastSHACheck time.Time
 	for {
+		// הפעלה ישנה לא ממשיכה לרוץ במקביל לחדשה (היא הייתה דורסת את הקבצים
+		// בגרסה הישנה): אם יש קוד חדש יותר ב-main — מסיימים.
+		if mySHA != "" && time.Since(lastSHACheck) > 2*time.Minute {
+			lastSHACheck = time.Now()
+			if latest, err := latestSHA(cfg.client); err == nil && latest != "" && latest != mySHA {
+				log.Printf("יש גרסה חדשה של הגשר (%.7s, אני %.7s) — מסיים כדי שהיא תרוץ במקומי.", latest, mySHA)
+				return
+			}
+		}
 		if err := syncOnce(&cfg, st); err != nil {
 			st.failures++
 			log.Printf("שגיאה בסבב (%d ברצף): %v", st.failures, err)
@@ -688,6 +699,29 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 		return nil, fmt.Errorf("סטטוס %d מ-%s: %.200s", resp.StatusCode, u.Path, string(body))
 	}
 	return body, nil
+}
+
+// latestSHA מחזיר את מזהה הקומיט האחרון ב-main (דרך ה-API של GitHub).
+func latestSHA(client *http.Client) (string, error) {
+	repo := envOr("GITHUB_REPOSITORY", "hanyna/yemot-news-bridge")
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/"+repo+"/commits/main", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github.sha")
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("סטטוס %d", resp.StatusCode)
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 // cleanKey מנקה את המפתח מרווחים בקצוות, מירידות שורה ומתווים בלתי נראים

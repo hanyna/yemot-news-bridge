@@ -33,6 +33,7 @@ jobs:
         env:
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}   # לבדיקה אם יש גרסה חדשה יותר (אז ההפעלה הישנה נעצרת)
           RUN_MINUTES: "120"       # כמה זמן ההפעלה נשארת פתוחה
           INTERVAL_SECONDS: "60"   # כל כמה שניות לבדוק הודעות חדשות
           YEMOT_MAX_MSGS: "10"     # כמה הודעות בשלוחה 1 (כל הערוצים)
