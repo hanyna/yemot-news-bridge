@@ -53,7 +53,7 @@ const (
 	chooseExt   = "2"  // תפריט בחירת כתב
 	resumeExt   = "5"  // המשך מהמקום שהפסקתם
 	recordExt   = "6"  // הודעה למנהל המערכת
-	listExt     = "8"  // רשימת תפוצה (רק כש-YEMOT_LIST_ID מוגדר)
+	listExt     = "8"  // צינתוקים וטלזכור
 	registerExt = "7"  // הרשמה זמנית של בעל הקו לצינתוקי המנהל (ADMIN_TZINTUK_REGISTER=on)
 	maxPerFile  = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
 	failLimit   = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
@@ -67,7 +67,8 @@ type config struct {
 	channelExts      bool
 	welcome          string // "" = אוטומטי, "off" = כבוי
 	voice, rate      string
-	listID           string // מספר רשימת התפוצה בימות המשיח (שלוחה 8)
+	publicList       string // רשימת הצינתוקים הכללית (שלוחה 8/1)
+	lineNumber       string // מספר הקו — יעד החיוג בטלזכור (שלוחה 8/2)
 	adminList        string // רשימת הצינתוקים של המנהל (הודעה חדשה בשלוחה 6)
 	adminRegister    bool   // שלוחה 7 = הרשמה לרשימת המנהל (זמני)
 	loc              *time.Location
@@ -86,9 +87,9 @@ type state struct {
 	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
 	failures int
 
-	special     map[string]bool // שלוחות מיוחדות שהוגדרו בהפעלה הזו (true=פעילה)
-	chooserText string          // תפריט בחירת הכתב שהועלה
-	listMenuSet bool
+	special      map[string]bool // שלוחות מיוחדות שהוגדרו בהפעלה הזו (true=פעילה)
+	chooserText  string          // תפריט בחירת הכתב שהועלה
+	listMenuText string
 
 	lastNewest int64     // לוג טריות: ההודעה החדשה ביותר שדווחה
 	lastStatus time.Time // לוג טריות: מתי דווח לאחרונה
@@ -109,7 +110,8 @@ func main() {
 		welcome:       strings.TrimSpace(os.Getenv("YEMOT_WELCOME")),
 		voice:         strings.TrimSpace(os.Getenv("YEMOT_VOICE")),
 		rate:          strings.TrimSpace(os.Getenv("YEMOT_RATE")),
-		listID:        strings.TrimSpace(os.Getenv("YEMOT_LIST_ID")),
+		publicList:    envOr("PUBLIC_TZINTUK_LIST", "800"),
+		lineNumber:    strings.TrimSpace(os.Getenv("YEMOT_LINE_NUMBER")),
 		adminList:     envOr("ADMIN_TZINTUK_LIST", "606"),
 		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
 		client:        &http.Client{Timeout: 30 * time.Second},
@@ -288,17 +290,32 @@ func syncOnce(cfg *config, st *state) error {
 	if setupSpecial(cfg, st, recordExt, recordIni) {
 		menu = append(menu, "להשארת הודעה למנהל המערכת, הקישו "+recordExt+".")
 	}
-	if cfg.listID != "" {
+	// שלוחה 8: צינתוקים וטלזכור.
+	//   8/1 — הרשמה/הסרה מרשימת הצינתוקים הכללית (type=tzintuk)
+	//   8/2 — טלזכור: תזכורת קבועה לחייג לקו בימים ובשעות שהמאזין בוחר
+	if cfg.publicList != "" {
 		ok := setupSpecial(cfg, st, listExt, "type=menu")
-		ok = ok && setupSpecial(cfg, st, listExt+"/1", "type=template_add_number\ntemplate_id="+cfg.listID)
-		ok = ok && setupSpecial(cfg, st, listExt+"/2", "type=template_remove_number\ntemplate_id="+cfg.listID)
-		if ok && !st.listMenuSet {
-			if err := cfg.y.upload(listExt, "M1000.tts", "רשימת התפוצה. להצטרפות הקישו 1. להסרה הקישו 2."); err == nil {
-				st.listMenuSet = true
-			}
+		ok1 := ok && setupSpecial(cfg, st, listExt+"/1", "type=tzintuk\nlist_tzintuk="+cfg.publicList)
+		telezIni := "type=telezchor\ntelezchor_end=hangup"
+		if cfg.lineNumber != "" {
+			telezIni += "\ntelezchor_target_number=" + cfg.lineNumber
 		}
-		if ok {
-			menu = append(menu, "להצטרפות או הסרה מרשימת התפוצה, הקישו "+listExt+".")
+		ok2 := ok && setupSpecial(cfg, st, listExt+"/2", telezIni)
+		if ok && (ok1 || ok2) {
+			var opts []string
+			if ok1 {
+				opts = append(opts, "להרשמה או הסרה מרשימת הצינתוקים, הקישו 1.")
+			}
+			if ok2 {
+				opts = append(opts, "לתזכורת קבועה לחייג לקו, בימים ובשעות שתבחרו, הקישו 2.")
+			}
+			text := "צינתוקים ותזכורות. " + strings.Join(opts, " ")
+			if text != st.listMenuText {
+				if err := cfg.y.upload(listExt, "M1000.tts", text); err == nil {
+					st.listMenuText = text
+				}
+			}
+			menu = append(menu, "לצינתוקים ותזכורות, הקישו "+listExt+".")
 		}
 	}
 	// הרשמה חד-פעמית של בעל הקו לרשימת צינתוקי המנהל — שלוחה 7 זמנית, לא מופיעה בתפריט.
@@ -307,7 +324,7 @@ func syncOnce(cfg *config, st *state) error {
 	}
 	// שלוחות ריקות מהמבנה הקודם (3, 4, 7, ו-8 כשאין רשימה) — מחזירות לתפריט.
 	for _, old := range []string{"3", "4", "7", "8"} {
-		if old == listExt && cfg.listID != "" {
+		if old == listExt && cfg.publicList != "" {
 			continue
 		}
 		if old == registerExt && cfg.adminRegister {

@@ -182,6 +182,7 @@ func TestNewMenuStructure(t *testing.T) {
 	defer srv.Close()
 	cfg := newTestCfg(srv)
 	cfg.adminList = "606"
+	cfg.publicList = "" // שלוחה 8 נבדקת בנפרד
 	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
@@ -248,20 +249,24 @@ func TestNewMenuStructure(t *testing.T) {
 }
 
 func TestListExt(t *testing.T) {
-	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}},
+	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/8": {"ext.ini", "001.tts"}},
 		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
 	cfg := newTestCfg(srv)
-	cfg.listID = "123"
+	cfg.publicList, cfg.lineNumber = "800", "0772263731"
 	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/8/1/ext.ini"] != "type=template_add_number\ntemplate_id=123" || f.files["ivr2:/8/2/ext.ini"] != "type=template_remove_number\ntemplate_id=123" {
-		t.Fatalf("list exts: %q %q", f.files["ivr2:/8/1/ext.ini"], f.files["ivr2:/8/2/ext.ini"])
+	if f.files["ivr2:/8/ext.ini"] != "type=menu" || f.files["ivr2:/8/1/ext.ini"] != "type=tzintuk\nlist_tzintuk=800" ||
+		f.files["ivr2:/8/2/ext.ini"] != "type=telezchor\ntelezchor_end=hangup\ntelezchor_target_number=0772263731" {
+		t.Fatalf("ext8: %q | %q | %q", f.files["ivr2:/8/ext.ini"], f.files["ivr2:/8/1/ext.ini"], f.files["ivr2:/8/2/ext.ini"])
 	}
-	if !strings.Contains(f.files["ivr2:/M1000.tts"], "רשימת התפוצה, הקישו 8.") {
+	if f.files["ivr2:/8/M1000.tts"] != "צינתוקים ותזכורות. להרשמה או הסרה מרשימת הצינתוקים, הקישו 1. לתזכורת קבועה לחייג לקו, בימים ובשעות שתבחרו, הקישו 2." {
+		t.Fatalf("ext8 menu: %q", f.files["ivr2:/8/M1000.tts"])
+	}
+	if !strings.HasSuffix(f.files["ivr2:/M1000.tts"], "לצינתוקים ותזכורות, הקישו 8.") {
 		t.Fatalf("welcome: %q", f.files["ivr2:/M1000.tts"])
 	}
 }
