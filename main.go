@@ -266,7 +266,7 @@ func syncOnce(cfg *config, st *state) error {
 
 	// התפריט הראשי: אילו שלוחות פעילות.
 	var menu []string
-	if len(chooser) > 0 && setupSpecial(cfg, st, chooseExt, "type=menu") {
+	if len(chooser) > 0 && setupSpecial(cfg, st, chooseExt, "type=menu\ndigits=1") {
 		text := "בחירת כתב. " + strings.Join(chooser, " ")
 		if r := []rune(text); len(r) > maxPerFile {
 			text = cutAtWord(r[:maxPerFile])
@@ -297,7 +297,7 @@ func syncOnce(cfg *config, st *state) error {
 	//   8/2 — טלזכור: תזכורת קבועה לחייג לקו בימים ובשעות שהמאזין בוחר
 	//   8/3 — שיחה חוזרת מהמערכת, כדי לחסוך למתקשר בדקות שיחה (type=system_sharing)
 	if cfg.publicList != "" || cfg.callback {
-		ok := setupSpecial(cfg, st, listExt, "type=menu")
+		ok := setupSpecial(cfg, st, listExt, "type=menu\ndigits=1")
 		var opts []string
 		if cfg.publicList != "" {
 			if ok && setupSpecial(cfg, st, listExt+"/1", "type=tzintuk\nlist_tzintuk="+cfg.publicList) {

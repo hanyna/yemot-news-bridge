@@ -193,7 +193,7 @@ func TestNewMenuStructure(t *testing.T) {
 		t.Fatalf("ext1: %q | %q", fl["ivr2:/1/001.tts"], fl["ivr2:/1/002.tts"])
 	}
 	// שלוחה 2: תפריט בחירת כתב, והכתבים ב-2/1, 2/2.
-	if fl["ivr2:/2/ext.ini"] != "type=menu" {
+	if fl["ivr2:/2/ext.ini"] != "type=menu\ndigits=1" {
 		t.Fatalf("ext2 ini: %q", fl["ivr2:/2/ext.ini"])
 	}
 	if fl["ivr2:/2/M1000.tts"] != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2." {
@@ -259,7 +259,7 @@ func TestListExt(t *testing.T) {
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/8/ext.ini"] != "type=menu" || f.files["ivr2:/8/1/ext.ini"] != "type=tzintuk\nlist_tzintuk=800" ||
+	if f.files["ivr2:/8/ext.ini"] != "type=menu\ndigits=1" || f.files["ivr2:/8/1/ext.ini"] != "type=tzintuk\nlist_tzintuk=800" ||
 		f.files["ivr2:/8/2/ext.ini"] != "type=telezchor\ntelezchor_end=hangup\ntelezchor_target_number=0772263731" {
 		t.Fatalf("ext8: %q | %q | %q", f.files["ivr2:/8/ext.ini"], f.files["ivr2:/8/1/ext.ini"], f.files["ivr2:/8/2/ext.ini"])
 	}
@@ -282,7 +282,7 @@ func TestCallbackExt(t *testing.T) {
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/8/ext.ini"] != "type=menu" {
+	if f.files["ivr2:/8/ext.ini"] != "type=menu\ndigits=1" {
 		t.Fatalf("ext8 ini: %q", f.files["ivr2:/8/ext.ini"])
 	}
 	if f.files["ivr2:/8/3/ext.ini"] != "type=system_sharing\nsystem_sharing_to_myself=yes" {
