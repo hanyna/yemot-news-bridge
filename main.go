@@ -88,10 +88,11 @@ type state struct {
 	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
 	failures int
 
-	special       map[string]bool      // שלוחות מיוחדות שהוגדרו בהפעלה הזו (true=פעילה)
-	specialFailAt map[string]time.Time // מתי נכשל ניסיון אחרון (לצורך ניסיון חוזר אחרי setupRetry)
-	chooserText   string               // תפריט בחירת הכתב שהועלה
-	listMenuText  string
+	special      map[string]bool      // שלוחות מיוחדות בהפעלה הזו: true=הוגדרה, false=לא של הגשר
+	failAt       map[string]time.Time // מתי נכשל ניסיון אחרון להגדיר שלוחה (ניסיון חוזר אחרי setupRetry)
+	warned       map[string]bool      // הודעות הסבר שכבר נרשמו בלוג בהפעלה הזו
+	chooserText  string               // תפריט בחירת הכתב שהועלה
+	listMenuText string
 
 	lastNewest int64     // לוג טריות: ההודעה החדשה ביותר שדווחה
 	lastStatus time.Time // לוג טריות: מתי דווח לאחרונה
@@ -185,8 +186,34 @@ func main() {
 	}
 }
 
+// ensureMaps מאתחל מפות שחסרות (בבדיקות בונים state חלקי).
+func (st *state) ensureMaps() {
+	if st.files == nil {
+		st.files = map[string][]string{}
+	}
+	if st.known == nil {
+		st.known = map[string]bool{}
+	}
+	if st.chExt == nil {
+		st.chExt = map[string]string{}
+	}
+	if st.blocked == nil {
+		st.blocked = map[string]bool{}
+	}
+	if st.special == nil {
+		st.special = map[string]bool{}
+	}
+	if st.failAt == nil {
+		st.failAt = map[string]time.Time{}
+	}
+	if st.warned == nil {
+		st.warned = map[string]bool{}
+	}
+}
+
 // syncOnce: סבב אחד — שליפה, בנייה, והעלאת מה שהשתנה בלבד.
 func syncOnce(cfg *config, st *state) error {
+	st.ensureMaps()
 	var items []FeedItem
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -255,13 +282,13 @@ func syncOnce(cfg *config, st *state) error {
 				if cfg.newestFirst {
 					first = 0
 				}
-				parts[first] = "עדכוני " + name + ". " + parts[first]
+				parts[first] = updatesOf(name) + ". " + parts[first]
 			}
 			if err := syncExt(cfg, st, ext, parts, cfg.perChan); err != nil {
 				log.Printf("הערה: עדכון שלוחה %s (%s) נכשל: %v", ext, name, err)
 				continue
 			}
-			chooser = append(chooser, fmt.Sprintf("לעדכוני %s הקישו %s.", name, key))
+			chooser = append(chooser, fmt.Sprintf("ל%s הקישו %s.", updatesOf(name), key))
 		}
 	}
 
@@ -314,18 +341,24 @@ func syncOnce(cfg *config, st *state) error {
 		}
 		if cfg.callback {
 			// שיחה חוזרת מהמערכת אל אותו מספר שהתקשר ממנו — כדי שלא ישתמש בדקות שלו.
-			if ok && setupSpecial(cfg, st, listExt+"/3", "type=system_sharing\nsystem_sharing_to_myself=yes") {
+			// ההגדרות כמו בדוגמה בפורום של ימות המשיח (topic/19356).
+			if ok && setupSpecial(cfg, st, listExt+"/3", "type=system_sharing\nsystem_sharing_custom_did=real_did\nsystem_sharing_to_myself=yes") {
 				opts = append(opts, "לשיחה חוזרת מהמערכת, כדי לחסוך בדקות השיחה שלכם, הקישו 3.")
 			}
 		}
-		if ok && len(opts) > 0 {
-			text := "צינתוקים ותזכורות. " + strings.Join(opts, " ")
+		if ok {
+			// אין אף אפשרות פעילה (למשל אין הרשאה ליצור שלוחות) — השלוחה לא מוכרזת
+			// בתפריט, ומי שמגיע אליה מהזיכרון שומע שהיא לא פעילה, ולא תפריט של אפשרויות מתות.
+			text := "שלוחה זו אינה פעילה כרגע."
+			if len(opts) > 0 {
+				text = "צינתוקים ותזכורות. " + strings.Join(opts, " ")
+				menu = append(menu, "לצינתוקים ותזכורות, הקישו "+listExt+".")
+			}
 			if text != st.listMenuText {
 				if err := cfg.y.upload(listExt, "M1000.tts", text); err == nil {
 					st.listMenuText = text
 				}
 			}
-			menu = append(menu, "לצינתוקים ותזכורות, הקישו "+listExt+".")
 		}
 	}
 	// הרשמה חד-פעמית של בעל הקו לרשימת צינתוקי המנהל — שלוחה 7 זמנית, לא מופיעה בתפריט.
@@ -552,153 +585,222 @@ func syncExt(cfg *config, st *state, ext string, parts []string, maxFiles int) e
 	return nil
 }
 
-// ensureChannelExt מכין שלוחת השמעה לערוץ. יוצר אותה רק אם היא לא קיימת,
-// או אם היא כבר שלוחה שהגשר יצר (type=playfile בלבד). שלוחה עם הגדרות
-// אחרות — לא נוגעים בה ולא מפרסמים אותה בתפריט.
+// ensureChannelExt מכין שלוחת השמעה לערוץ (2/1, 2/2, ...). יוצר אותה אם היא
+// לא קיימת; שלוחה קיימת משמשת רק אם היא של הגשר (type=playfile, רק קבצי
+// הגשר). שלוחה עם הגדרות או קבצים אחרים — לא נוגעים בה ולא מפרסמים אותה.
 func ensureChannelExt(cfg *config, st *state, channel, ext string) bool {
+	st.ensureMaps()
 	if st.chExt[channel] == ext {
 		return true
 	}
-	if st.blocked[ext] {
+	if st.blocked[ext] || coolingDown(st, ext) {
 		return false
 	}
-	ini, exists, err := cfg.y.read(ext, "ext.ini")
-	if err != nil {
-		// המפתח לא מורשה לקרוא הגדרות — בודקים לפי רשימת הקבצים בשלוחה.
-		return ensureChannelExtByFiles(cfg, st, channel, ext, err)
-	}
-	if exists && !isBridgeIni(ini) {
+	block := func(format string, args ...any) bool {
 		st.blocked[ext] = true
-		log.Printf("אזהרה: שלוחה %s כבר קיימת עם הגדרות אחרות — לא נוגע בה. ext.ini: %.150s", ext, ini)
+		log.Printf(format, args...)
 		return false
 	}
 	want, _ := setIniValues("type=playfile", [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
-	if !exists || strings.TrimSpace(ini) != want {
-		if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
-			log.Printf("הערה: יצירת שלוחה %s נכשלה: %v", ext, err)
-			return false
-		}
-		log.Printf("שלוחה %s הוגדרה לערוץ %s.", ext, channel)
-	}
-	st.chExt[channel] = ext
-	return true
-}
-
-// ensureChannelExtByFiles: כשאי אפשר לקרוא ext.ini. שלוחה קיימת משמשת רק
-// אם יש בה לכל היותר ext.ini וקבצי NNN.tts (של הגשר) — כלומר אין בה קבצים
-// של המשתמש. לא נוגעים ב-ext.ini שלה. שלוחה שלא קיימת — נוצרת כשלוחת השמעה.
-func ensureChannelExtByFiles(cfg *config, st *state, channel, ext string, readErr error) bool {
-	names, err := cfg.y.listDir(ext)
+	info, err := cfg.y.dir(ext)
 	if err != nil {
-		if looksNotFound(err.Error()) {
-			want, _ := setIniValues("type=playfile", [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
-			if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
-				st.blocked[ext] = true
-				log.Printf("הערה: יצירת שלוחה %s נכשלה: %v", ext, err)
-				return false
+		return failed(st, ext, "הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
+	}
+	if !info.Exists {
+		if err := createExt(cfg, st, ext, want); err != nil {
+			return failed(st, ext, "הערה: יצירת שלוחה %s (%s) נכשלה: %v", ext, channel, err)
+		}
+	} else {
+		for _, n := range info.Files {
+			if !isBridgeFile(n) && !isSystemFile(n) {
+				return block("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה.", ext, n)
 			}
-			log.Printf("שלוחה %s נוצרה לערוץ %s.", ext, channel)
+		}
+		ini, exists, err := cfg.y.read(ext, "ext.ini")
+		switch {
+		case err != nil:
+			// אין הרשאה לקרוא הגדרות — לפי ההגדרות בפועל שמחזיר GetIVR2Dir.
+			if t := info.Ini["type"]; t != "playfile" && hasName(info.Files, "ext.ini") {
+				return block("אזהרה: שלוחה %s מוגדרת type=%s ולא כשלוחת השמעה — לא נוגע בה.", ext, t)
+			}
+		case exists && !isBridgeIni(ini):
+			return block("אזהרה: שלוחה %s כבר קיימת עם הגדרות אחרות — לא נוגע בה. ext.ini: %.150s", ext, ini)
+		case exists && strings.TrimSpace(ini) == want:
 			st.chExt[channel] = ext
 			return true
 		}
-		st.blocked[ext] = true
-		log.Printf("הערה: לא הצלחתי לבדוק את שלוחה %s (%v; %v) — לא משתמש בה.", ext, readErr, err)
-		return false
 	}
-	for _, n := range names {
-		if !isBridgeFile(n) {
-			st.blocked[ext] = true
-			log.Printf("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה.", ext, n)
-			return false
-		}
+	// בלי ext.ini משלה, שלוחה יורשת את type=menu של שלוחה 2 — ואז הקשה עליה
+	// פשוט משמיעה שוב את תפריט הבחירה. לכן תמיד כותבים type=playfile.
+	if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
+		return failed(st, ext, "הערה: הגדרת שלוחה %s נכשלה: %v", ext, err)
 	}
-	log.Printf("שלוחה %s (קיימת, בלי קבצים אחרים) משמשת לערוץ %s.", ext, channel)
+	log.Printf("שלוחה %s הוגדרה לערוץ %s.", ext, channel)
 	st.chExt[channel] = ext
 	return true
 }
 
 // bridgeMarker — קובץ סימון שהגשר שם בשלוחות שהוא הגדיר, כדי לדעת בהפעלות
 // הבאות שהשלוחה שלו (גם כשנוספו בה קבצים, למשל הקלטות בשלוחה 6).
+// ימות המשיח לא מראים אותו ברשימת הקבצים (GetIVR2Dir) — קוראים אותו ישירות.
 const bridgeMarker = "bridge.txt"
 
-// setupSpecial מגדיר שלוחה מיוחדת (תפריט / המשך האזנה / הקלטה / רשימה) — פעם
-// אחת בכל הפעלה. כותב ext.ini רק אם השלוחה לא קיימת, שייכת לגשר, או מכילה
-// רק קבצים של הגשר. שלוחה עם קבצים של המשתמש — לא נוגעים ולא מפרסמים.
-// setupRetry: אחרי כישלון, כמה זמן לחכות לפני שמנסים שוב (בתוך אותה ריצה —
-// ריצה יכולה להישאר פתוחה שעות, אז כישלון חד-פעמי (למשל הרשאות שעדיין
-// לא נכנסו לתוקף) לא צריך להישאר תקוע עד להפעלה הבאה של ה-workflow).
-const setupRetry = 3 * time.Minute
+// setupRetry: אחרי כישלון בהגדרת שלוחה, כמה זמן לחכות לפני ניסיון חוזר —
+// בתוך אותה ריצה (ריצה נשארת פתוחה שעות, אז תקלה זמנית, כמו הרשאה שעוד לא
+// נכנסה לתוקף, לא נשארת תקועה עד ההפעלה הבאה).
+var setupRetry = 3 * time.Minute
 
+func coolingDown(st *state, ext string) bool {
+	t, ok := st.failAt[ext]
+	return ok && time.Since(t) < setupRetry
+}
+
+// failed רושם בלוג ושומר את זמן הכישלון (לניסיון חוזר אחרי setupRetry).
+func failed(st *state, ext, format string, args ...any) bool {
+	log.Printf(format, args...)
+	st.failAt[ext] = time.Now()
+	return false
+}
+
+// createExt יוצר שלוחה שלא קיימת ומוודא שהיא באמת נוצרה — לא סומכים על "OK"
+// של ימות המשיח לבד (UploadTextFile מחזיר OK גם כשלא נוצר כלום).
+func createExt(cfg *config, st *state, ext, ini string) error {
+	if err := cfg.y.createExt(ext, ini); err != nil {
+		if strings.Contains(err.Error(), "ACL") && !st.warned["UpdateExtension"] {
+			st.warned["UpdateExtension"] = true
+			log.Println("חסרה הרשאה: מפתח ה-API לא מורשה ל-UpdateExtension, ולכן הגשר לא יכול ליצור שלוחות חדשות (כמו 2/2 או 8/1). " +
+				"צריך להוסיף /api/UpdateExtension לרשימת ההרשאות של המפתח באתר ימות המשיח. עד אז — שלוחות שלא קיימות לא מוכרזות בתפריט.")
+		}
+		return err
+	}
+	info, err := cfg.y.dir(ext)
+	if err != nil {
+		return err
+	}
+	if !info.Exists {
+		return fmt.Errorf("ימות המשיח אישרו את היצירה, אבל השלוחה לא קיימת")
+	}
+	log.Printf("שלוחה %s נוצרה.", ext)
+	return nil
+}
+
+// setupSpecial מגדיר שלוחה מיוחדת (תפריט / המשך האזנה / הקלטה / צינתוק...) —
+// פעם אחת בכל הפעלה. יוצר אותה אם היא לא קיימת. שלוחה קיימת עם קבצים שאינם
+// של הגשר ובלי קובץ הסימון — של המשתמש: לא נוגעים ולא מפרסמים.
+// מחזיר true רק כשהשלוחה קיימת בפועל ומוגדרת — רק אז מותר להכריז עליה בתפריט.
 func setupSpecial(cfg *config, st *state, ext, ini string) bool {
-	if st.special == nil {
-		st.special = map[string]bool{}
-	}
-	if st.specialFailAt == nil {
-		st.specialFailAt = map[string]time.Time{}
-	}
+	st.ensureMaps()
 	if done, ok := st.special[ext]; ok {
-		if done {
-			return true
-		}
-		if time.Since(st.specialFailAt[ext]) < setupRetry {
-			return false
-		}
+		return done
 	}
-	fail := func(format string, args ...any) bool {
-		log.Printf(format, args...)
-		st.special[ext] = false
-		st.specialFailAt[ext] = time.Now()
+	if coolingDown(st, ext) {
 		return false
 	}
-	names, err := cfg.y.listDir(ext)
-	if err != nil && !looksNotFound(err.Error()) {
-		return fail("הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
-	}
-	owned, foreign := false, ""
-	for _, n := range names {
-		switch {
-		case strings.EqualFold(n, bridgeMarker):
-			owned = true
-		case !isBridgeFile(n) && !strings.EqualFold(n, "M1000.tts"):
-			foreign = n
-		}
-	}
-	if foreign != "" && !owned {
-		return fail("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה ולא מפרסם אותה בתפריט.", ext, foreign)
-	}
 	want, _ := setIniValues(ini, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+	info, err := cfg.y.dir(ext)
+	if err != nil {
+		return failed(st, ext, "הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
+	}
+	if !info.Exists {
+		if err := createExt(cfg, st, ext, want); err != nil {
+			return failed(st, ext, "הערה: יצירת שלוחה %s נכשלה: %v", ext, err)
+		}
+	} else if foreign := foreignFile(info.Files); foreign != "" && !hasMarker(cfg, st, ext) {
+		log.Printf("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה ולא מפרסם אותה בתפריט.", ext, foreign)
+		st.special[ext] = false
+		return false
+	}
 	if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
-		return fail("הערה: הגדרת שלוחה %s נכשלה: %v", ext, err)
+		return failed(st, ext, "הערה: הגדרת שלוחה %s נכשלה: %v", ext, err)
 	}
 	_ = cfg.y.upload(ext, bridgeMarker, "שלוחה זו מנוהלת על ידי הגשר (yemot-news-bridge).")
-	log.Printf("שלוחה %s הוגדרה: %s", ext, strings.ReplaceAll(ini, "\n", " | "))
+	if iniValue(want, "type") != "playfile" {
+		removeStaleTTS(cfg, ext, info.Files)
+	}
+	log.Printf("שלוחה %s הוגדרה: %s", ext, strings.ReplaceAll(want, "\n", " | "))
 	st.special[ext] = true
 	return true
+}
+
+// foreignFile: קובץ ראשון שאינו של הגשר (ext.ini, NNN.tts, M1000.tts), או "".
+func foreignFile(files []string) string {
+	for _, n := range files {
+		if !isBridgeFile(n) && !isSystemFile(n) && !strings.EqualFold(n, "M1000.tts") {
+			return n
+		}
+	}
+	return ""
+}
+
+// hasMarker: האם יש בשלוחה את קובץ הסימון של הגשר.
+func hasMarker(cfg *config, st *state, ext string) bool {
+	_, exists, err := cfg.y.read(ext, bridgeMarker)
+	if err != nil && strings.Contains(err.Error(), "ACL") && !st.warned["GetTextFile"] {
+		st.warned["GetTextFile"] = true
+		log.Println("חסרה הרשאה: מפתח ה-API לא מורשה ל-GetTextFile, ולכן הגשר לא יכול לזהות שלוחות שלו שנוספו בהן קבצים (למשל הקלטות בשלוחה 6). צריך להוסיף /api/GetTextFile להרשאות המפתח.")
+	}
+	return err == nil && exists
+}
+
+func hasName(list []string, name string) bool {
+	for _, n := range list {
+		if strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeStaleTTS מוחק קבצי NNN.tts (הקראות חדשות מהמבנה הקודם) משלוחה שאינה
+// שלוחת השמעה — שם הם לא מושמעים, רק מבלבלים בניהול הקבצים באתר.
+func removeStaleTTS(cfg *config, ext string, files []string) {
+	var paths []string
+	for _, n := range files {
+		if isBridgeFile(n) && strings.HasSuffix(strings.ToLower(n), ".tts") {
+			paths = append(paths, ivrPath(ext, n))
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	if err := cfg.y.remove(paths); err != nil {
+		log.Printf("הערה: מחיקת הקראות ישנות משלוחה %s לא הצליחה (לא קריטי): %v", ext, err)
+		return
+	}
+	log.Printf("שלוחה %s: נמחקו %d הקראות ישנות מהמבנה הקודם.", ext, len(paths))
 }
 
 // retireExt: שלוחת כתב מהמבנה הקודם — אם היא של הגשר, מפנה אותה חזרה
 // לתפריט הראשי, כדי שלא יושמעו בה הודעות ישנות.
 func retireExt(cfg *config, st *state, ext string) {
-	if st.special == nil {
-		st.special = map[string]bool{}
-	}
+	st.ensureMaps()
 	key := "retired:" + ext
 	if _, ok := st.special[key]; ok {
 		return
 	}
 	st.special[key] = true
-	names, err := cfg.y.listDir(ext)
-	if err != nil || len(names) == 0 {
+	info, err := cfg.y.dir(ext)
+	if err != nil || !info.Exists || len(info.Files) == 0 {
 		return
 	}
-	for _, n := range names {
-		if !isBridgeFile(n) && !strings.EqualFold(n, bridgeMarker) {
+	for _, n := range info.Files {
+		if !isBridgeFile(n) && !isSystemFile(n) {
 			return // לא של הגשר — לא נוגעים
 		}
 	}
-	if err := cfg.y.upload(ext, "ext.ini", "type=go_to_folder\ngo_to_folder=/"); err == nil {
+	if info.Ini["type"] != "go_to_folder" || info.Ini["go_to_folder"] != "/" {
+		if err := cfg.y.upload(ext, "ext.ini", "type=go_to_folder\ngo_to_folder=/"); err != nil {
+			return
+		}
 		log.Printf("שלוחה %s (מהמבנה הקודם) מפנה עכשיו לתפריט הראשי.", ext)
 	}
+	removeStaleTTS(cfg, ext, info.Files)
+}
+
+// isSystemFile: קבצים שימות המשיח עצמם כותבים לשלוחה (יומנים, כמו
+// record_log.ymgr) — לא תוכן של המשתמש, ולא הופכים שלוחה ל"לא של הגשר".
+func isSystemFile(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".ymgr")
 }
 
 // isBridgeFile: קבצים שהגשר עצמו יוצר בשלוחה — ext.ini ו-NNN.tts.
@@ -769,11 +871,12 @@ func checkRootIsMenu(y *yemot) {
 
 // diagnoseRoot רושם בלוג מה יש בשלוחה הראשית — כדי לאבחן בעיות בתפריט.
 func diagnoseRoot(y *yemot) {
-	if names, err := y.listDir(""); err != nil {
+	if info, err := y.dir(""); err != nil {
 		log.Printf("אבחון: לא הצלחתי לקרוא את רשימת הקבצים בשלוחה הראשית: %v", err)
 	} else {
-		log.Printf("אבחון: קבצים בשלוחה הראשית: %s", strings.Join(names, ", "))
-		for _, n := range names {
+		log.Printf("אבחון: קבצים בשלוחה הראשית: %s", strings.Join(info.Files, ", "))
+		log.Printf("אבחון: שלוחות בשלוחה הראשית: %s", strings.Join(info.Dirs, ", "))
+		for _, n := range info.Files {
 			l := strings.ToLower(n)
 			if strings.HasPrefix(l, "m1000.") && l != "m1000.tts" {
 				log.Printf("אבחון: יש בשלוחה הראשית קובץ %s — הוא קודם להקראה של M1000.tts. צריך למחוק אותו כדי שהודעת הפתיחה החדשה תושמע.", n)
@@ -795,6 +898,15 @@ func diagnoseRoot(y *yemot) {
 			log.Println("אבחון: בשלוחה הראשית מוגדר menu_voice — המערכת מקריאה אותו במקום הקובץ M1000.tts.")
 		}
 	}
+}
+
+// updatesOf: "עדכוני אלישע ירד" — אבל ערוץ שנקרא כבר "עדכוני השומרון" לא
+// הופך ל"עדכוני עדכוני השומרון".
+func updatesOf(name string) string {
+	if strings.HasPrefix(name, "עדכוני ") || strings.HasPrefix(name, "עדכון ") {
+		return name
+	}
+	return "עדכוני " + name
 }
 
 // speakerName מחזיר שם קריא למי שפרסם את ההודעה.

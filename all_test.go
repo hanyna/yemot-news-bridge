@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,15 +80,48 @@ func TestIni(t *testing.T) {
 	}
 }
 
-// fakeYemotServer: שרת מדומה של ערוץ חי + ימות המשיח. dirs = קבצים קיימים לכל שלוחה.
+// fakeYemotServer: שרת מדומה של ערוץ חי + ימות המשיח, שמתנהג כמו המערכת
+// האמיתית (נבדק מולה ב-23/09/2026):
+//   - UploadTextFile לשלוחה שלא קיימת מחזיר OK ולא עושה כלום.
+//   - רק UpdateExtension יוצר שלוחה (ודורש הרשאה במפתח).
+//   - GetIVR2Dir: "extension does not exist" לשלוחה שלא קיימת; קבצי .txt (כמו
+//     bridge.txt) לא מופיעים ברשימה; ext.ini ברשימת ini; שלוחות-בת ב-dirs.
+//
+// dirs = השלוחות שקיימות ושמות הקבצים בכל אחת.
 type fakeYemotServer struct {
-	mu       sync.Mutex
-	files    map[string]string   // נתיב מלא → תוכן שהועלה
-	dirs     map[string][]string // "ivr2:/3" → שמות קבצים קיימים
-	uploads  []string
-	items    []FeedItem
-	channels string
-	getText  bool // האם GetTextFile מורשה
+	mu          sync.Mutex
+	files       map[string]string   // נתיב מלא → תוכן שהועלה
+	dirs        map[string][]string // "ivr2:/3" → שמות קבצים קיימים
+	uploads     []string
+	items       []FeedItem
+	channels    string
+	getText     bool // האם GetTextFile מורשה
+	noUpdateExt bool // UpdateExtension נדחה (אין הרשאה)
+}
+
+func splitWhat(what string) (dir, name string) {
+	i := strings.LastIndex(what, "/")
+	dir, name = what[:i], what[i+1:]
+	if dir == "ivr2:" {
+		dir = "ivr2:/"
+	}
+	return dir, name
+}
+
+func (f *fakeYemotServer) addName(dir, name string) {
+	for _, n := range f.dirs[dir] {
+		if n == name {
+			return
+		}
+	}
+	f.dirs[dir] = append(f.dirs[dir], name)
+}
+
+func iniPathOf(dir string) string {
+	if dir == "ivr2:/" {
+		return "ivr2:/ext.ini"
+	}
+	return dir + "/ext.ini"
 }
 
 func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -108,22 +142,33 @@ func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(f.channels))
 	case strings.HasSuffix(r.URL.Path, "UploadTextFile"):
 		what := r.PostForm.Get("what")
-		f.files[what] = r.PostForm.Get("contents")
 		f.uploads = append(f.uploads, what)
-		dir := what[:strings.LastIndex(what, "/")]
-		if dir == "ivr2:" {
-			dir = "ivr2:/"
+		dir, name := splitWhat(what)
+		if _, exists := f.dirs[dir]; !exists {
+			ok(nil) // כמו במערכת האמיתית: "OK" — אבל לא נוצר כלום
+			return
 		}
-		name := what[strings.LastIndex(what, "/")+1:]
-		found := false
-		for _, n := range f.dirs[dir] {
-			if n == name {
-				found = true
+		f.files[what] = r.PostForm.Get("contents")
+		f.addName(dir, name)
+		ok(nil)
+	case strings.HasSuffix(r.URL.Path, "UpdateExtension"):
+		if f.noUpdateExt {
+			w.Write([]byte(`{"responseStatus":"FORBIDDEN","message":"API_KEY_ACL_REJECT"}`))
+			return
+		}
+		p := r.PostForm.Get("path")
+		f.uploads = append(f.uploads, "UpdateExtension:"+p)
+		if _, exists := f.dirs[p]; !exists {
+			f.dirs[p] = nil
+		}
+		ini := f.files[iniPathOf(p)]
+		for k, v := range r.PostForm {
+			if k != "path" && k != "token" {
+				ini, _ = setIniValues(ini, [][2]string{{k, v[0]}})
 			}
 		}
-		if !found {
-			f.dirs[dir] = append(f.dirs[dir], name)
-		}
+		f.files[iniPathOf(p)] = strings.Trim(ini, "\n")
+		f.addName(p, "ext.ini")
 		ok(nil)
 	case strings.HasSuffix(r.URL.Path, "GetTextFile"):
 		if !f.getText {
@@ -132,24 +177,77 @@ func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		c, found := f.files[r.PostForm.Get("what")]
 		if !found {
-			w.Write([]byte(`{"responseStatus":"ERROR","message":"file not found"}`))
+			w.Write([]byte(`{"responseStatus":"ERROR","message":"file does not exist"}`))
 			return
 		}
 		ok(map[string]any{"contents": c})
 	case strings.HasSuffix(r.URL.Path, "GetIVR2Dir"):
-		names, found := f.dirs[r.PostForm.Get("path")]
+		p := r.PostForm.Get("path")
+		names, found := f.dirs[p]
 		if !found {
-			w.Write([]byte(`{"responseStatus":"ERROR","message":"path not found"}`))
+			w.Write([]byte(`{"responseStatus":"ERROR","message":"extension does not exist"}`))
 			return
 		}
-		var fs []map[string]string
+		files, inis, dirs := []map[string]string{}, []map[string]string{}, []map[string]string{}
 		for _, n := range names {
-			fs = append(fs, map[string]string{"name": n})
+			switch {
+			case strings.HasSuffix(n, ".ini"):
+				inis = append(inis, map[string]string{"name": n})
+			case strings.HasSuffix(n, ".txt"): // ימות לא מחזירים קבצי טקסט ברשימה
+			default:
+				files = append(files, map[string]string{"name": n})
+			}
 		}
-		ok(map[string]any{"files": fs})
+		prefix := p + "/"
+		if p == "ivr2:/" {
+			prefix = "ivr2:/"
+		}
+		for d := range f.dirs {
+			if rest, cut := strings.CutPrefix(d, prefix); cut && rest != "" && !strings.Contains(rest, "/") {
+				dirs = append(dirs, map[string]string{"name": rest})
+			}
+		}
+		extIni := map[string]string{}
+		for _, l := range strings.Split(f.files[iniPathOf(p)], "\n") {
+			if k, v, cut := strings.Cut(l, "="); cut {
+				extIni[k] = v
+			}
+		}
+		ok(map[string]any{"files": files, "ini": inis, "dirs": dirs, "extIni": extIni})
+	case strings.HasSuffix(r.URL.Path, "FileAction"):
+		if r.PostForm.Get("action") == "delete" {
+			for i := 0; ; i++ {
+				what := r.PostForm.Get(fmt.Sprintf("what%d", i))
+				if what == "" {
+					break
+				}
+				delete(f.files, what)
+				dir, name := splitWhat(what)
+				var keep []string
+				for _, n := range f.dirs[dir] {
+					if n != name {
+						keep = append(keep, n)
+					}
+				}
+				if _, exists := f.dirs[dir]; exists {
+					f.dirs[dir] = keep
+				}
+			}
+		}
+		ok(nil)
 	default:
 		ok(nil)
 	}
+}
+
+// has: האם הקובץ קיים בשלוחה במערכת המדומה.
+func (f *fakeYemotServer) has(dir, name string) bool {
+	for _, n := range f.dirs[dir] {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 func newTestCfg(srv *httptest.Server) config {
@@ -162,7 +260,8 @@ func newTestCfg(srv *httptest.Server) config {
 func TestNewMenuStructure(t *testing.T) {
 	now := time.Now().Unix()
 	f := &fakeYemotServer{
-		files: map[string]string{},
+		getText: true,
+		files:   map[string]string{},
 		dirs: map[string][]string{
 			"ivr2:/":  {"M1000.tts", "ext.ini"},
 			"ivr2:/1": {"ext.ini", "001.tts"},
@@ -204,6 +303,9 @@ func TestNewMenuStructure(t *testing.T) {
 	}
 	if !strings.HasPrefix(fl["ivr2:/2/2/001.tts"], "עדכוני הקול היהודי. ") {
 		t.Fatalf("2/2: %q", fl["ivr2:/2/2/001.tts"])
+	}
+	if f.has("ivr2:/2", "001.tts") || f.has("ivr2:/2", "002.tts") {
+		t.Fatalf("stale TTS left in ext 2 (now a menu): %v", f.dirs["ivr2:/2"])
 	}
 	// 5 המשך, 6 הקלטה.
 	if fl["ivr2:/5/ext.ini"] != "type=last_play" {
@@ -272,7 +374,7 @@ func TestListExt(t *testing.T) {
 }
 
 func TestCallbackExt(t *testing.T) {
-	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}},
+	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/8": {}},
 		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
@@ -285,7 +387,7 @@ func TestCallbackExt(t *testing.T) {
 	if f.files["ivr2:/8/ext.ini"] != "type=menu\ndigits=1" {
 		t.Fatalf("ext8 ini: %q", f.files["ivr2:/8/ext.ini"])
 	}
-	if f.files["ivr2:/8/3/ext.ini"] != "type=system_sharing\nsystem_sharing_to_myself=yes" {
+	if f.files["ivr2:/8/3/ext.ini"] != "type=system_sharing\nsystem_sharing_custom_did=real_did\nsystem_sharing_to_myself=yes" {
 		t.Fatalf("ext8/3: %q", f.files["ivr2:/8/3/ext.ini"])
 	}
 	if f.files["ivr2:/8/M1000.tts"] != "צינתוקים ותזכורות. לשיחה חוזרת מהמערכת, כדי לחסוך בדקות השיחה שלכם, הקישו 3." {
@@ -404,5 +506,111 @@ func TestAdminRegisterExt(t *testing.T) {
 	}
 	if f.files["ivr2:/7/ext.ini"] != "type=go_to_folder\ngo_to_folder=/" {
 		t.Fatalf("ext7 after: %q", f.files["ivr2:/7/ext.ini"])
+	}
+}
+
+// realAccount: מבנה כמו בקו האמיתי — שלוחות 1-9 קיימות, בלי שלוחות-בת.
+func realAccount() map[string][]string {
+	d := map[string][]string{"ivr2:/": {"M1000.tts", "ext.ini"}}
+	for i := 1; i <= 9; i++ {
+		d[fmt.Sprintf("ivr2:/%d", i)] = []string{"ext.ini", "001.tts", "002.tts"}
+	}
+	return d
+}
+
+// TestCreatesMissingSubExtensions: הבאג מהקו האמיתי — שלוחות-בת (2/2.., 8/1..)
+// לא נוצרו כי UploadTextFile מחזיר OK בלי ליצור, והתפריט הכריז עליהן בכל זאת.
+func TestCreatesMissingSubExtensions(t *testing.T) {
+	now := time.Now().Unix()
+	f := &fakeYemotServer{getText: true, files: map[string]string{}, dirs: realAccount(),
+		items: []FeedItem{
+			{Channel: "a", TS: now - 60, Text: "ראשונה"},
+			{Channel: "b", TS: now - 50, Text: "שנייה"},
+			{Channel: "c", TS: now - 40, Text: "שלישית"},
+		},
+		channels: `{"channels":[{"name":"a","title":"אלישע ירד"},{"name":"b","title":"הקול היהודי"},{"name":"c","title":"עדכוני השומרון"}]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.publicList, cfg.lineNumber, cfg.callback = "800", "0772263731", true
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ext := range []string{"2/1", "2/2", "2/3", "8/1", "8/2", "8/3"} {
+		if _, exists := f.dirs["ivr2:/"+ext]; !exists {
+			t.Errorf("extension %s was not created", ext)
+		}
+	}
+	if f.files["ivr2:/2/3/ext.ini"] != "type=playfile" || !strings.HasPrefix(f.files["ivr2:/2/3/001.tts"], "עדכוני השומרון. ") {
+		t.Errorf("2/3: %q %q", f.files["ivr2:/2/3/ext.ini"], f.files["ivr2:/2/3/001.tts"])
+	}
+	if got := f.files["ivr2:/2/M1000.tts"]; got != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2. לעדכוני השומרון הקישו 3." {
+		t.Errorf("chooser: %q", got)
+	}
+	if f.files["ivr2:/8/1/ext.ini"] != "type=tzintuk\nlist_tzintuk=800" {
+		t.Errorf("8/1: %q", f.files["ivr2:/8/1/ext.ini"])
+	}
+	if f.has("ivr2:/8", "001.tts") || f.has("ivr2:/5", "001.tts") || f.has("ivr2:/6", "002.tts") {
+		t.Error("stale TTS from the old structure left behind")
+	}
+	for _, want := range []string{"הקישו 2", "הקישו 6", "הקישו 8"} {
+		if !strings.Contains(f.files["ivr2:/M1000.tts"], want) {
+			t.Errorf("welcome is missing %q: %s", want, f.files["ivr2:/M1000.tts"])
+		}
+	}
+}
+
+// TestNoCreatePermission: בלי הרשאה ל-UpdateExtension — לא מכריזים על אפשרויות
+// שלא קיימות (אחרת המתקשר מקיש ושומע שוב את התפריט). כשההרשאה ניתנת — מתקן לבד.
+func TestNoCreatePermission(t *testing.T) {
+	defer func(d time.Duration) { setupRetry = d }(setupRetry)
+	f := &fakeYemotServer{getText: true, noUpdateExt: true, files: map[string]string{}, dirs: realAccount(),
+		items:    []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}},
+		channels: `{"channels":[{"name":"a","title":"אלישע ירד"}]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.publicList, cfg.callback = "800", true
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	welcome := f.files["ivr2:/M1000.tts"]
+	if strings.Contains(welcome, "הקישו 2") || strings.Contains(welcome, "הקישו 8") {
+		t.Fatalf("announced options that lead nowhere: %s", welcome)
+	}
+	if f.files["ivr2:/8/M1000.tts"] != "שלוחה זו אינה פעילה כרגע." {
+		t.Fatalf("ext 8 menu with dead options: %q", f.files["ivr2:/8/M1000.tts"])
+	}
+	// בעל הקו הוסיף את ההרשאה — הניסיון החוזר יוצר ומכריז.
+	f.noUpdateExt, setupRetry = false, 0
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	welcome = f.files["ivr2:/M1000.tts"]
+	if !strings.Contains(welcome, "הקישו 2") || !strings.Contains(welcome, "הקישו 8") {
+		t.Fatalf("not announced after permission was granted: %s", welcome)
+	}
+	if _, exists := f.dirs["ivr2:/2/1"]; !exists {
+		t.Fatal("2/1 not created after permission was granted")
+	}
+}
+
+// TestSubExtWithoutIni: שלוחת כתב שקיימת בלי ext.ini משלה יורשת type=menu
+// משלוחה 2 (ואז הקשה עליה משמיעה שוב את התפריט) — צריך לכתוב לה type=playfile.
+func TestSubExtWithoutIni(t *testing.T) {
+	d := realAccount()
+	d["ivr2:/2/1"] = []string{"001.tts", "playfile_log.ymgr"} // יומן של ימות — לא "קובץ של המשתמש"
+	f := &fakeYemotServer{getText: true, files: map[string]string{}, dirs: d,
+		items:    []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}},
+		channels: `{"channels":[{"name":"a","title":"אלישע ירד"}]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/2/1/ext.ini"] != "type=playfile" {
+		t.Fatalf("2/1 ext.ini: %q", f.files["ivr2:/2/1/ext.ini"])
 	}
 }

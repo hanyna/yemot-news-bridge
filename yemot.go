@@ -27,29 +27,35 @@ type yemotResp struct {
 
 // call שולח בקשת POST (טופס מקודד) עם המפתח בכותרת Authorization.
 func (y *yemot) call(method string, form url.Values) (*yemotResp, error) {
+	_, r, err := y.post(method, form)
+	return r, err
+}
+
+// post כמו call, ומחזיר גם את גוף התגובה המלא (ל-GetIVR2Dir).
+func (y *yemot) post(method string, form url.Values) ([]byte, *yemotResp, error) {
 	req, err := http.NewRequest(http.MethodPost, yemotBase+method, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
 	req.Header.Set("Authorization", y.apiKey)
 	resp, err := y.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var r yemotResp
 	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("תגובה לא צפויה מימות המשיח (%s): %.200s", method, strings.TrimSpace(string(body)))
+		return body, nil, fmt.Errorf("תגובה לא צפויה מימות המשיח (%s): %.200s", method, strings.TrimSpace(string(body)))
 	}
 	if r.ResponseStatus != "OK" {
-		return &r, fmt.Errorf("שגיאה מימות המשיח ב-%s (%s): %s", method, r.ResponseStatus, r.Message)
+		return body, &r, fmt.Errorf("שגיאה מימות המשיח ב-%s (%s): %s", method, r.ResponseStatus, r.Message)
 	}
-	return &r, nil
+	return body, &r, nil
 }
 
 // path בונה נתיב במערכת: ext ריק = השלוחה הראשית.
@@ -154,48 +160,77 @@ func iniValue(ini, key string) string {
 	return ""
 }
 
-// listDir מחזיר את שמות הקבצים בשלוחה (GetIVR2Dir) — לאבחון בלוג.
-func (y *yemot) listDir(ext string) ([]string, error) {
+// dirInfo — מה יש בשלוחה, לפי GetIVR2Dir.
+//
+// חשוב (נבדק מול המערכת האמיתית): ימות המשיח לא מחזירים ברשימה קבצי טקסט
+// אחרים (למשל bridge.txt) — רק קבצי שמע/TTS/מערכת (files) והגדרות (ini).
+type dirInfo struct {
+	Exists bool
+	Files  []string          // files + ini
+	Dirs   []string          // שלוחות-בת
+	Ini    map[string]string // ההגדרות בפועל (extIni — כולל מה שעובר בירושה מהשלוחות שמעל)
+}
+
+// dir מחזיר את תוכן השלוחה. שלוחה שלא קיימת — Exists=false בלי שגיאה.
+func (y *yemot) dir(ext string) (dirInfo, error) {
 	form := url.Values{}
-	p := "ivr2:/"
-	if ext != "" {
-		p = "ivr2:/" + ext
-	}
-	form.Set("path", p)
-	req, err := http.NewRequest(http.MethodPost, yemotBase+"GetIVR2Dir", strings.NewReader(form.Encode()))
+	form.Set("path", "ivr2:/"+ext)
+	body, r, err := y.post("GetIVR2Dir", form)
 	if err != nil {
-		return nil, err
+		if r != nil && looksNotFound(r.Message) { // "extension does not exist"
+			return dirInfo{}, nil
+		}
+		return dirInfo{}, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-	req.Header.Set("Authorization", y.apiKey)
-	resp, err := y.client.Do(req)
-	if err != nil {
-		return nil, err
+	var d struct {
+		ExtIni json.RawMessage `json:"extIni"`
+		Dirs   json.RawMessage `json:"dirs"`
+		Files  json.RawMessage `json:"files"`
+		Ini    json.RawMessage `json:"ini"`
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var r struct {
-		ResponseStatus string `json:"responseStatus"`
-		Message        string `json:"message"`
-		Files          []struct {
-			Name string `json:"name"`
-		} `json:"files"`
-		Ini []struct {
-			Name string `json:"name"`
-		} `json:"ini"`
+	if err := json.Unmarshal(body, &d); err != nil {
+		return dirInfo{}, fmt.Errorf("תגובה לא צפויה מ-GetIVR2Dir: %.200s", strings.TrimSpace(string(body)))
 	}
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("תגובה לא צפויה: %.200s", strings.TrimSpace(string(body)))
+	info := dirInfo{Exists: true, Ini: map[string]string{}}
+	var ini map[string]any // שלוחה בלי הגדרות יכולה לחזור כ-[] ולא כ-{} — אז פשוט מדלגים
+	if json.Unmarshal(d.ExtIni, &ini) == nil {
+		for k, v := range ini {
+			info.Ini[k] = fmt.Sprint(v)
+		}
 	}
-	if r.ResponseStatus != "OK" {
-		return nil, fmt.Errorf("%s: %s", r.ResponseStatus, r.Message)
+	info.Dirs = names(d.Dirs)
+	info.Files = append(names(d.Files), names(d.Ini)...)
+	return info, nil
+}
+
+// names: שמות מתוך מערך של אובייקטים {"name": ...}. מבנה אחר — רשימה ריקה.
+func names(raw json.RawMessage) []string {
+	var list []struct {
+		Name string `json:"name"`
 	}
-	var names []string
-	for _, f := range r.Files {
-		names = append(names, f.Name)
+	_ = json.Unmarshal(raw, &list)
+	var out []string
+	for _, x := range list {
+		if x.Name != "" {
+			out = append(out, x.Name)
+		}
 	}
-	for _, f := range r.Ini {
-		names = append(names, f.Name)
+	return out
+}
+
+// createExt יוצר שלוחה חדשה עם ההגדרות שב-ini (UpdateExtension).
+//
+// זו הפעולה היחידה ב-API שיוצרת שלוחה: UploadTextFile לשלוחה שלא קיימת מחזיר
+// "OK" ולא עושה כלום (נבדק מול המערכת האמיתית — כך נוצרו תפריטים עם אפשרויות
+// שלא מובילות לשום מקום). דורש הרשאה ל-UpdateExtension במפתח ה-API.
+func (y *yemot) createExt(ext, ini string) error {
+	form := url.Values{}
+	for _, l := range strings.Split(ini, "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(l), "="); ok && k != "" {
+			form.Set(k, v)
+		}
 	}
-	return names, nil
+	form.Set("path", "ivr2:/"+ext)
+	_, err := y.call("UpdateExtension", form)
+	return err
 }
