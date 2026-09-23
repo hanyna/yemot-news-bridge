@@ -50,12 +50,13 @@ const (
 	welcomeGreeting = "ברוכים הבאים לקו עדכוני ארץ ישראל."
 	welcomeHead     = "לכל העדכונים, הקישו 1."
 
-	chooseExt  = "2"  // תפריט בחירת כתב
-	resumeExt  = "5"  // המשך מהמקום שהפסקתם
-	recordExt  = "6"  // הודעה למנהל המערכת
-	listExt    = "8"  // רשימת תפוצה (רק כש-YEMOT_LIST_ID מוגדר)
-	maxPerFile = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
-	failLimit  = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
+	chooseExt   = "2"  // תפריט בחירת כתב
+	resumeExt   = "5"  // המשך מהמקום שהפסקתם
+	recordExt   = "6"  // הודעה למנהל המערכת
+	listExt     = "8"  // רשימת תפוצה (רק כש-YEMOT_LIST_ID מוגדר)
+	registerExt = "7"  // הרשמה זמנית של בעל הקו לצינתוקי המנהל (ADMIN_TZINTUK_REGISTER=on)
+	maxPerFile  = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
+	failLimit   = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
 )
 
 type config struct {
@@ -67,6 +68,8 @@ type config struct {
 	welcome          string // "" = אוטומטי, "off" = כבוי
 	voice, rate      string
 	listID           string // מספר רשימת התפוצה בימות המשיח (שלוחה 8)
+	adminList        string // רשימת הצינתוקים של המנהל (הודעה חדשה בשלוחה 6)
+	adminRegister    bool   // שלוחה 7 = הרשמה לרשימת המנהל (זמני)
 	loc              *time.Location
 	y                *yemot
 	client           *http.Client // ל-API של ערוץ חי
@@ -101,14 +104,16 @@ func main() {
 		// ימות המשיח משמיע את הקבצים בשלוחה מהמספר הגבוה לנמוך. לכן ברירת
 		// המחדל: 001 = הישנה, המספר הגבוה = החדשה — והמאזין שומע את החדשה ראשונה.
 		// YEMOT_ORDER=newest הופך (001 = החדשה).
-		newestFirst: envOr("YEMOT_ORDER", "oldest") == "newest",
-		channelExts: envOr("CHANNEL_EXTS", "on") != "off",
-		welcome:     strings.TrimSpace(os.Getenv("YEMOT_WELCOME")),
-		voice:       strings.TrimSpace(os.Getenv("YEMOT_VOICE")),
-		rate:        strings.TrimSpace(os.Getenv("YEMOT_RATE")),
-		listID:      strings.TrimSpace(os.Getenv("YEMOT_LIST_ID")),
-		client:      &http.Client{Timeout: 30 * time.Second},
-		feedClient:  &http.Client{Timeout: 90 * time.Second},
+		newestFirst:   envOr("YEMOT_ORDER", "oldest") == "newest",
+		channelExts:   envOr("CHANNEL_EXTS", "on") != "off",
+		welcome:       strings.TrimSpace(os.Getenv("YEMOT_WELCOME")),
+		voice:         strings.TrimSpace(os.Getenv("YEMOT_VOICE")),
+		rate:          strings.TrimSpace(os.Getenv("YEMOT_RATE")),
+		listID:        strings.TrimSpace(os.Getenv("YEMOT_LIST_ID")),
+		adminList:     envOr("ADMIN_TZINTUK_LIST", "606"),
+		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
+		client:        &http.Client{Timeout: 30 * time.Second},
+		feedClient:    &http.Client{Timeout: 90 * time.Second},
 	}
 	apiKey := cleanKey(os.Getenv("YEMOT_API_KEY"))
 	if cfg.feedKey == "" {
@@ -275,7 +280,12 @@ func syncOnce(cfg *config, st *state) error {
 	if setupSpecial(cfg, st, resumeExt, "type=last_play") {
 		menu = append(menu, "להמשך ההאזנה מהמקום שהפסקתם, הקישו "+resumeExt+".")
 	}
-	if setupSpecial(cfg, st, recordExt, "type=record\nsay_record_number=no\nhangup_insert_file=yes") {
+	// הקלטה למנהל: אחרי כל הודעה שנשמרת (גם בניתוק) — צינתוק לרשימת המנהל.
+	recordIni := "type=record\nsay_record_number=no\nhangup_insert_file=yes"
+	if cfg.adminList != "" {
+		recordIni += "\nrecord_end_run_tzintuk=yes\nhangup_send_tzintuk=yes\nlist_tzintuk=" + cfg.adminList
+	}
+	if setupSpecial(cfg, st, recordExt, recordIni) {
 		menu = append(menu, "להשארת הודעה למנהל המערכת, הקישו "+recordExt+".")
 	}
 	if cfg.listID != "" {
@@ -291,9 +301,16 @@ func syncOnce(cfg *config, st *state) error {
 			menu = append(menu, "להצטרפות או הסרה מרשימת התפוצה, הקישו "+listExt+".")
 		}
 	}
-	// שלוחות כתבים ישנות מהמבנה הקודם (3, 4, 7, ו-8 כשאין רשימה) — מחזירות לתפריט.
+	// הרשמה חד-פעמית של בעל הקו לרשימת צינתוקי המנהל — שלוחה 7 זמנית, לא מופיעה בתפריט.
+	if cfg.adminRegister && cfg.adminList != "" {
+		setupSpecial(cfg, st, registerExt, "type=tzintuk\nlist_tzintuk="+cfg.adminList)
+	}
+	// שלוחות ריקות מהמבנה הקודם (3, 4, 7, ו-8 כשאין רשימה) — מחזירות לתפריט.
 	for _, old := range []string{"3", "4", "7", "8"} {
 		if old == listExt && cfg.listID != "" {
+			continue
+		}
+		if old == registerExt && cfg.adminRegister {
 			continue
 		}
 		retireExt(cfg, st, old)

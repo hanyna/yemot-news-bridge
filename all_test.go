@@ -181,6 +181,7 @@ func TestNewMenuStructure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
 	cfg := newTestCfg(srv)
+	cfg.adminList = "606"
 	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
@@ -207,7 +208,7 @@ func TestNewMenuStructure(t *testing.T) {
 	if fl["ivr2:/5/ext.ini"] != "type=last_play" {
 		t.Fatalf("ext5: %q", fl["ivr2:/5/ext.ini"])
 	}
-	if fl["ivr2:/6/ext.ini"] != "type=record\nsay_record_number=no\nhangup_insert_file=yes" {
+	if fl["ivr2:/6/ext.ini"] != "type=record\nsay_record_number=no\nhangup_insert_file=yes\nrecord_end_run_tzintuk=yes\nhangup_send_tzintuk=yes\nlist_tzintuk=606" {
 		t.Fatalf("ext6: %q", fl["ivr2:/6/ext.ini"])
 	}
 	// 3 ישנה → מפנה לתפריט; 4 של המשתמש → לא נגעו.
@@ -346,5 +347,32 @@ func TestKeyNotInErrors(t *testing.T) {
 	_, err := getJSON(&http.Client{Timeout: time.Second}, "http://127.0.0.1:1/api/messages", "SECRET-KEY-123")
 	if err == nil || strings.Contains(err.Error(), "SECRET-KEY-123") {
 		t.Fatalf("key leaked in error: %v", err)
+	}
+}
+
+func TestAdminRegisterExt(t *testing.T) {
+	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/7": {"ext.ini", "001.tts"}},
+		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.adminList, cfg.adminRegister = "606", true
+	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/7/ext.ini"] != "type=tzintuk\nlist_tzintuk=606" {
+		t.Fatalf("ext7: %q", f.files["ivr2:/7/ext.ini"])
+	}
+	if strings.Contains(f.files["ivr2:/M1000.tts"], "הקישו 7") {
+		t.Fatal("ext 7 must stay hidden from the menu")
+	}
+	cfg.adminRegister = false
+	st2 := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+	if err := syncOnce(&cfg, st2); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/7/ext.ini"] != "type=go_to_folder\ngo_to_folder=/" {
+		t.Fatalf("ext7 after: %q", f.files["ivr2:/7/ext.ini"])
 	}
 }
