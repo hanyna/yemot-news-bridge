@@ -143,6 +143,8 @@ func main() {
 			lastSHACheck = time.Now()
 			if latest, err := latestSHA(cfg.client); err == nil && latest != "" && latest != mySHA {
 				log.Printf("יש גרסה חדשה של הגשר (%.7s, אני %.7s) — מסיים כדי שהיא תרוץ במקומי.", latest, mySHA)
+				// סימון לשלב השרשרת ב-Workflow: לא להפעיל עוד הפעלה (החדשה כבר בתור).
+				_ = os.WriteFile(".no-chain", []byte(latest), 0o644)
 				return
 			}
 		}

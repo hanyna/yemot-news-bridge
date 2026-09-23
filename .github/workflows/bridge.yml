@@ -1,8 +1,9 @@
 name: Telegram to Yemot bridge
 
-# כל הפעלה נשארת פתוחה עד שעתיים ובודקת הודעות חדשות כל 20 שניות.
-# כל 30 דקות מופעלת הפעלה חדשה שמחליפה את הקודמת (cancel-in-progress),
-# כך שיש תמיד הפעלה אחת פעילה — גם אם GitHub מאחר ריצה מתוזמנת.
+# כל הפעלה נשארת פתוחה עד 5.5 שעות ובודקת הודעות חדשות כל 20 שניות.
+# בסוף, ההפעלה מפעילה בעצמה את הבאה (שרשרת) — לא תלויים בשעון של GitHub,
+# שלפעמים מדלג על ריצות מתוזמנות (זה מה שעצר את הקו בלילה).
+# הריצה המתוזמנת כל 30 דקות היא רק גיבוי: היא נכנסת לתור ולא מפסיקה ריצה פעילה.
 on:
   schedule:
     - cron: "*/30 * * * *"
@@ -13,15 +14,16 @@ on:
 # הרשאות מינימליות: הגשר רק קורא את הקוד (לא כותב למאגר).
 permissions:
   contents: read
+  actions: write   # כדי שההפעלה תוכל להפעיל את הבאה בשרשרת
 
 concurrency:
   group: yemot-bridge
-  cancel-in-progress: true
+  cancel-in-progress: false   # ריצה חדשה מחכה בתור; קוד חדש — הישנה נעצרת לבד תוך 2 דקות
 
 jobs:
   run-bridge:
     runs-on: ubuntu-latest
-    timeout-minutes: 130
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5
 
@@ -38,7 +40,7 @@ jobs:
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}   # לבדיקה אם יש גרסה חדשה יותר (אז ההפעלה הישנה נעצרת)
-          RUN_MINUTES: "120"       # כמה זמן ההפעלה נשארת פתוחה
+          RUN_MINUTES: "330"       # כמה זמן ההפעלה נשארת פתוחה (GitHub מגביל ל-6 שעות)
           INTERVAL_SECONDS: "20"   # כל כמה שניות לבדוק הודעות חדשות (השרת של ערוץ חי עצמו סורק את טלגרם בערך פעם בדקה)
           YEMOT_MAX_MSGS: "10"     # כמה הודעות בשלוחה 1 (כל הערוצים)
           YEMOT_PER_CHANNEL: "5"   # כמה הודעות בשלוחה של כל ערוץ (2 ומעלה)
@@ -47,3 +49,21 @@ jobs:
           YEMOT_VOICE: "Jacob"     # קול: Jacob (גבר) / Elik_2100 (גבר, ברירת מחדל) / Sivan / Osnat (נשים). ריק = לא לשנות
           YEMOT_RATE: "2"          # מהירות: מ -10 (איטי) עד 10 (מהיר), ריק = לא לשנות
         run: ./bridge
+
+      # שרשרת: מפעילים את ההפעלה הבאה — גם אם זו נכשלה (ניסיון חוזר).
+      # לא מפעילים אם ההפעלה נעצרה כי יש גרסה חדשה (היא כבר רצה) או בוטלה ידנית.
+      - name: Start next run
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f .no-chain ]; then
+            echo "יש גרסה חדשה שכבר רצה — לא מפעיל שרשרת."
+            exit 0
+          fi
+          if [ "${{ job.status }}" = "failure" ]; then
+            echo "ההפעלה נכשלה — מחכה 2 דקות לפני ניסיון חוזר."
+            sleep 120
+          fi
+          gh workflow run bridge.yml --ref main --repo "$GITHUB_REPOSITORY"
+          echo "ההפעלה הבאה הופעלה."
