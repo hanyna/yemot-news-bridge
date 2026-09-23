@@ -271,6 +271,31 @@ func TestListExt(t *testing.T) {
 	}
 }
 
+func TestCallbackExt(t *testing.T) {
+	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}},
+		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.publicList, cfg.callback = "", true // בלי רשימת צינתוקים — רק שיחה חוזרת
+	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/8/ext.ini"] != "type=menu" {
+		t.Fatalf("ext8 ini: %q", f.files["ivr2:/8/ext.ini"])
+	}
+	if f.files["ivr2:/8/3/ext.ini"] != "type=system_sharing\nsystem_sharing_to_myself=yes" {
+		t.Fatalf("ext8/3: %q", f.files["ivr2:/8/3/ext.ini"])
+	}
+	if f.files["ivr2:/8/M1000.tts"] != "צינתוקים ותזכורות. לשיחה חוזרת מהמערכת, כדי לחסוך בדקות השיחה שלכם, הקישו 3." {
+		t.Fatalf("ext8 menu: %q", f.files["ivr2:/8/M1000.tts"])
+	}
+	if !strings.HasSuffix(f.files["ivr2:/M1000.tts"], "לצינתוקים ותזכורות, הקישו 8.") {
+		t.Fatalf("welcome: %q", f.files["ivr2:/M1000.tts"])
+	}
+}
+
 func TestMediaFlashCut(t *testing.T) {
 	flashEnabled = true
 	defer func() { flashEnabled = false }()

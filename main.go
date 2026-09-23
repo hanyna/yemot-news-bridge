@@ -69,6 +69,7 @@ type config struct {
 	voice, rate      string
 	publicList       string // רשימת הצינתוקים הכללית (שלוחה 8/1)
 	lineNumber       string // מספר הקו — יעד החיוג בטלזכור (שלוחה 8/2)
+	callback         bool   // שלוחה 8/3: שיחה חוזרת מהמערכת (חוסכת דקות למתקשר)
 	adminList        string // רשימת הצינתוקים של המנהל (הודעה חדשה בשלוחה 6)
 	adminRegister    bool   // שלוחה 7 = הרשמה לרשימת המנהל (זמני)
 	loc              *time.Location
@@ -112,6 +113,7 @@ func main() {
 		rate:          strings.TrimSpace(os.Getenv("YEMOT_RATE")),
 		publicList:    envOr("PUBLIC_TZINTUK_LIST", "800"),
 		lineNumber:    strings.TrimSpace(os.Getenv("YEMOT_LINE_NUMBER")),
+		callback:      envOr("CALLBACK_ENABLED", "on") == "on",
 		adminList:     envOr("ADMIN_TZINTUK_LIST", "606"),
 		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
 		client:        &http.Client{Timeout: 30 * time.Second},
@@ -290,25 +292,32 @@ func syncOnce(cfg *config, st *state) error {
 	if setupSpecial(cfg, st, recordExt, recordIni) {
 		menu = append(menu, "להשארת הודעה למנהל המערכת, הקישו "+recordExt+".")
 	}
-	// שלוחה 8: צינתוקים וטלזכור.
+	// שלוחה 8: צינתוקים, טלזכור, ושיחה חוזרת.
 	//   8/1 — הרשמה/הסרה מרשימת הצינתוקים הכללית (type=tzintuk)
 	//   8/2 — טלזכור: תזכורת קבועה לחייג לקו בימים ובשעות שהמאזין בוחר
-	if cfg.publicList != "" {
+	//   8/3 — שיחה חוזרת מהמערכת, כדי לחסוך למתקשר בדקות שיחה (type=system_sharing)
+	if cfg.publicList != "" || cfg.callback {
 		ok := setupSpecial(cfg, st, listExt, "type=menu")
-		ok1 := ok && setupSpecial(cfg, st, listExt+"/1", "type=tzintuk\nlist_tzintuk="+cfg.publicList)
-		telezIni := "type=telezchor\ntelezchor_end=hangup"
-		if cfg.lineNumber != "" {
-			telezIni += "\ntelezchor_target_number=" + cfg.lineNumber
-		}
-		ok2 := ok && setupSpecial(cfg, st, listExt+"/2", telezIni)
-		if ok && (ok1 || ok2) {
-			var opts []string
-			if ok1 {
+		var opts []string
+		if cfg.publicList != "" {
+			if ok && setupSpecial(cfg, st, listExt+"/1", "type=tzintuk\nlist_tzintuk="+cfg.publicList) {
 				opts = append(opts, "להרשמה או הסרה מרשימת הצינתוקים, הקישו 1.")
 			}
-			if ok2 {
+			telezIni := "type=telezchor\ntelezchor_end=hangup"
+			if cfg.lineNumber != "" {
+				telezIni += "\ntelezchor_target_number=" + cfg.lineNumber
+			}
+			if ok && setupSpecial(cfg, st, listExt+"/2", telezIni) {
 				opts = append(opts, "לתזכורת קבועה לחייג לקו, בימים ובשעות שתבחרו, הקישו 2.")
 			}
+		}
+		if cfg.callback {
+			// שיחה חוזרת מהמערכת אל אותו מספר שהתקשר ממנו — כדי שלא ישתמש בדקות שלו.
+			if ok && setupSpecial(cfg, st, listExt+"/3", "type=system_sharing\nsystem_sharing_to_myself=yes") {
+				opts = append(opts, "לשיחה חוזרת מהמערכת, כדי לחסוך בדקות השיחה שלכם, הקישו 3.")
+			}
+		}
+		if ok && len(opts) > 0 {
 			text := "צינתוקים ותזכורות. " + strings.Join(opts, " ")
 			if text != st.listMenuText {
 				if err := cfg.y.upload(listExt, "M1000.tts", text); err == nil {
@@ -324,7 +333,7 @@ func syncOnce(cfg *config, st *state) error {
 	}
 	// שלוחות ריקות מהמבנה הקודם (3, 4, 7, ו-8 כשאין רשימה) — מחזירות לתפריט.
 	for _, old := range []string{"3", "4", "7", "8"} {
-		if old == listExt && cfg.publicList != "" {
+		if old == listExt && (cfg.publicList != "" || cfg.callback) {
 			continue
 		}
 		if old == registerExt && cfg.adminRegister {
