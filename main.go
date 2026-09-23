@@ -88,9 +88,10 @@ type state struct {
 	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
 	failures int
 
-	special      map[string]bool // שלוחות מיוחדות שהוגדרו בהפעלה הזו (true=פעילה)
-	chooserText  string          // תפריט בחירת הכתב שהועלה
-	listMenuText string
+	special       map[string]bool      // שלוחות מיוחדות שהוגדרו בהפעלה הזו (true=פעילה)
+	specialFailAt map[string]time.Time // מתי נכשל ניסיון אחרון (לצורך ניסיון חוזר אחרי setupRetry)
+	chooserText   string               // תפריט בחירת הכתב שהועלה
+	listMenuText  string
 
 	lastNewest int64     // לוג טריות: ההודעה החדשה ביותר שדווחה
 	lastStatus time.Time // לוג טריות: מתי דווח לאחרונה
@@ -623,18 +624,35 @@ const bridgeMarker = "bridge.txt"
 // setupSpecial מגדיר שלוחה מיוחדת (תפריט / המשך האזנה / הקלטה / רשימה) — פעם
 // אחת בכל הפעלה. כותב ext.ini רק אם השלוחה לא קיימת, שייכת לגשר, או מכילה
 // רק קבצים של הגשר. שלוחה עם קבצים של המשתמש — לא נוגעים ולא מפרסמים.
+// setupRetry: אחרי כישלון, כמה זמן לחכות לפני שמנסים שוב (בתוך אותה ריצה —
+// ריצה יכולה להישאר פתוחה שעות, אז כישלון חד-פעמי (למשל הרשאות שעדיין
+// לא נכנסו לתוקף) לא צריך להישאר תקוע עד להפעלה הבאה של ה-workflow).
+const setupRetry = 3 * time.Minute
+
 func setupSpecial(cfg *config, st *state, ext, ini string) bool {
 	if st.special == nil {
 		st.special = map[string]bool{}
 	}
+	if st.specialFailAt == nil {
+		st.specialFailAt = map[string]time.Time{}
+	}
 	if done, ok := st.special[ext]; ok {
-		return done
+		if done {
+			return true
+		}
+		if time.Since(st.specialFailAt[ext]) < setupRetry {
+			return false
+		}
+	}
+	fail := func(format string, args ...any) bool {
+		log.Printf(format, args...)
+		st.special[ext] = false
+		st.specialFailAt[ext] = time.Now()
+		return false
 	}
 	names, err := cfg.y.listDir(ext)
 	if err != nil && !looksNotFound(err.Error()) {
-		log.Printf("הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
-		st.special[ext] = false
-		return false
+		return fail("הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
 	}
 	owned, foreign := false, ""
 	for _, n := range names {
@@ -646,15 +664,11 @@ func setupSpecial(cfg *config, st *state, ext, ini string) bool {
 		}
 	}
 	if foreign != "" && !owned {
-		log.Printf("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה ולא מפרסם אותה בתפריט.", ext, foreign)
-		st.special[ext] = false
-		return false
+		return fail("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה ולא מפרסם אותה בתפריט.", ext, foreign)
 	}
 	want, _ := setIniValues(ini, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
 	if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
-		log.Printf("הערה: הגדרת שלוחה %s נכשלה: %v", ext, err)
-		st.special[ext] = false
-		return false
+		return fail("הערה: הגדרת שלוחה %s נכשלה: %v", ext, err)
 	}
 	_ = cfg.y.upload(ext, bridgeMarker, "שלוחה זו מנוהלת על ידי הגשר (yemot-news-bridge).")
 	log.Printf("שלוחה %s הוגדרה: %s", ext, strings.ReplaceAll(ini, "\n", " | "))
