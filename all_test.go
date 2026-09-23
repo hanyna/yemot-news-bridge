@@ -79,157 +79,189 @@ func TestIni(t *testing.T) {
 	}
 }
 
-type fakeYemot struct {
-	mu      sync.Mutex
-	files   map[string]string
-	uploads []string
-	deletes int
+// fakeYemotServer: שרת מדומה של ערוץ חי + ימות המשיח. dirs = קבצים קיימים לכל שלוחה.
+type fakeYemotServer struct {
+	mu       sync.Mutex
+	files    map[string]string   // נתיב מלא → תוכן שהועלה
+	dirs     map[string][]string // "ivr2:/3" → שמות קבצים קיימים
+	uploads  []string
+	items    []FeedItem
+	channels string
+	getText  bool // האם GetTextFile מורשה
 }
 
-func TestFullSync(t *testing.T) {
-	fy := &fakeYemot{files: map[string]string{
-		"ivr2:/ext.ini":   "type=menu",
-		"ivr2:/3/ext.ini": "type=menu\nsomething=1", // שלוחה תפוסה
-	}}
-	items := []FeedItem{
-		{Channel: "elisha_yered", TS: time.Now().Unix() - 60, Text: "ראשונה מאלישע ביו״ש"},
-		{Channel: "hakol", TS: time.Now().Unix() - 30, Text: "מהקול"},
+func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r.ParseForm()
+	ok := func(extra map[string]any) {
+		m := map[string]any{"responseStatus": "OK"}
+		for k, v := range extra {
+			m[k] = v
+		}
+		json.NewEncoder(w).Encode(m)
 	}
-	var mu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		fy.mu.Lock()
-		defer fy.mu.Unlock()
-		r.ParseForm()
-		ok := func(extra map[string]any) {
-			m := map[string]any{"responseStatus": "OK"}
-			for k, v := range extra {
-				m[k] = v
-			}
-			json.NewEncoder(w).Encode(m)
+	switch {
+	case r.URL.Path == "/api/messages":
+		json.NewEncoder(w).Encode(map[string]any{"items": f.items})
+	case r.URL.Path == "/api/channels":
+		w.Write([]byte(f.channels))
+	case strings.HasSuffix(r.URL.Path, "UploadTextFile"):
+		what := r.PostForm.Get("what")
+		f.files[what] = r.PostForm.Get("contents")
+		f.uploads = append(f.uploads, what)
+		dir := what[:strings.LastIndex(what, "/")]
+		if dir == "ivr2:" {
+			dir = "ivr2:/"
 		}
-		switch {
-		case r.URL.Path == "/api/messages":
-			json.NewEncoder(w).Encode(map[string]any{"items": items})
-		case r.URL.Path == "/api/channels":
-			w.Write([]byte(`{"channels":[{"name":"elisha_yered","title":"אלישע ירד"},{"name":"hakol","title":"@hakol"},{"name":"third","title":"שלישי"}]}`))
-		case strings.HasSuffix(r.URL.Path, "UploadTextFile"):
-			fy.files[r.PostForm.Get("what")] = r.PostForm.Get("contents")
-			fy.uploads = append(fy.uploads, r.PostForm.Get("what"))
-			ok(nil)
-		case strings.HasSuffix(r.URL.Path, "GetTextFile"):
-			c, found := fy.files[r.PostForm.Get("what")]
-			if !found {
-				json.NewEncoder(w).Encode(map[string]any{"responseStatus": "ERROR", "message": "file not found"})
-				return
+		name := what[strings.LastIndex(what, "/")+1:]
+		found := false
+		for _, n := range f.dirs[dir] {
+			if n == name {
+				found = true
 			}
-			ok(map[string]any{"contents": c})
-		case strings.HasSuffix(r.URL.Path, "FileAction"):
-			fy.deletes++
-			ok(nil)
-		case strings.HasSuffix(r.URL.Path, "GetIVR2Dir"):
-			ok(map[string]any{"files": []map[string]string{{"name": "M1000.wav"}}})
 		}
-	}))
-	defer srv.Close()
+		if !found {
+			f.dirs[dir] = append(f.dirs[dir], name)
+		}
+		ok(nil)
+	case strings.HasSuffix(r.URL.Path, "GetTextFile"):
+		if !f.getText {
+			w.Write([]byte(`{"responseStatus":"FORBIDDEN","message":"API_KEY_ACL_REJECT"}`))
+			return
+		}
+		c, found := f.files[r.PostForm.Get("what")]
+		if !found {
+			w.Write([]byte(`{"responseStatus":"ERROR","message":"file not found"}`))
+			return
+		}
+		ok(map[string]any{"contents": c})
+	case strings.HasSuffix(r.URL.Path, "GetIVR2Dir"):
+		names, found := f.dirs[r.PostForm.Get("path")]
+		if !found {
+			w.Write([]byte(`{"responseStatus":"ERROR","message":"path not found"}`))
+			return
+		}
+		var fs []map[string]string
+		for _, n := range names {
+			fs = append(fs, map[string]string{"name": n})
+		}
+		ok(map[string]any{"files": fs})
+	default:
+		ok(nil)
+	}
+}
+
+func newTestCfg(srv *httptest.Server) config {
 	yemotBase = srv.URL + "/ym/api/"
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
-	cfg := config{feedURL: srv.URL + "/api/messages", feedKey: "k", ext: "1", maxMsgs: 10, perChan: 5,
-		newestFirst: false, channelExts: true, voice: "Sivan", loc: loc,
-		y: &yemot{client: srv.Client(), apiKey: "KEY"}, client: srv.Client(), feedClient: srv.Client()}
-	diagnoseRoot(cfg.y)
+	return config{feedURL: srv.URL + "/api/messages", feedKey: "k", ext: "1", maxMsgs: 10, perChan: 5,
+		channelExts: true, loc: loc, y: &yemot{client: srv.Client(), apiKey: "KEY"}, client: srv.Client(), feedClient: srv.Client()}
+}
+
+func TestNewMenuStructure(t *testing.T) {
+	now := time.Now().Unix()
+	f := &fakeYemotServer{
+		files: map[string]string{},
+		dirs: map[string][]string{
+			"ivr2:/":  {"M1000.tts", "ext.ini"},
+			"ivr2:/1": {"ext.ini", "001.tts"},
+			"ivr2:/2": {"ext.ini", "001.tts", "002.tts"}, // שלוחת כתב ישנה של הגשר → תפריט בחירה
+			"ivr2:/3": {"ext.ini", "001.tts"},            // ישנה של הגשר → מפנה לתפריט
+			"ivr2:/4": {"ext.ini", "001.wav"},            // של המשתמש → לא נוגעים
+			"ivr2:/5": {"ext.ini", "001.tts"},
+			"ivr2:/6": {"ext.ini", "001.tts"},
+		},
+		items: []FeedItem{
+			{Channel: "elisha_yered", TS: now - 120, Text: "ראשונה מאלישע ביו״ש"},
+			{Channel: "hakol", TS: now - 60, Text: "מהקול"},
+		},
+		channels: `{"channels":[{"name":"elisha_yered","title":"אלישע ירד"},{"name":"hakol","title":"הקול היהודי"}]}`,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
 	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	f := fy.files
-	// 001 = הישנה (אלישע), 002 = החדשה (hakol) — ימות המשיח משמיע מ-002.
-	if !strings.HasPrefix(f["ivr2:/1/002.tts"], "hakol, ") || !strings.Contains(f["ivr2:/1/001.tts"], "אלישע ירד, ") || !strings.Contains(f["ivr2:/1/001.tts"], "ביהודה ושומרון") {
-		t.Fatalf("ext1: %q | %q", f["ivr2:/1/001.tts"], f["ivr2:/1/002.tts"])
+	fl := f.files
+	// שלוחה 1: כל העדכונים, החדשה במספר הגבוה.
+	if !strings.HasPrefix(fl["ivr2:/1/002.tts"], "הקול היהודי, ") || !strings.Contains(fl["ivr2:/1/001.tts"], "ביהודה ושומרון") {
+		t.Fatalf("ext1: %q | %q", fl["ivr2:/1/001.tts"], fl["ivr2:/1/002.tts"])
 	}
-	if f["ivr2:/2/ext.ini"] != "type=playfile\nvoice=Sivan" || !strings.HasPrefix(f["ivr2:/2/001.tts"], "עדכוני אלישע ירד. בשעה") {
-		t.Fatalf("ext2: %q %q", f["ivr2:/2/ext.ini"], f["ivr2:/2/001.tts"])
+	// שלוחה 2: תפריט בחירת כתב, והכתבים ב-2/1, 2/2.
+	if fl["ivr2:/2/ext.ini"] != "type=menu" {
+		t.Fatalf("ext2 ini: %q", fl["ivr2:/2/ext.ini"])
 	}
-	if _, touched := f["ivr2:/3/001.tts"]; touched || f["ivr2:/3/ext.ini"] != "type=menu\nsomething=1" {
-		t.Fatal("touched a foreign extension")
+	if fl["ivr2:/2/M1000.tts"] != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2." {
+		t.Fatalf("chooser: %q", fl["ivr2:/2/M1000.tts"])
 	}
-	if !strings.Contains(f["ivr2:/4/001.tts"], "אין כרגע עדכונים חדשים משלישי") {
-		t.Fatalf("ext4: %q", f["ivr2:/4/001.tts"])
+	if fl["ivr2:/2/1/ext.ini"] != "type=playfile" || !strings.HasPrefix(fl["ivr2:/2/1/001.tts"], "עדכוני אלישע ירד. ") {
+		t.Fatalf("2/1: %q %q", fl["ivr2:/2/1/ext.ini"], fl["ivr2:/2/1/001.tts"])
 	}
-	if f["ivr2:/ext.ini"] != "type=menu\nvoice=Sivan" {
-		t.Fatalf("root ini: %q", f["ivr2:/ext.ini"])
+	if !strings.HasPrefix(fl["ivr2:/2/2/001.tts"], "עדכוני הקול היהודי. ") {
+		t.Fatalf("2/2: %q", fl["ivr2:/2/2/001.tts"])
 	}
-	w := f["ivr2:/M1000.tts"]
-	if !strings.Contains(w, "לעדכוני אלישע ירד הקישו 2.") || strings.Contains(w, "הקישו 3") || !strings.Contains(w, "לעדכוני שלישי הקישו 4.") {
-		t.Fatalf("welcome: %q", w)
+	// 5 המשך, 6 הקלטה.
+	if fl["ivr2:/5/ext.ini"] != "type=last_play" {
+		t.Fatalf("ext5: %q", fl["ivr2:/5/ext.ini"])
 	}
-	t.Logf("welcome: %s", w)
-	t.Logf("1/001: %s", f["ivr2:/1/001.tts"])
-	t.Logf("1/002: %s", f["ivr2:/1/002.tts"])
+	if fl["ivr2:/6/ext.ini"] != "type=record\nsay_record_number=no\nhangup_insert_file=yes" {
+		t.Fatalf("ext6: %q", fl["ivr2:/6/ext.ini"])
+	}
+	// 3 ישנה → מפנה לתפריט; 4 של המשתמש → לא נגעו.
+	if fl["ivr2:/3/ext.ini"] != "type=go_to_folder\ngo_to_folder=/" {
+		t.Fatalf("ext3: %q", fl["ivr2:/3/ext.ini"])
+	}
+	if _, touched := fl["ivr2:/4/ext.ini"]; touched {
+		t.Fatal("touched user's ext 4")
+	}
+	// 8 — אין מספר רשימה → לא מוגדרת ולא בתפריט.
+	if _, touched := fl["ivr2:/8/ext.ini"]; touched {
+		t.Fatal("ext 8 set without list id")
+	}
+	want := "ברוכים הבאים לקו עדכוני ארץ ישראל. לכל העדכונים, הקישו 1. לבחירת כתב מסוים, הקישו 2. להמשך ההאזנה מהמקום שהפסקתם, הקישו 5. להשארת הודעה למנהל המערכת, הקישו 6."
+	if fl["ivr2:/M1000.tts"] != want {
+		t.Fatalf("welcome:\n%s\nwant:\n%s", fl["ivr2:/M1000.tts"], want)
+	}
 
-	fy.uploads = nil
+	// סבב שני בלי שינוי — שום העלאה.
+	f.uploads = nil
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if len(fy.uploads) != 0 {
-		t.Fatalf("second round uploaded: %v", fy.uploads)
+	if len(f.uploads) != 0 {
+		t.Fatalf("second round uploaded: %v", f.uploads)
+	}
+
+	// הפעלה חדשה אחרי שיש הקלטות בשלוחה 6 — עדיין "של הגשר" (קובץ הסימון), נשארת בתפריט.
+	f.dirs["ivr2:/6"] = append(f.dirs["ivr2:/6"], "000.wav")
+	st2 := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+	if err := syncOnce(&cfg, st2); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.files["ivr2:/M1000.tts"], "הקישו 6") {
+		t.Fatal("ext 6 dropped after recordings arrived")
 	}
 }
 
-func TestChannelExtsWithoutGetTextFile(t *testing.T) {
-	dirs := map[string][]string{"ivr2:/2": {"ext.ini"}, "ivr2:/3": {"ext.ini", "001.wav"}}
-	uploaded := map[string]string{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		switch {
-		case r.URL.Path == "/api/messages":
-			json.NewEncoder(w).Encode(map[string]any{"items": []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}})
-		case r.URL.Path == "/api/channels":
-			w.Write([]byte(`{"channels":[{"name":"a","title":"אלף"},{"name":"b","title":"בית"},{"name":"c","title":"גימל"}]}`))
-		case strings.HasSuffix(r.URL.Path, "GetTextFile"):
-			w.Write([]byte(`{"responseStatus":"FORBIDDEN","message":"API_KEY_ACL_REJECT"}`))
-		case strings.HasSuffix(r.URL.Path, "GetIVR2Dir"):
-			names, ok := dirs[r.PostForm.Get("path")]
-			if !ok {
-				w.Write([]byte(`{"responseStatus":"ERROR","message":"path not found"}`))
-				return
-			}
-			var fs []map[string]string
-			for _, n := range names {
-				fs = append(fs, map[string]string{"name": n})
-			}
-			json.NewEncoder(w).Encode(map[string]any{"responseStatus": "OK", "files": fs})
-		case strings.HasSuffix(r.URL.Path, "UploadTextFile"):
-			uploaded[r.PostForm.Get("what")] = r.PostForm.Get("contents")
-			w.Write([]byte(`{"responseStatus":"OK"}`))
-		default:
-			w.Write([]byte(`{"responseStatus":"OK"}`))
-		}
-	}))
+func TestListExt(t *testing.T) {
+	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}},
+		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
-	yemotBase = srv.URL + "/ym/api/"
-	cfg := config{feedURL: srv.URL + "/api/messages", feedKey: "k", ext: "1", maxMsgs: 10, perChan: 5,
-		channelExts: true, loc: time.UTC, y: &yemot{client: srv.Client(), apiKey: "K"}, client: srv.Client(), feedClient: srv.Client()}
+	cfg := newTestCfg(srv)
+	cfg.listID = "123"
 	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := uploaded["ivr2:/2/ext.ini"]; ok {
-		t.Fatal("rewrote ext.ini of existing ext 2")
+	if f.files["ivr2:/8/1/ext.ini"] != "type=template_add_number\ntemplate_id=123" || f.files["ivr2:/8/2/ext.ini"] != "type=template_remove_number\ntemplate_id=123" {
+		t.Fatalf("list exts: %q %q", f.files["ivr2:/8/1/ext.ini"], f.files["ivr2:/8/2/ext.ini"])
 	}
-	if !strings.Contains(uploaded["ivr2:/2/001.tts"], "עדכוני אלף") {
-		t.Fatalf("ext2: %q", uploaded["ivr2:/2/001.tts"])
-	}
-	if _, ok := uploaded["ivr2:/3/001.tts"]; ok {
-		t.Fatal("touched ext 3 with user files")
-	}
-	if uploaded["ivr2:/4/ext.ini"] != "type=playfile" || uploaded["ivr2:/4/001.tts"] == "" {
-		t.Fatalf("ext4 not created: %q", uploaded["ivr2:/4/ext.ini"])
-	}
-	w := uploaded["ivr2:/M1000.tts"]
-	if !strings.Contains(w, "הקישו 2") || strings.Contains(w, "הקישו 3") || !strings.Contains(w, "הקישו 4") {
-		t.Fatalf("welcome: %q", w)
+	if !strings.Contains(f.files["ivr2:/M1000.tts"], "רשימת התפוצה, הקישו 8.") {
+		t.Fatalf("welcome: %q", f.files["ivr2:/M1000.tts"])
 	}
 }
 

@@ -48,11 +48,14 @@ var knownNames = map[string]string{
 
 const (
 	welcomeGreeting = "ברוכים הבאים לקו עדכוני ארץ ישראל."
-	welcomeHead     = "לעדכונים שוטפים, הקישו 1."
-	maxPerFile      = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
-	firstChExt      = 2    // שלוחת הערוץ הראשון
-	lastChExt       = 9    // שלוחת הערוץ האחרון האפשרי
-	failLimit       = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
+	welcomeHead     = "לכל העדכונים, הקישו 1."
+
+	chooseExt  = "2"  // תפריט בחירת כתב
+	resumeExt  = "5"  // המשך מהמקום שהפסקתם
+	recordExt  = "6"  // הודעה למנהל המערכת
+	listExt    = "8"  // רשימת תפוצה (רק כש-YEMOT_LIST_ID מוגדר)
+	maxPerFile = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
+	failLimit  = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
 )
 
 type config struct {
@@ -63,6 +66,7 @@ type config struct {
 	channelExts      bool
 	welcome          string // "" = אוטומטי, "off" = כבוי
 	voice, rate      string
+	listID           string // מספר רשימת התפוצה בימות המשיח (שלוחה 8)
 	loc              *time.Location
 	y                *yemot
 	client           *http.Client // ל-API של ערוץ חי
@@ -78,6 +82,10 @@ type state struct {
 	welcome  string              // הודעת הפתיחה שהועלתה
 	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
 	failures int
+
+	special     map[string]bool // שלוחות מיוחדות שהוגדרו בהפעלה הזו (true=פעילה)
+	chooserText string          // תפריט בחירת הכתב שהועלה
+	listMenuSet bool
 
 	lastNewest int64     // לוג טריות: ההודעה החדשה ביותר שדווחה
 	lastStatus time.Time // לוג טריות: מתי דווח לאחרונה
@@ -98,6 +106,7 @@ func main() {
 		welcome:     strings.TrimSpace(os.Getenv("YEMOT_WELCOME")),
 		voice:       strings.TrimSpace(os.Getenv("YEMOT_VOICE")),
 		rate:        strings.TrimSpace(os.Getenv("YEMOT_RATE")),
+		listID:      strings.TrimSpace(os.Getenv("YEMOT_LIST_ID")),
 		client:      &http.Client{Timeout: 30 * time.Second},
 		feedClient:  &http.Client{Timeout: 90 * time.Second},
 	}
@@ -119,7 +128,7 @@ func main() {
 
 	diagnoseRoot(cfg.y)
 
-	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}, special: map[string]bool{}}
 
 	// מצב לולאה: RUN_MINUTES > 0 — נשארים פתוחים ובודקים כל INTERVAL_SECONDS.
 	// בלי RUN_MINUTES — סבב אחד וסיום.
@@ -208,15 +217,16 @@ func syncOnce(cfg *config, st *state) error {
 	}
 
 	// שלוחה לכל ערוץ.
-	var menu []string
+	// שלוחה 2: תפריט בחירת כתב → 2/1, 2/2, ... (שלוחת השמעה לכל כתב).
+	var chooser []string
 	if cfg.channelExts {
 		for i, ch := range st.channels {
-			extNum := firstChExt + i
-			if extNum > lastChExt {
+			if i >= 9 {
 				break
 			}
-			ext := strconv.Itoa(extNum)
-			if ext == cfg.ext || !ensureChannelExt(cfg, st, ch.Name, ext) {
+			key := strconv.Itoa(i + 1)
+			ext := chooseExt + "/" + key
+			if !ensureChannelExt(cfg, st, ch.Name, ext) {
 				continue
 			}
 			name := speakerName(ch.Name, titles)
@@ -241,8 +251,52 @@ func syncOnce(cfg *config, st *state) error {
 				log.Printf("הערה: עדכון שלוחה %s (%s) נכשל: %v", ext, name, err)
 				continue
 			}
-			menu = append(menu, fmt.Sprintf("לעדכוני %s הקישו %s.", name, ext))
+			chooser = append(chooser, fmt.Sprintf("לעדכוני %s הקישו %s.", name, key))
 		}
+	}
+
+	// התפריט הראשי: אילו שלוחות פעילות.
+	var menu []string
+	if len(chooser) > 0 && setupSpecial(cfg, st, chooseExt, "type=menu") {
+		text := "בחירת כתב. " + strings.Join(chooser, " ")
+		if r := []rune(text); len(r) > maxPerFile {
+			text = cutAtWord(r[:maxPerFile])
+		}
+		if text != st.chooserText {
+			if err := cfg.y.upload(chooseExt, "M1000.tts", text); err != nil {
+				log.Printf("הערה: עדכון תפריט בחירת הכתב נכשל: %v", err)
+			} else {
+				st.chooserText = text
+				log.Printf("תפריט בחירת כתב (שלוחה %s): %s", chooseExt, text)
+			}
+		}
+		menu = append(menu, "לבחירת כתב מסוים, הקישו "+chooseExt+".")
+	}
+	if setupSpecial(cfg, st, resumeExt, "type=last_play") {
+		menu = append(menu, "להמשך ההאזנה מהמקום שהפסקתם, הקישו "+resumeExt+".")
+	}
+	if setupSpecial(cfg, st, recordExt, "type=record\nsay_record_number=no\nhangup_insert_file=yes") {
+		menu = append(menu, "להשארת הודעה למנהל המערכת, הקישו "+recordExt+".")
+	}
+	if cfg.listID != "" {
+		ok := setupSpecial(cfg, st, listExt, "type=menu")
+		ok = ok && setupSpecial(cfg, st, listExt+"/1", "type=template_add_number\ntemplate_id="+cfg.listID)
+		ok = ok && setupSpecial(cfg, st, listExt+"/2", "type=template_remove_number\ntemplate_id="+cfg.listID)
+		if ok && !st.listMenuSet {
+			if err := cfg.y.upload(listExt, "M1000.tts", "רשימת התפוצה. להצטרפות הקישו 1. להסרה הקישו 2."); err == nil {
+				st.listMenuSet = true
+			}
+		}
+		if ok {
+			menu = append(menu, "להצטרפות או הסרה מרשימת התפוצה, הקישו "+listExt+".")
+		}
+	}
+	// שלוחות כתבים ישנות מהמבנה הקודם (3, 4, 7, ו-8 כשאין רשימה) — מחזירות לתפריט.
+	for _, old := range []string{"3", "4", "7", "8"} {
+		if old == listExt && cfg.listID != "" {
+			continue
+		}
+		retireExt(cfg, st, old)
 	}
 
 	// קול ומהירות — פעם אחת בכל הפעלה: בשלוחה הראשית, בשלוחת כל העדכונים
@@ -517,6 +571,77 @@ func ensureChannelExtByFiles(cfg *config, st *state, channel, ext string, readEr
 	log.Printf("שלוחה %s (קיימת, בלי קבצים אחרים) משמשת לערוץ %s.", ext, channel)
 	st.chExt[channel] = ext
 	return true
+}
+
+// bridgeMarker — קובץ סימון שהגשר שם בשלוחות שהוא הגדיר, כדי לדעת בהפעלות
+// הבאות שהשלוחה שלו (גם כשנוספו בה קבצים, למשל הקלטות בשלוחה 6).
+const bridgeMarker = "bridge.txt"
+
+// setupSpecial מגדיר שלוחה מיוחדת (תפריט / המשך האזנה / הקלטה / רשימה) — פעם
+// אחת בכל הפעלה. כותב ext.ini רק אם השלוחה לא קיימת, שייכת לגשר, או מכילה
+// רק קבצים של הגשר. שלוחה עם קבצים של המשתמש — לא נוגעים ולא מפרסמים.
+func setupSpecial(cfg *config, st *state, ext, ini string) bool {
+	if st.special == nil {
+		st.special = map[string]bool{}
+	}
+	if done, ok := st.special[ext]; ok {
+		return done
+	}
+	names, err := cfg.y.listDir(ext)
+	if err != nil && !looksNotFound(err.Error()) {
+		log.Printf("הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
+		st.special[ext] = false
+		return false
+	}
+	owned, foreign := false, ""
+	for _, n := range names {
+		switch {
+		case strings.EqualFold(n, bridgeMarker):
+			owned = true
+		case !isBridgeFile(n) && !strings.EqualFold(n, "M1000.tts"):
+			foreign = n
+		}
+	}
+	if foreign != "" && !owned {
+		log.Printf("אזהרה: בשלוחה %s יש קובץ %s שאינו של הגשר — לא נוגע בה ולא מפרסם אותה בתפריט.", ext, foreign)
+		st.special[ext] = false
+		return false
+	}
+	want, _ := setIniValues(ini, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+	if err := cfg.y.upload(ext, "ext.ini", want); err != nil {
+		log.Printf("הערה: הגדרת שלוחה %s נכשלה: %v", ext, err)
+		st.special[ext] = false
+		return false
+	}
+	_ = cfg.y.upload(ext, bridgeMarker, "שלוחה זו מנוהלת על ידי הגשר (yemot-news-bridge).")
+	log.Printf("שלוחה %s הוגדרה: %s", ext, strings.ReplaceAll(ini, "\n", " | "))
+	st.special[ext] = true
+	return true
+}
+
+// retireExt: שלוחת כתב מהמבנה הקודם — אם היא של הגשר, מפנה אותה חזרה
+// לתפריט הראשי, כדי שלא יושמעו בה הודעות ישנות.
+func retireExt(cfg *config, st *state, ext string) {
+	if st.special == nil {
+		st.special = map[string]bool{}
+	}
+	key := "retired:" + ext
+	if _, ok := st.special[key]; ok {
+		return
+	}
+	st.special[key] = true
+	names, err := cfg.y.listDir(ext)
+	if err != nil || len(names) == 0 {
+		return
+	}
+	for _, n := range names {
+		if !isBridgeFile(n) && !strings.EqualFold(n, bridgeMarker) {
+			return // לא של הגשר — לא נוגעים
+		}
+	}
+	if err := cfg.y.upload(ext, "ext.ini", "type=go_to_folder\ngo_to_folder=/"); err == nil {
+		log.Printf("שלוחה %s (מהמבנה הקודם) מפנה עכשיו לתפריט הראשי.", ext)
+	}
 }
 
 // isBridgeFile: קבצים שהגשר עצמו יוצר בשלוחה — ext.ini ו-NNN.tts.
