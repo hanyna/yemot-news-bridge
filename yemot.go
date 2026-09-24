@@ -3,12 +3,15 @@ package main
 // פונקציות מול ה-API של ימות המשיח.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // כתובת ה-API של ימות המשיח.
@@ -73,6 +76,88 @@ func (y *yemot) upload(ext, file, text string) error {
 	form.Set("contents", text)
 	_, err := y.call("UploadTextFile", form)
 	return err
+}
+
+// uploadClient: העלאת קובץ קול לוקחת יותר זמן מבקשה רגילה.
+var uploadClient = &http.Client{Timeout: 3 * time.Minute}
+
+// uploadFile מעלה קובץ (UploadFile, multipart). convert=true: ימות המשיח
+// ממירים אותו (MP3 וכו') לפורמט של טלפון.
+func (y *yemot) uploadFile(ext, name, filename string, data []byte, convert bool) error {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("path", ivrPath(ext, name))
+	if convert {
+		_ = w.WriteField("convertAudio", "1")
+	}
+	fw, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(data); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, yemotBase+"UploadFile", &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", y.apiKey)
+	resp, err := uploadClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var r yemotResp
+	if err := json.Unmarshal(body, &r); err != nil {
+		return fmt.Errorf("תגובה לא צפויה מימות המשיח (UploadFile): %.200s", strings.TrimSpace(string(body)))
+	}
+	if r.ResponseStatus != "OK" {
+		return fmt.Errorf("שגיאה מימות המשיח ב-UploadFile (%s): %s", r.ResponseStatus, r.Message)
+	}
+	return nil
+}
+
+// uploadProbe בודק שלמפתח יש הרשאה ל-UploadFile, בלי להעלות כלום: בקשה בלי
+// קובץ. עם הרשאה ימות המשיח עונים "File upload expected" (שום דבר לא נכתב);
+// בלי הרשאה — שגיאת ACL (מוחזרת כ-aclError).
+func (y *yemot) uploadProbe() error {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("path", ivrPath("", "upload-permission-check.wav"))
+	if err := w.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, yemotBase+"UploadFile", &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", y.apiKey)
+	resp, err := y.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var r yemotResp
+	if err := json.Unmarshal(body, &r); err != nil {
+		return fmt.Errorf("תגובה לא צפויה מימות המשיח (UploadFile): %.200s", strings.TrimSpace(string(body)))
+	}
+	if strings.Contains(r.ResponseStatus+" "+r.Message, "ACL") {
+		return &aclError{fmt.Errorf("שגיאה מימות המשיח ב-UploadFile (%s): %s", r.ResponseStatus, r.Message)}
+	}
+	return nil
 }
 
 // read קורא קובץ טקסט מהמערכת. exists=false כשהקובץ לא קיים.

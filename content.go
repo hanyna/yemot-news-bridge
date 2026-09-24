@@ -62,7 +62,7 @@ func flashActive(it FeedItem, now time.Time) bool {
 }
 
 var (
-	reDurBadge = regexp.MustCompile(`class="durbadge">([^<]*)<`)
+	reDurBadge = regexp.MustCompile(`class="durbadge[^"]*">([^<]*)<`) // גם "durbadge durtop" של סרטון רגיל
 	rePollQ    = regexp.MustCompile(`class="pollq">(?:📊\s*)?([^<]*)<`)
 	rePollOpt  = regexp.MustCompile(`class="pollopt">(.*?)</div>`)
 	reTags     = regexp.MustCompile(`<[^>]+>`)

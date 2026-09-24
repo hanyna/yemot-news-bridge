@@ -1,12 +1,13 @@
 // yemot-news-bridge
 //
 // גשר בין Telegram Popup ("ערוץ חי") לבין קו טלפון בימות המשיח.
-// רץ ב-GitHub Actions ובודק הודעות חדשות כל דקה. כל הודעה נשלחת לקובץ TTS
-// נפרד (001.tts, 002.tts, ...), כי קובץ TTS אחד מוגבל לכ-1,300 תווים:
+// רץ ב-GitHub Actions ובודק הודעות חדשות כל 20 שניות. כל הודעה נשמרת בקובץ
+// משלה, עם מספר קבוע, כל עוד יש מקום בשלוחה (ראו archive.go); סרטונים והודעות
+// קוליות — גם הקול שלהם (audio.go):
 //
-//	שלוחה 1      — כל הערוצים יחד (החדשה נשמעת ראשונה)
-//	שלוחות 2..9  — שלוחה לכל ערוץ ("לעדכוני אלישע ירד הקישו 2")
-//	תפריט ראשי   — הודעת פתיחה (M1000.tts) שמפרטת את השלוחות
+//	שלוחה 1    — כל הערוצים יחד (החדשה נשמעת ראשונה, וממשיכים אחורה)
+//	שלוחה 2    — בחירת כתב → 2/1, 2/2, ... שלוחה לכל ערוץ
+//	תפריט ראשי — הודעת פתיחה (M1000.tts) שמפרטת את השלוחות
 package main
 
 import (
@@ -41,10 +42,21 @@ type Channel struct {
 	Title string `json:"title"`
 }
 
-// שמות קריאים לערוצים — גיבוי למקרה שהשרת לא מחזיר שם ערוץ.
+// שמות קריאים לערוצים — גיבוי למקרה שהשרת לא מחזיר שם ערוץ (ההקראות בארכיון
+// נשארות לתמיד, אז עדיף שם אמיתי ולא הכינוי באנגלית).
 var knownNames = map[string]string{
-	"elisha_yered": "אלישע ירד",
+	"elisha_yered":   "אלישע ירד",
+	"hakolhayehudi":  "הקול היהודי",
+	"realelchangr":   "אלחנן גרונר",
+	"ayeletlash":     "איילת לאש",
+	"SamariaUpdates": "עדכוני השומרון",
+	"nilchamim":      "נלחמים על החיים",
+	"hatzhalhyosh":   "הצלה יהודה ושומרון",
 }
+
+// channelsWait: כמה סבבים ממתינים לרשימת הערוצים (ושמותיהם) לפני שמוסיפים
+// הודעות לארכיון עם שמות הגיבוי.
+const channelsWait = 10
 
 const (
 	welcomeGreeting = "ברוכים הבאים לקו עדכוני ארץ ישראל."
@@ -62,9 +74,9 @@ const (
 type config struct {
 	feedURL, feedKey string
 	ext              string // שלוחת "כל העדכונים"
-	maxMsgs, perChan int
-	newestFirst      bool
 	channelExts      bool
+	audio            bool   // להעלות את הקול של סרטונים והודעות קוליות
+	audioMax         int    // שניות; קול ארוך מזה — רק התיאור (0 = בלי הגבלה)
 	welcome          string // "" = אוטומטי, "off" = כבוי
 	voice, rate      string
 	publicList       string // רשימת הצינתוקים הכללית (שלוחה 8/1)
@@ -88,6 +100,15 @@ type state struct {
 	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
 	failures int
 
+	arch      map[string]*archive // שלוחה → הארכיון שלה (נטען פעם אחת בכל הפעלה)
+	chMap     map[string]string   // ערוץ → שלוחת כתב (קבוע — נשמר באינדקס)
+	mapped    bool                // chMap נקרא מהשלוחות בהפעלה הזו
+	titleSet  map[string]string   // כותרות שלוחות כתב שהועלו
+	digitsSet map[string]bool     // file_amount_digits הוגדר
+	aw        *audioWorker        // הקול של סרטונים והודעות קוליות (ברקע)
+
+	noChannels int // כמה סבבים ממתינים לרשימת הערוצים לפני שמוסיפים לארכיון בלעדיה
+
 	special      map[string]bool      // שלוחות מיוחדות בהפעלה הזו: true=הוגדרה, false=לא של הגשר
 	failAt       map[string]time.Time // מתי נכשל ניסיון אחרון להגדיר שלוחה (ניסיון חוזר אחרי setupRetry)
 	warned       map[string]bool      // הודעות הסבר שכבר נרשמו בלוג בהפעלה הזו
@@ -100,16 +121,12 @@ type state struct {
 
 func main() {
 	cfg := config{
-		feedURL: envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
-		feedKey: strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
-		ext:     envOr("YEMOT_EXT", "1"),
-		maxMsgs: envInt("YEMOT_MAX_MSGS", 10),
-		perChan: envInt("YEMOT_PER_CHANNEL", 5),
-		// ימות המשיח משמיע את הקבצים בשלוחה מהמספר הגבוה לנמוך. לכן ברירת
-		// המחדל: 001 = הישנה, המספר הגבוה = החדשה — והמאזין שומע את החדשה ראשונה.
-		// YEMOT_ORDER=newest הופך (001 = החדשה).
-		newestFirst:   envOr("YEMOT_ORDER", "oldest") == "newest",
+		feedURL:       envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
+		feedKey:       strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
+		ext:           envOr("YEMOT_EXT", "1"),
 		channelExts:   envOr("CHANNEL_EXTS", "on") != "off",
+		audio:         envOr("AUDIO", "on") != "off",
+		audioMax:      envInt("AUDIO_MAX_MINUTES", 20) * 60,
 		welcome:       strings.TrimSpace(os.Getenv("YEMOT_WELCOME")),
 		voice:         strings.TrimSpace(os.Getenv("YEMOT_VOICE")),
 		rate:          strings.TrimSpace(os.Getenv("YEMOT_RATE")),
@@ -129,9 +146,6 @@ func main() {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
 	cfg.y = &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: apiKey}
-	if cfg.maxMsgs > 99 {
-		cfg.maxMsgs = 99
-	}
 	var err error
 	if cfg.loc, err = time.LoadLocation("Asia/Jerusalem"); err != nil {
 		cfg.loc = time.FixedZone("IL", 3*3600)
@@ -140,11 +154,15 @@ func main() {
 	diagnoseRoot(cfg.y)
 
 	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}, special: map[string]bool{}}
+	st.ensureMaps()
 
 	// מצב לולאה: RUN_MINUTES > 0 — נשארים פתוחים ובודקים כל INTERVAL_SECONDS.
-	// בלי RUN_MINUTES — סבב אחד וסיום.
+	// בלי RUN_MINUTES — סבב אחד וסיום (והקול — בתוך הסבב).
 	runFor := time.Duration(envInt("RUN_MINUTES", 0)) * time.Minute
 	interval := time.Duration(envInt("INTERVAL_SECONDS", 60)) * time.Second
+	if cfg.audio && runFor > 0 {
+		st.aw.start(&cfg) // ברקע — ההקראות לא מחכות לקול
+	}
 	if runFor == 0 {
 		if err := syncOnce(&cfg, st); err != nil {
 			log.Fatalf("%v", err)
@@ -209,7 +227,25 @@ func (st *state) ensureMaps() {
 	if st.warned == nil {
 		st.warned = map[string]bool{}
 	}
+	if st.arch == nil {
+		st.arch = map[string]*archive{}
+	}
+	if st.chMap == nil {
+		st.chMap = map[string]string{}
+	}
+	if st.titleSet == nil {
+		st.titleSet = map[string]string{}
+	}
+	if st.digitsSet == nil {
+		st.digitsSet = map[string]bool{}
+	}
+	if st.aw == nil {
+		st.aw = newAudioWorker()
+	}
 }
+
+// nowFunc — השעה הנוכחית (בדיקות מזיזות אותה כדי לבדוק "אתמול").
+var nowFunc = time.Now
 
 // syncOnce: סבב אחד — שליפה, בנייה, והעלאת מה שהשתנה בלבד.
 func syncOnce(cfg *config, st *state) error {
@@ -240,56 +276,82 @@ func syncOnce(cfg *config, st *state) error {
 		}
 	}
 
-	now := time.Now().In(cfg.loc)
+	now := nowFunc().In(cfg.loc)
 	logFreshness(cfg, st, items, now)
-	items = prepare(items)
+	// ניקוי להקראה, מהישנה לחדשה. כפילויות (אותה הודעה בכמה ערוצים) מסוננות
+	// בארכיון עצמו, מול מה שכבר נשמר.
+	clean := prepareClean(items)
+	sort.SliceStable(clean, func(i, j int) bool {
+		if clean[i].TS != clean[j].TS {
+			return clean[i].TS < clean[j].TS
+		}
+		return clean[i].ID < clean[j].ID
+	})
+	budget := rerenderBudget
 
-	// שלוחה 1: כל הערוצים.
-	all := buildParts(items, titles, cfg.loc, now, cfg.maxMsgs, cfg.newestFirst, true)
-	if len(all) == 0 {
-		all = []string{"אין כרגע עדכונים."}
-	}
-	if err := syncExt(cfg, st, cfg.ext, all, cfg.maxMsgs); err != nil {
-		return err
+	// שלוחה 1: כל הערוצים — ארכיון קבוע. תקלה כאן לא עוצרת את שאר הקו (תפריטים
+	// וכו'), אבל הסבב נחשב כושל — כך שתקלה מתמשכת מגיעה במייל.
+	var cycleErr error
+	if st.channels == nil && st.noChannels < channelsWait {
+		// בלי רשימת הערוצים אין שמות קריאים לערוצים, וההקראות נשארות בארכיון
+		// לתמיד — ממתינים לה כמה סבבים (תקלה זמנית), ורק אז ממשיכים עם שמות הגיבוי.
+		st.noChannels++
+	} else if err := st.ensureDigits(cfg, cfg.ext); err != nil {
+		cycleErr = fmt.Errorf("שלוחה %s לא עוברת לארכיון עד שההגדרה file_amount_digits=5 תיכנס: %w", cfg.ext, err)
+	} else if all, err := st.archiveFor(cfg, cfg.ext, "", true, now); err != nil {
+		cycleErr = fmt.Errorf("טעינת הארכיון של שלוחה %s: %w%s", cfg.ext, err, aclHint(err, "GetTextFile"))
+	} else if err := all.sync(cfg, st, clean, titles, now); err != nil {
+		cycleErr = err
+	} else {
+		all.rerender(cfg, now, &budget)
 	}
 
-	// שלוחה לכל ערוץ.
-	// שלוחה 2: תפריט בחירת כתב → 2/1, 2/2, ... (שלוחת השמעה לכל כתב).
-	var chooser []string
+	// שלוחה 2: תפריט בחירת כתב → 2/1, 2/2, ... (ארכיון קבוע לכל כתב).
+	type choice struct {
+		n    int
+		text string
+	}
+	var choices []choice
 	if cfg.channelExts {
-		for i, ch := range st.channels {
-			if i >= 9 {
-				break
-			}
-			key := strconv.Itoa(i + 1)
-			ext := chooseExt + "/" + key
-			if !ensureChannelExt(cfg, st, ch.Name, ext) {
+		exts := st.reporterExts(cfg)
+		for _, ch := range st.channels {
+			ext, ok := exts[ch.Name]
+			if !ok || !ensureChannelExt(cfg, st, ch.Name, ext) {
 				continue
 			}
 			name := speakerName(ch.Name, titles)
+			a, err := st.archiveFor(cfg, ext, ch.Name, false, now)
+			if err != nil {
+				log.Printf("הערה: הארכיון של שלוחה %s (%s) לא נטען: %v", ext, name, err)
+				continue
+			}
+			st.ensureTitle(cfg, ext, updatesOf(name)+".")
 			var mine []FeedItem
-			for _, it := range items {
+			for _, it := range clean {
 				if it.Channel == ch.Name {
 					mine = append(mine, it)
 				}
 			}
-			parts := buildParts(mine, titles, cfg.loc, now, cfg.perChan, cfg.newestFirst, false)
-			if len(parts) == 0 {
-				parts = []string{"אין כרגע עדכונים חדשים מ" + name + "."}
-			} else {
-				// הכותרת נכנסת להודעה שנשמעת ראשונה — החדשה ביותר.
-				first := len(parts) - 1
-				if cfg.newestFirst {
-					first = 0
-				}
-				parts[first] = updatesOf(name) + ". " + parts[first]
-			}
-			if err := syncExt(cfg, st, ext, parts, cfg.perChan); err != nil {
+			if err := a.sync(cfg, st, mine, titles, now); err != nil {
 				log.Printf("הערה: עדכון שלוחה %s (%s) נכשל: %v", ext, name, err)
 				continue
 			}
-			chooser = append(chooser, fmt.Sprintf("ל%s הקישו %s.", updatesOf(name), key))
+			a.rerender(cfg, now, &budget)
+			n, _ := strconv.Atoi(strings.TrimPrefix(ext, chooseExt+"/"))
+			choices = append(choices, choice{n, fmt.Sprintf("ל%s הקישו %d.", updatesOf(name), n)})
 		}
+	}
+	sort.Slice(choices, func(i, j int) bool { return choices[i].n < choices[j].n })
+	var chooser []string
+	for _, c := range choices {
+		chooser = append(chooser, c.text)
+	}
+
+	// הקול של סרטונים והודעות קוליות: מה שנוסף בסבב יוצא לעבודה (ברקע), ומה
+	// שה-worker סיים נרשם באינדקס. ואז — שמירת האינדקסים שהשתנו.
+	st.audioTick(cfg)
+	if err := st.saveArchives(cfg, now); err != nil && cycleErr == nil {
+		cycleErr = err
 	}
 
 	// התפריט הראשי: אילו שלוחות פעילות.
@@ -418,7 +480,7 @@ func syncOnce(cfg *config, st *state) error {
 			}
 		}
 	}
-	return nil
+	return cycleErr
 }
 
 // logFreshness רושם בלוג (פעם ב-10 דקות, ובכל פעם שהחדשה ביותר משתנה) כמה
@@ -483,6 +545,11 @@ func logFreshness(cfg *config, st *state, items []FeedItem, now time.Time) {
 // prepare: ניקוי טקסט להקראה, תיאור מדיה, סינון פרסומות, סימון מבזקים,
 // השמטת הודעות בלי תוכן, וסינון כפילויות.
 func prepare(items []FeedItem) []FeedItem {
+	return dedupe(prepareClean(items))
+}
+
+// prepareClean: כמו prepare, בלי סינון כפילויות (הארכיון מסנן מול מה שכבר נשמר).
+func prepareClean(items []FeedItem) []FeedItem {
 	var out []FeedItem
 	for _, it := range items {
 		note, onlyMedia, skip := mediaNote(it.HTML)
@@ -492,7 +559,7 @@ func prepare(items []FeedItem) []FeedItem {
 		text := cleanForSpeech(it.Text)
 		switch {
 		case onlyMedia && note != "":
-			text = cleanForSpeech("פורסם " + note)
+			text = cleanForSpeech(publishedVerb(note) + " " + note)
 			it.MediaOnly = true
 		case note != "" && text != "":
 			text += ". מצורף להודעה: " + cleanForSpeech(note)
@@ -504,7 +571,18 @@ func prepare(items []FeedItem) []FeedItem {
 		it.Flash = isFlashText(text)
 		out = append(out, it)
 	}
-	return dedupe(out)
+	return out
+}
+
+// publishedVerb: "פורסם סרטון", "פורסמה הודעה קולית", "פורסמו 3 תמונות".
+func publishedVerb(note string) string {
+	switch {
+	case strings.HasSuffix(note, "תמונות"):
+		return "פורסמו"
+	case strings.HasPrefix(note, "תמונה"), strings.HasPrefix(note, "הודעה"):
+		return "פורסמה"
+	}
+	return "פורסם"
 }
 
 // buildParts בונה את טקסטי ההקראה — אחד לכל הודעה:
@@ -536,10 +614,8 @@ func buildParts(items []FeedItem, titles map[string]string, loc *time.Location, 
 
 // spokenItem: הודעה אחת כטקסט להקראה, עד limit תווים.
 func spokenItem(it FeedItem, titles map[string]string, loc *time.Location, now time.Time, withName bool, limit int) string {
-	head := spokenWhen(time.Unix(it.TS, 0).In(loc), now) + ". "
-	if withName {
-		head = speakerName(it.Channel, titles) + ", " + head
-	}
+	t := time.Unix(it.TS, 0).In(loc)
+	head := itemHead(it.Channel, t, whenClass(t, now), titles, withName)
 	if flashActive(it, now) {
 		head = "מבזק. " + head
 	}
@@ -550,39 +626,6 @@ func spokenItem(it FeedItem, titles map[string]string, loc *time.Location, now t
 		body = cutAtSentence(r[:room]) + cutNote
 	}
 	return head + body
-}
-
-// syncExt מעלה לשלוחה רק קבצים שהשתנו, ומוחק קבצים עודפים מריצה קודמת.
-func syncExt(cfg *config, st *state, ext string, parts []string, maxFiles int) error {
-	prev, known := st.files[ext], st.known[ext]
-	changed := 0
-	for i, part := range parts {
-		if known && i < len(prev) && prev[i] == part {
-			continue
-		}
-		file := fmt.Sprintf("%03d.tts", i+1)
-		if err := cfg.y.upload(ext, file, part); err != nil {
-			st.known[ext] = false // לא בטוחים מה יש בשלוחה — בסבב הבא מעלים הכול
-			return fmt.Errorf("שליחה לשלוחה %s (%s): %w", ext, file, err)
-		}
-		log.Printf("שלוחה %s / %s (%d תווים): %.80s", ext, file, len([]rune(part)), part)
-		changed++
-	}
-	if !known || len(parts) < len(prev) {
-		var stale []string
-		for i := len(parts) + 1; i <= maxFiles; i++ {
-			stale = append(stale, ivrPath(ext, fmt.Sprintf("%03d.tts", i)))
-		}
-		if err := cfg.y.remove(stale); err != nil {
-			log.Printf("הערה: מחיקת קבצים ישנים בשלוחה %s לא הצליחה (לא קריטי): %v", ext, err)
-		}
-	}
-	st.files[ext] = parts
-	st.known[ext] = true
-	if changed > 0 {
-		log.Printf("שלוחה %s: עודכנו %d קבצים.", ext, changed)
-	}
-	return nil
 }
 
 // ensureChannelExt מכין שלוחת השמעה לערוץ (2/1, 2/2, ...). יוצר אותה אם היא
@@ -601,7 +644,7 @@ func ensureChannelExt(cfg *config, st *state, channel, ext string) bool {
 		log.Printf(format, args...)
 		return false
 	}
-	want, _ := setIniValues("type=playfile", [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+	want, _ := setIniValues("type=playfile\nfile_amount_digits="+fileDigits, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
 	info, err := cfg.y.dir(ext)
 	if err != nil {
 		return failed(st, ext, "הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
@@ -803,10 +846,14 @@ func isSystemFile(name string) bool {
 	return strings.HasSuffix(strings.ToLower(name), ".ymgr")
 }
 
-// isBridgeFile: קבצים שהגשר עצמו יוצר בשלוחה — ext.ini ו-NNN.tts.
+// isBridgeFile: קבצים שהגשר עצמו יוצר בשלוחה — ext.ini, NNN.tts (המבנה הקודם),
+// קבצי הארכיון (NNNNN.tts / NNNNN.wav) והאינדקס שלו.
 func isBridgeFile(name string) bool {
 	n := strings.ToLower(name)
-	if n == "ext.ini" {
+	if n == "ext.ini" || n == archiveIndex {
+		return true
+	}
+	if fileNum(n) >= 0 {
 		return true
 	}
 	if len(n) == 7 && strings.HasSuffix(n, ".tts") {
@@ -829,7 +876,7 @@ func isBridgeIni(ini string) bool {
 		case t == "":
 		case t == "type=playfile":
 			sawType = true
-		case strings.HasPrefix(t, "voice="), strings.HasPrefix(t, "rate="):
+		case strings.HasPrefix(t, "voice="), strings.HasPrefix(t, "rate="), strings.HasPrefix(t, "file_amount_digits="):
 		default:
 			return false
 		}
@@ -898,6 +945,14 @@ func diagnoseRoot(y *yemot) {
 			log.Println("אבחון: בשלוחה הראשית מוגדר menu_voice — המערכת מקריאה אותו במקום הקובץ M1000.tts.")
 		}
 	}
+}
+
+// aclHint: כשהשגיאה היא הרשאה חסרה במפתח — איזו הרשאה להוסיף.
+func aclHint(err error, method string) string {
+	if err != nil && strings.Contains(err.Error(), "ACL") {
+		return " — צריך להוסיף /api/" + method + " לרשימת ההרשאות של המפתח באתר ימות המשיח"
+	}
+	return ""
 }
 
 // updatesOf: "עדכוני אלישע ירד" — אבל ערוץ שנקרא כבר "עדכוני השומרון" לא

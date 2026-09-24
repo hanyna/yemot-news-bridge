@@ -172,15 +172,41 @@ var months = [...]string{"", "בינואר", "בפברואר", "במרץ", "בא
 // spokenWhen מנסח מתי נשלחה ההודעה, יחסית לעכשיו (בשעון ישראל):
 // "בשעה 8 ו 5 דקות בלילה" / "אתמול בשעה ..." / "ביום שני בשעה ..." / "ב 3 בספטמבר בשעה ...".
 func spokenWhen(t, now time.Time) string {
-	clock := spokenClock(t)
+	return whenText(t, whenClass(t, now))
+}
+
+// ניסוח הזמן תלוי רק במרחק בימים — ומשתנה שלוש פעמים בחיי הודעה:
+// היום (0) ← אתמול (1) ← ביום שני (2, עד 6 ימים) ← תאריך (7, מכאן והלאה קבוע).
+const (
+	whenToday     = 0
+	whenYesterday = 1
+	whenThisWeek  = 2
+	whenDate      = 7
+)
+
+func whenClass(t, now time.Time) int {
 	day := func(x time.Time) time.Time { return time.Date(x.Year(), x.Month(), x.Day(), 0, 0, 0, 0, x.Location()) }
 	days := int(day(now).Sub(day(t)).Hours()/24 + 0.5)
 	switch {
 	case days <= 0:
-		return clock
+		return whenToday
 	case days == 1:
-		return "אתמול " + clock
+		return whenYesterday
 	case days < 7:
+		return whenThisWeek
+	default:
+		return whenDate
+	}
+}
+
+func whenText(t time.Time, class int) string {
+	clock := spokenClock(t)
+	switch class {
+	case whenToday:
+		return clock
+	case whenYesterday:
+		return "אתמול " + clock
+	case whenThisWeek:
 		return "ביום " + weekdays[t.Weekday()] + " " + clock
 	default:
 		return fmt.Sprintf("ב %d %s %s", t.Day(), months[t.Month()], clock)

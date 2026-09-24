@@ -2,9 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -95,8 +101,14 @@ type fakeYemotServer struct {
 	uploads     []string
 	items       []FeedItem
 	channels    string
-	getText     bool // האם GetTextFile מורשה
-	noUpdateExt bool // UpdateExtension נדחה (אין הרשאה)
+	getText     bool         // האם GetTextFile מורשה
+	noUpdateExt bool         // UpdateExtension נדחה (אין הרשאה)
+	noUpload    bool         // UploadFile נדחה (אין הרשאה)
+	media404    map[int]bool // /api/media: הודעות שהשרת לא נותן ("Media is too big")
+	mediaHits   int
+	failWhat    map[string]bool // UploadTextFile לנתיבים האלה נכשל
+	failRead    map[string]bool // GetTextFile לנתיבים האלה נכשל (תקלה זמנית)
+	failText    string          // UploadTextFile של תוכן שמכיל את זה — נכשל
 }
 
 func splitWhat(what string) (dir, name string) {
@@ -140,8 +152,48 @@ func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"items": f.items})
 	case r.URL.Path == "/api/channels":
 		w.Write([]byte(f.channels))
+	case r.URL.Path == "/api/media":
+		f.mediaHits++
+		id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+		if f.media404[id] || r.URL.Query().Get("k") == "" {
+			http.Error(w, "unavailable", http.StatusNotFound)
+			return
+		}
+		w.Write([]byte("VIDEO-" + r.URL.Query().Get("channel") + "-" + strconv.Itoa(id)))
+	case strings.HasPrefix(r.URL.Path, "/voice/"):
+		f.mediaHits++
+		w.Write([]byte("VOICE-" + strings.TrimPrefix(r.URL.Path, "/voice/")))
+	case strings.HasSuffix(r.URL.Path, "UploadFile"):
+		if f.noUpload {
+			w.Write([]byte(`{"responseStatus":"FORBIDDEN","message":"API_KEY_ACL_REJECT"}`))
+			return
+		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		what := r.FormValue("path")
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			w.Write([]byte(`{"responseStatus":"ERROR","message":"no file"}`))
+			return
+		}
+		data, _ := io.ReadAll(file)
+		f.uploads = append(f.uploads, "UploadFile:"+what)
+		dir, name := splitWhat(what)
+		if _, exists := f.dirs[dir]; !exists {
+			ok(nil)
+			return
+		}
+		f.files[what] = "AUDIO:" + string(data) + ";convert=" + r.FormValue("convertAudio")
+		f.addName(dir, name)
+		ok(map[string]any{"path": what})
 	case strings.HasSuffix(r.URL.Path, "UploadTextFile"):
 		what := r.PostForm.Get("what")
+		if f.failWhat[what] || (f.failText != "" && strings.Contains(r.PostForm.Get("contents"), f.failText)) {
+			w.Write([]byte(`{"responseStatus":"ERROR","message":"upload failed"}`))
+			return
+		}
 		f.uploads = append(f.uploads, what)
 		dir, name := splitWhat(what)
 		if _, exists := f.dirs[dir]; !exists {
@@ -173,6 +225,10 @@ func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "GetTextFile"):
 		if !f.getText {
 			w.Write([]byte(`{"responseStatus":"FORBIDDEN","message":"API_KEY_ACL_REJECT"}`))
+			return
+		}
+		if f.failRead[r.PostForm.Get("what")] {
+			w.Write([]byte(`{"responseStatus":"ERROR","message":"server busy"}`))
 			return
 		}
 		c, found := f.files[r.PostForm.Get("what")]
@@ -253,7 +309,7 @@ func (f *fakeYemotServer) has(dir, name string) bool {
 func newTestCfg(srv *httptest.Server) config {
 	yemotBase = srv.URL + "/ym/api/"
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
-	return config{feedURL: srv.URL + "/api/messages", feedKey: "k", ext: "1", maxMsgs: 10, perChan: 5,
+	return config{feedURL: srv.URL + "/api/messages", feedKey: "k", ext: "1",
 		channelExts: true, loc: loc, y: &yemot{client: srv.Client(), apiKey: "KEY"}, client: srv.Client(), feedClient: srv.Client()}
 }
 
@@ -272,8 +328,8 @@ func TestNewMenuStructure(t *testing.T) {
 			"ivr2:/6": {"ext.ini", "001.tts"},
 		},
 		items: []FeedItem{
-			{Channel: "elisha_yered", TS: now - 120, Text: "ראשונה מאלישע ביו״ש"},
-			{Channel: "hakol", TS: now - 60, Text: "מהקול"},
+			{ID: 11, Channel: "elisha_yered", TS: now - 120, Text: "ראשונה מאלישע ביו״ש"},
+			{ID: 22, Channel: "hakol", TS: now - 60, Text: "מהקול"},
 		},
 		channels: `{"channels":[{"name":"elisha_yered","title":"אלישע ירד"},{"name":"hakol","title":"הקול היהודי"}]}`,
 	}
@@ -287,9 +343,15 @@ func TestNewMenuStructure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fl := f.files
-	// שלוחה 1: כל העדכונים, החדשה במספר הגבוה.
-	if !strings.HasPrefix(fl["ivr2:/1/002.tts"], "הקול היהודי, ") || !strings.Contains(fl["ivr2:/1/001.tts"], "ביהודה ושומרון") {
-		t.Fatalf("ext1: %q | %q", fl["ivr2:/1/001.tts"], fl["ivr2:/1/002.tts"])
+	// שלוחה 1: ארכיון קבוע — הישנה ב-10001, החדשה ב-10003 (מספר גבוה = נשמעת ראשונה).
+	if !strings.HasPrefix(fl["ivr2:/1/10003.tts"], "הקול היהודי, ") || !strings.Contains(fl["ivr2:/1/10001.tts"], "ביהודה ושומרון") {
+		t.Fatalf("ext1: %q | %q", fl["ivr2:/1/10001.tts"], fl["ivr2:/1/10003.tts"])
+	}
+	if f.has("ivr2:/1", "001.tts") {
+		t.Fatal("positional file from the old structure left in ext 1")
+	}
+	if !strings.Contains(fl["ivr2:/1/ext.ini"], "file_amount_digits=5") || !strings.Contains(fl["ivr2:/1/archive.txt"], "next=10004") {
+		t.Fatalf("ext1 ini/index: %q | %q", fl["ivr2:/1/ext.ini"], fl["ivr2:/1/archive.txt"])
 	}
 	// שלוחה 2: תפריט בחירת כתב, והכתבים ב-2/1, 2/2.
 	if fl["ivr2:/2/ext.ini"] != "type=menu\ndigits=1" {
@@ -298,11 +360,15 @@ func TestNewMenuStructure(t *testing.T) {
 	if fl["ivr2:/2/M1000.tts"] != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2." {
 		t.Fatalf("chooser: %q", fl["ivr2:/2/M1000.tts"])
 	}
-	if fl["ivr2:/2/1/ext.ini"] != "type=playfile" || !strings.HasPrefix(fl["ivr2:/2/1/001.tts"], "עדכוני אלישע ירד. ") {
-		t.Fatalf("2/1: %q %q", fl["ivr2:/2/1/ext.ini"], fl["ivr2:/2/1/001.tts"])
+	if fl["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/2/1/99999.tts"] != "עדכוני אלישע ירד." ||
+		!strings.Contains(fl["ivr2:/2/1/10001.tts"], "ביהודה ושומרון") || strings.HasPrefix(fl["ivr2:/2/1/10001.tts"], "אלישע ירד") {
+		t.Fatalf("2/1: %q %q %q", fl["ivr2:/2/1/ext.ini"], fl["ivr2:/2/1/99999.tts"], fl["ivr2:/2/1/10001.tts"])
 	}
-	if !strings.HasPrefix(fl["ivr2:/2/2/001.tts"], "עדכוני הקול היהודי. ") {
-		t.Fatalf("2/2: %q", fl["ivr2:/2/2/001.tts"])
+	if fl["ivr2:/2/2/99999.tts"] != "עדכוני הקול היהודי." || !strings.HasSuffix(fl["ivr2:/2/2/10001.tts"], "מהקול") {
+		t.Fatalf("2/2: %q %q", fl["ivr2:/2/2/99999.tts"], fl["ivr2:/2/2/10001.tts"])
+	}
+	if !strings.Contains(fl["ivr2:/2/1/archive.txt"], "channel=elisha_yered") {
+		t.Fatalf("2/1 index: %q", fl["ivr2:/2/1/archive.txt"])
 	}
 	if f.has("ivr2:/2", "001.tts") || f.has("ivr2:/2", "002.tts") {
 		t.Fatalf("stale TTS left in ext 2 (now a menu): %v", f.dirs["ivr2:/2"])
@@ -351,7 +417,7 @@ func TestNewMenuStructure(t *testing.T) {
 }
 
 func TestListExt(t *testing.T) {
-	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/8": {"ext.ini", "001.tts"}},
+	f := &fakeYemotServer{getText: true, files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/8": {"ext.ini", "001.tts"}},
 		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
@@ -374,7 +440,7 @@ func TestListExt(t *testing.T) {
 }
 
 func TestCallbackExt(t *testing.T) {
-	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/8": {}},
+	f := &fakeYemotServer{getText: true, files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/8": {}},
 		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
@@ -483,7 +549,7 @@ func TestKeyNotInErrors(t *testing.T) {
 }
 
 func TestAdminRegisterExt(t *testing.T) {
-	f := &fakeYemotServer{files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/7": {"ext.ini", "001.tts"}},
+	f := &fakeYemotServer{getText: true, files: map[string]string{}, dirs: map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/7": {"ext.ini", "001.tts"}},
 		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
@@ -541,8 +607,9 @@ func TestCreatesMissingSubExtensions(t *testing.T) {
 			t.Errorf("extension %s was not created", ext)
 		}
 	}
-	if f.files["ivr2:/2/3/ext.ini"] != "type=playfile" || !strings.HasPrefix(f.files["ivr2:/2/3/001.tts"], "עדכוני השומרון. ") {
-		t.Errorf("2/3: %q %q", f.files["ivr2:/2/3/ext.ini"], f.files["ivr2:/2/3/001.tts"])
+	if f.files["ivr2:/2/3/ext.ini"] != "type=playfile\nfile_amount_digits=5" || f.files["ivr2:/2/3/99999.tts"] != "עדכוני השומרון." ||
+		!strings.HasSuffix(f.files["ivr2:/2/3/10001.tts"], "שלישית") {
+		t.Errorf("2/3: %q %q %q", f.files["ivr2:/2/3/ext.ini"], f.files["ivr2:/2/3/99999.tts"], f.files["ivr2:/2/3/10001.tts"])
 	}
 	if got := f.files["ivr2:/2/M1000.tts"]; got != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2. לעדכוני השומרון הקישו 3." {
 		t.Errorf("chooser: %q", got)
@@ -610,7 +677,807 @@ func TestSubExtWithoutIni(t *testing.T) {
 	if err := syncOnce(&cfg, &state{}); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/2/1/ext.ini"] != "type=playfile" {
+	if f.files["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" {
 		t.Fatalf("2/1 ext.ini: %q", f.files["ivr2:/2/1/ext.ini"])
+	}
+}
+
+// ---------- ארכיון קבוע ----------
+
+func archiveServer(items []FeedItem, channels string) *fakeYemotServer {
+	return &fakeYemotServer{getText: true, files: map[string]string{}, dirs: realAccount(), items: items, channels: channels}
+}
+
+// TestArchiveKeepsOldMessages: הודעה שיוצאת מהשרת נשארת בקו, והודעה חדשה
+// מקבלת את המספר הבא — בלי להעלות מחדש את הקודמות (גם אחרי הפעלה מחדש).
+func TestArchiveKeepsOldMessages(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 300, Text: "הודעה ראשונה ארוכה מספיק כדי שלא תיחשב כפולה של השנייה בשום מצב"},
+		{ID: 2, Channel: "a", TS: now - 200, Text: "הודעה שנייה"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "בשום מצב") || !strings.HasSuffix(f.files["ivr2:/1/10003.tts"], "הודעה שנייה") {
+		t.Fatalf("import: %q | %q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10003.tts"])
+	}
+	if f.has("ivr2:/1", "001.tts") || f.has("ivr2:/2/1", "001.tts") {
+		t.Fatal("old positional files not removed")
+	}
+	// הפעלה חדשה: הראשונה כבר לא בשרת, ויש חדשה.
+	f.items = []FeedItem{f.items[1], {ID: 3, Channel: "a", TS: now - 10, Text: "הודעה שלישית"}}
+	f.uploads = nil
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "בשום מצב") {
+		t.Fatal("old message removed from the line")
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10005.tts"], "הודעה שלישית") || !strings.HasSuffix(f.files["ivr2:/2/1/10005.tts"], "הודעה שלישית") {
+		t.Fatalf("new message: %q | %q", f.files["ivr2:/1/10005.tts"], f.files["ivr2:/2/1/10005.tts"])
+	}
+	for _, u := range f.uploads {
+		if strings.HasSuffix(u, "10001.tts") || strings.HasSuffix(u, "10003.tts") {
+			t.Fatalf("re-uploaded an archived message: %v", f.uploads)
+		}
+	}
+}
+
+// TestArchiveRerenderYesterday: אחרי חצות "בשעה X" הופך ל"אתמול בשעה X" — גם
+// להודעה שכבר לא בשרת (הגוף נלקח מהקובץ שבשלוחה).
+func TestArchiveRerenderYesterday(t *testing.T) {
+	defer func() { nowFunc = time.Now }()
+	loc, _ := time.LoadLocation("Asia/Jerusalem")
+	day := time.Date(2026, 9, 24, 20, 0, 0, 0, loc)
+	nowFunc = func() time.Time { return day }
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: day.Add(-2 * time.Hour).Unix(), Text: "נשארת בשרת"},
+		{ID: 2, Channel: "a", TS: day.Add(-time.Hour).Unix(), Text: "יוצאת מהשרת"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10003.tts"] != "אלישע ירד, בשעה 7 בערב. יוצאת מהשרת" {
+		t.Fatalf("today: %q", f.files["ivr2:/1/10003.tts"])
+	}
+	f.items = f.items[:1]
+	nowFunc = func() time.Time { return day.Add(6 * time.Hour) } // 2 בלילה, למחרת
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, אתמול בשעה 6 בערב. נשארת בשרת" ||
+		f.files["ivr2:/1/10003.tts"] != "אלישע ירד, אתמול בשעה 7 בערב. יוצאת מהשרת" ||
+		f.files["ivr2:/2/1/10003.tts"] != "אתמול בשעה 7 בערב. יוצאת מהשרת" {
+		t.Fatalf("yesterday: %q | %q | %q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10003.tts"], f.files["ivr2:/2/1/10003.tts"])
+	}
+	// שבוע אחר כך — תאריך (ומכאן כבר לא משתנה).
+	nowFunc = func() time.Time { return day.Add(8 * 24 * time.Hour) }
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10003.tts"] != "אלישע ירד, ב 24 בספטמבר בשעה 7 בערב. יוצאת מהשרת" {
+		t.Fatalf("date: %q", f.files["ivr2:/1/10003.tts"])
+	}
+}
+
+// TestArchiveDedupe: הודעה שהועברה בערוץ אחר לא נכנסת שוב לשלוחה 1 (גם אם
+// ההעברה הגיעה קודם), אבל כן לשלוחה של הערוץ שהעביר.
+func TestArchiveDedupe(t *testing.T) {
+	now := time.Now().Unix()
+	long := "הודעה חשובה מאוד על אירוע ביטחוני בצומת הגדול ליד היישוב"
+	f := archiveServer([]FeedItem{{ID: 9, Channel: "b", TS: now - 100, Text: long + " הועבר"}},
+		`{"channels":[{"name":"a","title":"אלישע ירד"},{"name":"b","title":"הקול היהודי"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	// המקור (מוקדם יותר) מגיע רק עכשיו.
+	f.items = append(f.items, FeedItem{ID: 1, Channel: "a", TS: now - 200, Text: long})
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.has("ivr2:/1", "10003.tts") {
+		t.Fatalf("duplicate archived in ext 1: %q", f.files["ivr2:/1/10003.tts"])
+	}
+	if !strings.HasSuffix(f.files["ivr2:/2/1/10001.tts"], long) || !strings.HasSuffix(f.files["ivr2:/2/2/10001.tts"], "הועבר") {
+		t.Fatalf("reporter exts: %q | %q", f.files["ivr2:/2/1/10001.tts"], f.files["ivr2:/2/2/10001.tts"])
+	}
+	// ההעברה יצאה מהשרת (והמקור נשאר) — המקור עדיין לא נכנס שוב לשלוחה 1.
+	f.items = f.items[1:]
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.has("ivr2:/1", "10003.tts") {
+		t.Fatalf("duplicate archived after the forward left the server: %q", f.files["ivr2:/1/10003.tts"])
+	}
+}
+
+// TestArchiveIndexLost: אם archive.txt נמחק — לא מייבאים שוב (כפילויות),
+// ממשיכים אחרי הקובץ האחרון.
+func TestArchiveIndexLost(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 100, Text: "ישנה"}}, `{"channels":[]}`)
+	f.dirs["ivr2:/1"] = []string{"ext.ini", "10000.wav", "10001.tts", "10003.tts"}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.has("ivr2:/1", "10005.tts") {
+		t.Fatal("re-imported messages already on the line")
+	}
+	f.items = append(f.items, FeedItem{ID: 2, Channel: "a", TS: now + 5, Text: "חדשה"})
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10005.tts"], "חדשה") {
+		t.Fatalf("new message after recovery: %v", f.dirs["ivr2:/1"])
+	}
+}
+
+// TestReporterMappingStable: שינוי בסדר הערוצים לא מעביר ארכיון של כתב לשלוחה אחרת.
+func TestReporterMappingStable(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 100, Text: "של א"}, {ID: 2, Channel: "b", TS: now - 90, Text: "של ב"}},
+		`{"channels":[{"name":"a","title":"אלישע ירד"},{"name":"b","title":"הקול היהודי"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	f.channels = `{"channels":[{"name":"c","title":"ערוץ חדש"},{"name":"b","title":"הקול היהודי"},{"name":"a","title":"אלישע ירד"}]}`
+	f.items = append(f.items, FeedItem{ID: 3, Channel: "a", TS: now - 5, Text: "עוד של א"})
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/2/1/10003.tts"], "עוד של א") || f.files["ivr2:/2/3/99999.tts"] != "עדכוני ערוץ חדש." {
+		t.Fatalf("mapping moved: 2/1=%q 2/3=%q", f.files["ivr2:/2/1/10003.tts"], f.files["ivr2:/2/3/99999.tts"])
+	}
+	want := "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2. לעדכוני ערוץ חדש הקישו 3."
+	if f.files["ivr2:/2/M1000.tts"] != want {
+		t.Fatalf("chooser: %q", f.files["ivr2:/2/M1000.tts"])
+	}
+}
+
+// ---------- קול של סרטונים והודעות קוליות ----------
+
+func withFakeTranscode(t *testing.T) {
+	oldT, oldF := transcode, haveFFmpeg
+	transcode = func(in, out string, maxSecs int) error {
+		b, err := os.ReadFile(in)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(out, append([]byte("MP3:"), b...), 0o644)
+	}
+	haveFFmpeg = func() bool { return true }
+	t.Cleanup(func() { transcode, haveFFmpeg = oldT, oldF })
+}
+
+func TestAudio(t *testing.T) {
+	withFakeTranscode(t)
+	now := time.Now().Unix()
+	f := archiveServer(nil, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	video := `<article class="msg"><div class="msgtext">צפו בתיעוד</div><div class="photo"><div class="vidwrap"><video src="/api/media?channel=a&amp;id=2" controls preload="none" playsinline></video><span class="durbadge durtop">1:05</span></div></div></article>`
+	voice := `<article class="msg"><div class="voicebox"><span class="voiceico">🎤</span><audio controls preload="none" src="` + srv.URL + `/voice/3.ogg"></audio><span class="voicedur">0:39</span></div></article>`
+	gif := `<article class="msg"><div class="photo"><div class="vidwrap"><video class="gifvid" src="x" muted loop playsinline preload="none"></video></div></div></article>`
+	big := `<article class="msg"><div class="msgtext">סרטון שטלגרם לא נותנים</div><div class="photo"><div class="vidwrap"><video src="/api/media?channel=a&amp;id=5" controls></video><span class="durbadge durtop">3:00</span></div></div></article>`
+	long := `<article class="msg"><div class="msgtext">נאום ארוך</div><div class="photo"><div class="vidwrap"><video src="/api/media?channel=a&amp;id=6" controls></video><span class="durbadge durtop">1:30:00</span></div></div></article>`
+	f.items = []FeedItem{
+		{ID: 1, Channel: "a", TS: now - 300, Text: "רק טקסט"},
+		{ID: 2, Channel: "a", TS: now - 200, Text: "צפו בתיעוד", HTML: video},
+		{ID: 3, Channel: "a", TS: now - 100, Text: "", HTML: voice},
+		{ID: 4, Channel: "a", TS: now - 50, Text: "", HTML: gif},
+		{ID: 5, Channel: "a", TS: now - 40, Text: "סרטון שטלגרם לא נותנים", HTML: big},
+		{ID: 6, Channel: "a", TS: now - 30, Text: "נאום ארוך", HTML: long},
+	}
+	f.media404 = map[int]bool{5: true}
+	defer func(b []time.Duration) { retryBackoff = b }(retryBackoff)
+	retryBackoff = []time.Duration{0, 0, 0} // הסרטון שלא זמין — כל הניסיונות מיד
+	cfg := newTestCfg(srv)
+	cfg.audio, cfg.audioMax = true, 20*60
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	// ההקראה של הסרטון, והקול שלו מיד אחריה (מספר נמוך באחד = נשמע אחריה).
+	if !strings.HasSuffix(f.files["ivr2:/1/10003.tts"], "צפו בתיעוד. מצורף להודעה: סרטון באורך דקה ו 5 שניות") {
+		t.Fatalf("video intro: %q", f.files["ivr2:/1/10003.tts"])
+	}
+	for _, p := range []string{"ivr2:/1/10002.wav", "ivr2:/2/1/10002.wav"} {
+		if f.files[p] != "AUDIO:MP3:VIDEO-a-2;convert=1" {
+			t.Fatalf("%s: %q", p, f.files[p])
+		}
+	}
+	if f.files["ivr2:/1/10004.wav"] != "AUDIO:MP3:VOICE-3.ogg;convert=1" {
+		t.Fatalf("voice: %q", f.files["ivr2:/1/10004.wav"])
+	}
+	if f.has("ivr2:/1", "10006.wav") || f.has("ivr2:/1", "10008.wav") || f.has("ivr2:/1", "10010.wav") {
+		t.Fatalf("audio for gif / unavailable / too long: %v", f.dirs["ivr2:/1"])
+	}
+	if f.mediaHits != 6 { // סרטון, קולית, והסרטון שלא זמין (4 ניסיונות). הארוך — לא מורידים בכלל.
+		t.Fatalf("downloads: %d", f.mediaHits)
+	}
+	idx := f.files["ivr2:/1/archive.txt"]
+	// שורה באינדקס: e <מפתח> <מספר> <זמן> <ניסוח> <קול: 2=עלה, 3=לא זמין> <סוג>
+	for _, want := range []*regexp.Regexp{
+		regexp.MustCompile(`(?m)^e a/2 10002 \d+ 0 2 v$`),
+		regexp.MustCompile(`(?m)^e a/3 10004 \d+ 0 2 o$`),
+		regexp.MustCompile(`(?m)^e a/4 10006 \d+ 0 0 -$`), // GIF — אין קול
+		regexp.MustCompile(`(?m)^e a/5 10008 \d+ 0 3 v$`),
+		regexp.MustCompile(`(?m)^e a/6 10010 \d+ 0 3 v$`),
+	} {
+		if !want.MatchString(idx) {
+			t.Fatalf("index missing %v:\n%s", want, idx)
+		}
+	}
+}
+
+// TestAudioNoPermission: בלי הרשאה ל-UploadFile — ההקראה עולה, הקול ממתין
+// (לא מוותרים עליו), ונרשמת הודעה ברורה.
+func TestAudioNoPermission(t *testing.T) {
+	withFakeTranscode(t)
+	now := time.Now().Unix()
+	video := `<div class="msgtext">תיעוד</div><div class="photo"><div class="vidwrap"><video src="/api/media?channel=a&amp;id=2" controls></video><span class="durbadge durtop">0:20</span></div></div>`
+	f := archiveServer([]FeedItem{{ID: 2, Channel: "a", TS: now - 20, Text: "תיעוד", HTML: video}}, `{"channels":[]}`)
+	f.noUpload = true
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.audio = true
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "תיעוד. מצורף להודעה: סרטון באורך 20 שניות") {
+		t.Fatalf("intro: %q", f.files["ivr2:/1/10001.tts"])
+	}
+	if !st.aw.warnedFor("UploadFile") || st.aw.pending() != 1 || !strings.Contains(f.files["ivr2:/1/archive.txt"], "e a/2 10000 ") {
+		t.Fatalf("warned=%v queue=%d index=%q", st.aw.warnedFor("UploadFile"), st.aw.pending(), f.files["ivr2:/1/archive.txt"])
+	}
+	if f.mediaHits != 0 {
+		t.Fatalf("downloaded without upload permission: %d", f.mediaHits)
+	}
+	// ההרשאה נוספה; הפעלה חדשה מעלה את הקול שממתין (הסרטון כבר לא בשרת — השרת מוצא אותו לפי מזהה).
+	f.noUpload, f.items = false, nil
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10000.wav"] != "AUDIO:MP3:VIDEO-a-2;convert=1" {
+		t.Fatalf("pending audio after restart: %q", f.files["ivr2:/1/10000.wav"])
+	}
+}
+
+// TestArchiveNeedsReadPermission: בלי הרשאה ל-GetTextFile הארכיון לא יכול לדעת
+// מה כבר בשלוחה — הסבב נכשל עם הסבר, אבל התפריטים ממשיכים להתעדכן.
+func TestArchiveNeedsReadPermission(t *testing.T) {
+	f := &fakeYemotServer{files: map[string]string{}, dirs: realAccount(),
+		items: []FeedItem{{ID: 1, Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	err := syncOnce(&cfg, &state{})
+	if err == nil || !strings.Contains(err.Error(), "/api/GetTextFile") {
+		t.Fatalf("want a GetTextFile permission error, got %v", err)
+	}
+	if !strings.Contains(f.files["ivr2:/M1000.tts"], "ברוכים הבאים") {
+		t.Fatal("welcome menu not maintained when the archive failed")
+	}
+}
+
+// TestAudioBackground: ה-worker ברקע, כמו בהפעלה האמיתית — ההקראה עולה בסבב,
+// הקול מצטרף ברקע (הורדה אחת לשתי השלוחות), ונרשם באינדקס בסבב שאחריו.
+func TestAudioBackground(t *testing.T) {
+	withFakeTranscode(t)
+	now := time.Now().Unix()
+	video := `<div class="msgtext">תיעוד</div><div class="photo"><div class="vidwrap"><video src="/api/media?channel=a&amp;id=2" controls></video><span class="durbadge durtop">0:20</span></div></div>`
+	f := archiveServer([]FeedItem{{ID: 2, Channel: "a", TS: now - 20, Text: "תיעוד", HTML: video}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.audio = true
+	st := &state{}
+	st.ensureMaps()
+	st.aw.start(&cfg)
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "סרטון באורך 20 שניות") {
+		t.Fatalf("intro: %q", f.files["ivr2:/1/10001.tts"])
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st.aw.mu.Lock()
+		n := len(st.aw.results)
+		st.aw.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background worker did not finish")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range []string{"ivr2:/1/10000.wav", "ivr2:/2/1/10000.wav"} {
+		if f.files[p] != "AUDIO:MP3:VIDEO-a-2;convert=1" {
+			t.Fatalf("%s: %q", p, f.files[p])
+		}
+	}
+	if f.mediaHits != 1 {
+		t.Fatalf("one download for both extensions, got %d", f.mediaHits)
+	}
+	for _, idx := range []string{f.files["ivr2:/1/archive.txt"], f.files["ivr2:/2/1/archive.txt"]} {
+		if !regexp.MustCompile(`(?m)^e a/2 10000 \d+ 0 2 v$`).MatchString(idx) {
+			t.Fatalf("audio not recorded as done:\n%s", idx)
+		}
+	}
+}
+
+// TestArchiveQuietChannel: ערוץ שקט — ההודעה האחרונה שלו נשארת בשרת ימים
+// רבים. היא לא נכנסת שוב לשום שלוחה, גם אחרי שהיא יוצאת מהאינדקס של שלוחה 1.
+func TestArchiveQuietChannel(t *testing.T) {
+	defer func() { nowFunc = time.Now }()
+	loc, _ := time.LoadLocation("Asia/Jerusalem")
+	day := time.Date(2026, 9, 1, 12, 0, 0, 0, loc)
+	nowFunc = func() time.Time { return day }
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: day.Add(-time.Hour).Unix(), Text: "ההודעה האחרונה של הערוץ השקט"},
+		{ID: 1, Channel: "b", TS: day.Add(-30 * time.Minute).Unix(), Text: "מהערוץ הפעיל"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"},{"name":"b","title":"הקול היהודי"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	// 10 ימים: הערוץ הפעיל מפרסם כל יום, השקט לא. כל יום — הפעלה חדשה.
+	for d := 1; d <= 10; d++ {
+		now := day.Add(time.Duration(d) * 24 * time.Hour)
+		nowFunc = func() time.Time { return now }
+		f.items = append(f.items, FeedItem{ID: 1 + d, Channel: "b", TS: now.Add(-time.Minute).Unix(), Text: fmt.Sprintf("עדכון יומי %d", d)})
+		if err := syncOnce(&cfg, &state{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quiet := 0
+	for p, c := range f.files {
+		if strings.HasSuffix(p, ".tts") && strings.Contains(c, "הערוץ השקט") {
+			quiet++
+		}
+	}
+	if quiet != 2 { // פעם אחת בשלוחה 1, ופעם אחת בשלוחת הכתב
+		t.Fatalf("quiet channel's post archived %d times (want 2)", quiet)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10023.tts"], "עדכון יומי 10") || f.has("ivr2:/1", "10025.tts") {
+		t.Fatalf("ext 1 after 10 days: %v", f.dirs["ivr2:/1"])
+	}
+	// שלוחה 1: ההודעה יצאה מהאינדקס (ישנה, וחדשות אחריה). שלוחת הכתב השקט: נשארת.
+	if strings.Contains(f.files["ivr2:/1/archive.txt"], "e a/1 ") || !strings.Contains(f.files["ivr2:/2/1/archive.txt"], "e a/1 ") {
+		t.Fatalf("index pruning:\n%s\n---\n%s", f.files["ivr2:/1/archive.txt"], f.files["ivr2:/2/1/archive.txt"])
+	}
+}
+
+// TestArchivePrune: הודעה יוצאת מהאינדקס רק כשהיא ישנה מ-9 ימים וגם מכוסה בכלל
+// "ישנה ביותר מ-12 שעות מהחדשה שבארכיון" — אחרת (ערוץ שקט) היא הייתה נכנסת שוב.
+// הודעה שהקול שלה ממתין — נשארת.
+func TestArchivePrune(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-10 * 24 * time.Hour).Unix()
+	post := FeedItem{ID: 1, Channel: "a", TS: old}
+	mk := func(last int64, audio int) *archive {
+		return &archive{last: last, entries: map[string]*archEntry{"a/1": {key: "a/1", base: 10000, ts: old, audio: audio}}}
+	}
+	quiet := mk(old, audioNone)
+	quiet.encode(now)
+	if _, kept := quiet.entries["a/1"]; !kept || !quiet.has(post, now) {
+		t.Fatal("quiet channel's last post pruned — it would be imported again")
+	}
+	busy := mk(now.Unix(), audioNone)
+	busy.encode(now)
+	if _, kept := busy.entries["a/1"]; kept {
+		t.Fatal("old entry kept in a busy archive")
+	}
+	if !busy.has(post, now) || !busy.has(post, now.Add(30*24*time.Hour)) {
+		t.Fatal("pruned post not recognized as already archived")
+	}
+	// הודעה שמגיעה באיחור של כמה שעות (ערוץ שנחסם זמנית) — עדיין נכנסת.
+	if busy.has(FeedItem{ID: 9, Channel: "b", TS: now.Add(-20 * time.Hour).Unix()}, now) {
+		t.Fatal("a late post (20 hours) would be dropped")
+	}
+	waiting := mk(now.Unix(), audioPending)
+	waiting.encode(now)
+	if _, kept := waiting.entries["a/1"]; !kept {
+		t.Fatal("entry with pending audio pruned")
+	}
+}
+
+// TestArchiveIndexFormat: האינדקס נקרא בחזרה בדיוק כמו שנכתב — וגם אם הרווחים
+// הפכו בדרך לטאבים או לכמה רווחים.
+func TestArchiveIndexFormat(t *testing.T) {
+	now := time.Now()
+	a := &archive{next: 10006, last: now.Unix(), cutoff: now.Unix() - 99, channel: "elisha_yered", entries: map[string]*archEntry{
+		"elisha_yered/5": {key: "elisha_yered/5", base: 10000, ts: now.Unix() - 60, class: 1, audio: audioDone, media: "v"},
+		"elisha_yered/7": {key: "elisha_yered/7", base: 10002, ts: now.Unix(), class: 0, audio: audioNone},
+		"elisha_yered/6": {key: "elisha_yered/6", base: -1, ts: now.Unix() - 30},
+	}}
+	txt := a.encode(now)
+	for _, variant := range []string{txt, strings.ReplaceAll(txt, " ", "\t"), strings.ReplaceAll(txt, " ", "   ")} {
+		f := parseArchive(variant)
+		if f.next != a.next || f.last != a.last || f.cutoff != a.cutoff || len(f.entries) != 3 {
+			t.Fatalf("header/entries lost:\n%s\n%+v", variant, f)
+		}
+		if f.channel != "elisha_yered" {
+			t.Fatalf("channel: %q", f.channel)
+		}
+		for k, want := range a.entries {
+			if got := f.entries[k]; got == nil || *got != *want {
+				t.Fatalf("%s: got %+v want %+v\n%s", k, got, want, variant)
+			}
+		}
+	}
+}
+
+// TestAudioWorkerQueue: עבודה לא מתחילה לפני סוף הסבב (כדי שכל השלוחות של
+// אותה הודעה יקבלו הורדה אחת); החדשה קודם; בין סרטון לסרטון יש הפסקה, והודעה
+// קולית לא מחכה לה.
+func TestAudioWorkerQueue(t *testing.T) {
+	defer func(g time.Duration) { videoGap = g }(videoGap)
+	videoGap = time.Hour
+	w := newAudioWorker()
+	w.add(&audioJob{key: "a/1", kind: "v", ts: 1}, audioTarget{"1", 10000})
+	if j, _ := w.next(false); j != nil {
+		t.Fatal("job started before the cycle ended")
+	}
+	w.add(&audioJob{key: "a/1", kind: "v", ts: 1}, audioTarget{"2/1", 10000})
+	w.add(&audioJob{key: "a/2", kind: "o", ts: 2}, audioTarget{"1", 10002})
+	w.add(&audioJob{key: "a/3", kind: "v", ts: 3}, audioTarget{"1", 10004})
+	w.release()
+	j, job := w.next(false)
+	if j == nil || job.key != "a/3" {
+		t.Fatalf("want the newest (a/3) first, got %+v", job)
+	}
+	w.mu.Lock()
+	w.finish(j, audioDone)
+	w.lastVideo = time.Now()
+	w.mu.Unlock()
+	if j, job = w.next(false); j == nil || job.key != "a/2" {
+		t.Fatalf("during the gap between videos want the voice note (a/2), got %+v", job)
+	}
+	w.mu.Lock()
+	w.finish(j, audioDone)
+	w.lastVideo = time.Time{}
+	w.mu.Unlock()
+	if j, job = w.next(false); j == nil || job.key != "a/1" || len(job.targets) != 2 {
+		t.Fatalf("want a/1 with both extensions, got %+v", job)
+	}
+	w.add(&audioJob{key: "a/1", kind: "v", ts: 1}, audioTarget{"2/1", 10000}) // כבר בעבודה שרצה
+	if w.pending() != 1 {
+		t.Fatalf("duplicate job for a running download: %d", w.pending())
+	}
+	w.mu.Lock()
+	w.finish(j, audioDone)
+	res := len(w.results)
+	w.mu.Unlock()
+	if res != 3 || w.pending() != 0 {
+		t.Fatalf("results=%d pending=%d", res, w.pending())
+	}
+}
+
+// TestArchiveTrim: ימות המשיח מרשים עד 3,000 קבצים בשלוחה. כשהשלוחה מלאה, כל
+// הודעה חדשה מוציאה את הישנה ביותר (הודעה שלמה: הקול וההקראה שלו). הכותרת
+// נשארת, והודעה שיצאה לא חוזרת גם אחרי הפעלה מחדש.
+func TestArchiveTrim(t *testing.T) {
+	defer func(m int) { maxArchiveFiles = m }(maxArchiveFiles)
+	maxArchiveFiles = 4
+	f := archiveServer(nil, `{"channels":[]}`)
+	f.dirs["ivr2:/2/1"] = []string{"ext.ini", "10001.tts", "10002.wav", "10003.tts", "10005.tts", "10007.tts", "10009.tts", "99999.tts"}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	a := &archive{ext: "2/1", files: archiveFiles(f.dirs["ivr2:/2/1"])}
+	a.trim(&cfg)
+	if got := strings.Join(f.dirs["ivr2:/2/1"], ","); got != "ext.ini,10005.tts,10007.tts,10009.tts,99999.tts" || len(a.files) != 3 {
+		t.Fatalf("after trim: %s (list %v)", got, a.files)
+	}
+
+	// שלוחה 1 עם גבול של 3 קבצים: הודעה בכל סבב.
+	maxArchiveFiles = 3
+	now := time.Now().Unix()
+	st := &state{}
+	for i := 1; i <= 5; i++ {
+		f.items = append(f.items, FeedItem{ID: i, Channel: "a", TS: now - int64(100-i), Text: fmt.Sprintf("הודעה %d", i)})
+		if err := syncOnce(&cfg, st); err != nil {
+			t.Fatal(err)
+		}
+		got := archiveFiles(f.dirs["ivr2:/1"])
+		var want []string
+		for j := max(1, i-2); j <= i; j++ { // 3 האחרונות
+			want = append(want, fmt.Sprintf("%05d.tts", 10001+2*(j-1)))
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("after message %d: %v, want %v", i, got, want)
+		}
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10009.tts"], "הודעה 5") {
+		t.Fatalf("newest: %q", f.files["ivr2:/1/10009.tts"])
+	}
+	// הפעלה חדשה, וההודעות שיצאו עדיין בשרת של ערוץ חי — לא חוזרות.
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(archiveFiles(f.dirs["ivr2:/1"]), ","); got != "10005.tts,10007.tts,10009.tts" {
+		t.Fatalf("after restart: %s", got)
+	}
+}
+
+// TestSixDigits: אחרי 99990 המספור ממשיך ב-100000 (6 ספרות) — מעל הכותרת 99999,
+// כך שההודעה החדשה עדיין נשמעת ראשונה.
+func TestSixDigits(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 10, Text: "חדשה"}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	f.dirs["ivr2:/1"] = []string{"ext.ini", "99989.tts", "99991.tts"} // 99990/99991 — ההודעה האחרונה בת 5 ספרות
+	f.files["ivr2:/1/ext.ini"] = "type=playfile\nfile_amount_digits=5"
+	f.files["ivr2:/1/archive.txt"] = fmt.Sprintf("next=99992\nlast=%d\ncutoff=%d\n", now-100, now-1000)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/100001.tts"], "חדשה") || !strings.Contains(f.files["ivr2:/1/archive.txt"], "next=100002\n") {
+		t.Fatalf("files %v index %q", f.dirs["ivr2:/1"], f.files["ivr2:/1/archive.txt"])
+	}
+	if fileNum("100001.tts") != 100001 || fileNum("99999.tts") != 99999 || isArchiveNum(99999) || fileNum("1000001.tts") != -1 {
+		t.Fatal("fileNum / isArchiveNum")
+	}
+}
+
+// TestPublishedVerb: "פורסם סרטון", "פורסמה תמונה", "פורסמה הודעה קולית", "פורסמו 2 תמונות".
+func TestPublishedVerb(t *testing.T) {
+	now := time.Now().Unix()
+	items := prepare([]FeedItem{
+		{Channel: "a", TS: now, HTML: `<div class="photo"><img src="a"></div>`},
+		{Channel: "b", TS: now, HTML: `<div class="photo"><div class="album two"><img src="a"><img src="b"></div></div>`},
+		{Channel: "c", TS: now, HTML: `<div class="voicebox"><span class="voiceico">🎤</span><audio controls preload="none" src="x.ogg"></audio></div>`},
+		{Channel: "d", TS: now, HTML: `<div class="photo"><div class="roundwrap"><video class="roundvid" src="/api/media?channel=d&amp;id=1"></video></div></div>`},
+	})
+	want := map[string]string{"a": "פורסמה תמונה", "b": "פורסמו 2 תמונות", "c": "פורסמה הודעה קולית", "d": "פורסם סרטון קצר"}
+	for _, it := range items {
+		if it.Text != want[it.Channel] {
+			t.Errorf("%s: %q, want %q", it.Channel, it.Text, want[it.Channel])
+		}
+		delete(want, it.Channel)
+	}
+	if len(want) > 0 {
+		t.Errorf("missing: %v", want)
+	}
+}
+
+// TestArchiveStaleIndex: הריצה נקטעה אחרי שהודעה עלתה ולפני שהאינדקס נשמר —
+// ממשיכים אחרי הקובץ האחרון שבשלוחה, בלי לדרוס אותו.
+func TestArchiveStaleIndex(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 7, Channel: "a", TS: now - 10, Text: "חדשה"}}, `{"channels":[]}`)
+	f.dirs["ivr2:/1"] = []string{"ext.ini", "10001.tts", "10003.tts"}
+	f.files["ivr2:/1/ext.ini"] = "type=playfile\nfile_amount_digits=5"
+	f.files["ivr2:/1/10003.tts"] = "שמורה"
+	f.files["ivr2:/1/archive.txt"] = fmt.Sprintf("next=10002\nlast=%d\ncutoff=%d\ne a/1 10000 %d 0 0 -\n", now-100, now-1000, now-100)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10003.tts"] != "שמורה" || !strings.HasSuffix(f.files["ivr2:/1/10005.tts"], "חדשה") {
+		t.Fatalf("10003=%q 10005=%q", f.files["ivr2:/1/10003.tts"], f.files["ivr2:/1/10005.tts"])
+	}
+	if !strings.Contains(f.files["ivr2:/1/archive.txt"], "next=10006\n") {
+		t.Fatalf("index: %q", f.files["ivr2:/1/archive.txt"])
+	}
+}
+
+// TestDigitsFailureKeepsOldFiles: כל עוד ההגדרה file_amount_digits=5 לא נכנסה
+// (בלעדיה קבצים בני 5 ספרות לא מושמעים), לא עוברים לארכיון ולא מוחקים את הישנים.
+func TestDigitsFailureKeepsOldFiles(t *testing.T) {
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: time.Now().Unix() - 10, Text: "שלום"}}, `{"channels":[]}`)
+	f.failWhat = map[string]bool{"ivr2:/1/ext.ini": true}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	err := syncOnce(&cfg, st)
+	if err == nil || !strings.Contains(err.Error(), "file_amount_digits") {
+		t.Fatalf("want a file_amount_digits error, got %v", err)
+	}
+	if !f.has("ivr2:/1", "001.tts") || f.has("ivr2:/1", "10001.tts") {
+		t.Fatalf("migrated without file_amount_digits: %v", f.dirs["ivr2:/1"])
+	}
+	f.failWhat = nil
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.has("ivr2:/1", "001.tts") || !f.has("ivr2:/1", "10001.tts") || !strings.Contains(f.files["ivr2:/1/ext.ini"], "file_amount_digits=5") {
+		t.Fatalf("not migrated after the setting went in: %v %q", f.dirs["ivr2:/1"], f.files["ivr2:/1/ext.ini"])
+	}
+}
+
+// TestArchiveOwnerConflict: שלוחה שהארכיון שבה של ערוץ אחר — לא כותבים לתוכה.
+func TestArchiveOwnerConflict(t *testing.T) {
+	f := archiveServer(nil, `{"channels":[]}`)
+	f.dirs["ivr2:/2/1"] = []string{"ext.ini", "10001.tts"}
+	f.files["ivr2:/2/1/archive.txt"] = "next=10002\nlast=0\ncutoff=0\nchannel=b\n"
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if _, err := loadArchive(&cfg, "2/1", "a", false, time.Now()); !errors.Is(err, errArchiveOwner) {
+		t.Fatalf("want errArchiveOwner, got %v", err)
+	}
+}
+
+// TestReporterMappingReadError: אם האינדקס של שלוחת כתב לא נקרא (תקלה זמנית),
+// לא מחלקים שלוחות בסבב הזה — אחרת ערוץ היה מקבל שלוחה אחרת מזו שבה הארכיון שלו.
+func TestReporterMappingReadError(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 5, Channel: "b", TS: now - 20, Text: "של ב"}, {ID: 6, Channel: "a", TS: now - 10, Text: "של א"}},
+		`{"channels":[{"name":"b","title":"הקול היהודי"},{"name":"a","title":"אלישע ירד"}]}`)
+	f.dirs["ivr2:/2/2"] = []string{"ext.ini", "10001.tts"}
+	f.files["ivr2:/2/2/ext.ini"] = "type=playfile\nfile_amount_digits=5"
+	f.files["ivr2:/2/2/10001.tts"] = "ישנה של ב"
+	f.files["ivr2:/2/2/archive.txt"] = fmt.Sprintf("next=10002\nlast=%d\ncutoff=%d\nchannel=b\n", now-1000, now-5000)
+	f.failRead = map[string]bool{"ivr2:/2/2/archive.txt": true}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if _, created := f.dirs["ivr2:/2/1"]; created {
+		t.Fatalf("assigned a reporter extension while an index was unreadable: %q", f.files["ivr2:/2/1/10001.tts"])
+	}
+	f.failRead = nil
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/2/2/10003.tts"], "של ב") || !strings.HasSuffix(f.files["ivr2:/2/1/10001.tts"], "של א") {
+		t.Fatalf("2/2=%q 2/1=%q", f.files["ivr2:/2/2/10003.tts"], f.files["ivr2:/2/1/10001.tts"])
+	}
+}
+
+// TestRerenderAfterRename: הערוץ שינה את שמו — עדכון הזמן בהקראות שכבר
+// בשלוחה ממשיך (השם שבהן נשאר כמו שהוא).
+func TestRerenderAfterRename(t *testing.T) {
+	defer func() { nowFunc = time.Now }()
+	loc, _ := time.LoadLocation("Asia/Jerusalem")
+	day := time.Date(2026, 9, 24, 20, 0, 0, 0, loc)
+	nowFunc = func() time.Time { return day }
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: day.Add(-time.Hour).Unix(), Text: "הודעה"}},
+		`{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	f.channels = `{"channels":[{"name":"a","title":"אלישע ירד מהשטח"}]}`
+	nowFunc = func() time.Time { return day.Add(6 * time.Hour) }
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, אתמול בשעה 7 בערב. הודעה" || f.files["ivr2:/2/1/10001.tts"] != "אתמול בשעה 7 בערב. הודעה" {
+		t.Fatalf("%q | %q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/2/1/10001.tts"])
+	}
+}
+
+// TestArchiveSkipsFailingPost: הודעה שההעלאה שלה נכשלת שוב ושוב — אחרי 3
+// ניסיונות מדלגים עליה, כדי שלא תעכב את כל ההודעות שאחריה.
+func TestArchiveSkipsFailingPost(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 30, Text: "ראשונה"},
+		{ID: 2, Channel: "a", TS: now - 20, Text: "תקולה זנזנת"},
+		{ID: 3, Channel: "a", TS: now - 10, Text: "שלישית"},
+	}, `{"channels":[]}`)
+	f.failText = "זנזנת"
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	for round := 1; round <= 2; round++ {
+		if err := syncOnce(&cfg, st); err == nil {
+			t.Fatalf("round %d: want an error while the post keeps failing", round)
+		}
+		if f.has("ivr2:/1", "10003.tts") {
+			t.Fatalf("round %d: a later post jumped the queue", round)
+		}
+	}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "ראשונה") || !strings.HasSuffix(f.files["ivr2:/1/10003.tts"], "שלישית") {
+		t.Fatalf("10001=%q 10003=%q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10003.tts"])
+	}
+	if !strings.Contains(f.files["ivr2:/1/archive.txt"], "e a/2 -1 ") {
+		t.Fatalf("skipped post not recorded:\n%s", f.files["ivr2:/1/archive.txt"])
+	}
+}
+
+// TestFirstImportWindow: בהפעלה הראשונה מייבאים 48 שעות אחורה — ולפחות 20
+// הודעות אחרונות בשלוחה 1 (10 בשלוחת כתב), גם אם הן ישנות יותר.
+func TestFirstImportWindow(t *testing.T) {
+	defer func(d time.Duration) { importPace = d }(importPace)
+	importPace = 0
+	now := time.Now()
+	var items []FeedItem
+	for i := 1; i <= 25; i++ { // ישנות: לפני 4-5 ימים
+		items = append(items, FeedItem{ID: i, Channel: "a", TS: now.Add(-121*time.Hour + time.Duration(i)*time.Hour).Unix(), Text: fmt.Sprintf("ישנה %d", i)})
+	}
+	for i := 1; i <= 10; i++ { // מהיממה האחרונה
+		items = append(items, FeedItem{ID: 100 + i, Channel: "a", TS: now.Add(-21*time.Hour + time.Duration(i)*time.Hour).Unix(), Text: fmt.Sprintf("חדשה %d", i)})
+	}
+	f := archiveServer(items, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	fl := f.files
+	if !strings.HasSuffix(fl["ivr2:/1/10001.tts"], "ישנה 16") || !strings.HasSuffix(fl["ivr2:/1/10039.tts"], "חדשה 10") || f.has("ivr2:/1", "10041.tts") {
+		t.Fatalf("ext 1: first=%q last=%q files=%v", fl["ivr2:/1/10001.tts"], fl["ivr2:/1/10039.tts"], f.dirs["ivr2:/1"])
+	}
+	if !strings.HasSuffix(fl["ivr2:/2/1/10001.tts"], "חדשה 1") || !strings.HasSuffix(fl["ivr2:/2/1/10019.tts"], "חדשה 10") || f.has("ivr2:/2/1", "10021.tts") {
+		t.Fatalf("2/1: first=%q last=%q files=%v", fl["ivr2:/2/1/10001.tts"], fl["ivr2:/2/1/10019.tts"], f.dirs["ivr2:/2/1"])
+	}
+}
+
+// TestTranscodeReal: הפקודה האמיתית של ffmpeg (כמו שתרוץ ב-GitHub) — קול יוצא,
+// וסרטון בלי קול מזוהה כ"אין קול" (לא מנסים שוב).
+func TestTranscodeReal(t *testing.T) {
+	if !haveFFmpeg() {
+		t.Skip("ffmpeg לא מותקן")
+	}
+	dir := t.TempDir()
+	withSound, silent := dir+"/a.mp4", dir+"/b.mp4"
+	gen := func(out string, audio bool) {
+		args := []string{"-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=2"}
+		if audio {
+			args = append(args, "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-shortest")
+		}
+		if b, err := exec.Command("ffmpeg", append(args, out)...).CombinedOutput(); err != nil {
+			t.Skipf("לא הצלחתי ליצור סרטון לבדיקה: %v %s", err, b)
+		}
+	}
+	gen(withSound, true)
+	gen(silent, false)
+	if err := transcode(withSound, dir+"/a.mp3", 20*60); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(dir + "/a.mp3"); err != nil || st.Size() < 1000 {
+		t.Fatalf("mp3 missing or too small: %v %v", st, err)
+	}
+	err := transcode(silent, dir+"/b.mp3", 60)
+	if err == nil || !strings.Contains(err.Error(), "matches no streams") {
+		t.Fatalf("silent video should report no audio stream, got %v", err)
 	}
 }
