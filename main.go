@@ -33,6 +33,8 @@ type FeedItem struct {
 	Text    string `json:"text"`
 	HTML    string `json:"html"` // לזיהוי מדיה (תמונה/סרטון/קולית/סקר)
 
+	RawText string `json:"-"` // הטקסט המקורי (להקשר בניתוח תמונה — vision.go)
+
 	Flash     bool `json:"-"` // מכיל מילת מבזק
 	MediaOnly bool `json:"-"` // אין טקסט — רק מדיה (לא עובר סינון כפילויות)
 }
@@ -90,8 +92,9 @@ type config struct {
 	podcastKeep      int // כמה פרקים אחרונים נשמרים מכל פודקאסט
 	loc              *time.Location
 	y                *yemot
-	client           *http.Client // ל-API של ערוץ חי
-	feedClient       *http.Client // זמן המתנה ארוך — Render מתעורר לאט
+	vision           *visionClient // ניתוח תמונות עם Gemini (nil = כבוי) — vision.go
+	client           *http.Client  // ל-API של ערוץ חי
+	feedClient       *http.Client  // זמן המתנה ארוך — Render מתעורר לאט
 }
 
 type state struct {
@@ -158,6 +161,12 @@ func main() {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
 	cfg.y = &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: apiKey}
+	cfg.vision = newVisionClient(os.Getenv("GEMINI_API_KEY"), os.Getenv("GEMINI_MODEL"), os.Getenv("VISION"))
+	if cfg.vision != nil {
+		log.Println("ניתוח תמונות (Gemini): פעיל — הודעות עם תמונה יקבלו תיאור בהקראה.")
+	} else {
+		log.Println("ניתוח תמונות: כבוי (אין GEMINI_API_KEY ב-Secrets, או VISION=off).")
+	}
 	var err error
 	if cfg.loc, err = time.LoadLocation("Asia/Jerusalem"); err != nil {
 		cfg.loc = time.FixedZone("IL", 3*3600)
@@ -612,6 +621,7 @@ func prepareClean(items []FeedItem) []FeedItem {
 		if skip {
 			continue
 		}
+		it.RawText = it.Text
 		text := cleanForSpeech(it.Text)
 		switch {
 		case onlyMedia && note != "":

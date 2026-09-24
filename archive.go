@@ -491,6 +491,9 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 		a.next = sixFirst
 	}
 	b := a.next
+	if p := st.describePhoto(cfg, it, now); p != "" {
+		it.Text = withPhoto(it.Text, p) // "... פורסמה תמונה. בתמונה: ... כתוב בתמונה: ..."
+	}
 	text := spokenItem(it, titles, cfg.loc, now, a.withName, maxPerFile)
 	if err := cfg.y.upload(a.ext, introFile(b), text); err != nil {
 		return fmt.Errorf("שליחה לשלוחה %s (%s): %w", a.ext, introFile(b), err)
