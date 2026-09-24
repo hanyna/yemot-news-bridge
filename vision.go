@@ -3,7 +3,7 @@ package main
 // ניתוח תמונות עם Gemini (Google AI Studio): הודעה עם תמונה מקבלת בהקראה
 // תיאור קצר של מה רואים בה, ואת הטקסט שכתוב עליה (אם יש):
 //
-//	"אלישע ירד, בשעה 8 בערב. פורסמה תמונה. בתמונה: רכבי צבא בכניסה ליישוב. כתוב בתמונה: ..."
+//	"אלישע ירד, בשעה 8 בערב. פורסמה תמונה. בתמונה: רכבי צבא בכניסה לישוב. כתוב בתמונה: ..."
 //
 // המפתח — ב-GitHub Secrets בשם GEMINI_API_KEY (לא בקוד!). בלי מפתח, או עם
 // VISION=off, הכול עובד כמו קודם ("פורסמה תמונה").
@@ -108,8 +108,10 @@ func (v *visionClient) warnOnce(key, msg string) {
 
 // photoURLs: כתובות התמונות שבהודעה — רק תמונה רגילה או אלבום.
 // סרטון (גם התמונה המקדימה שלו), סטיקר ותמונה של קישור — לא.
+// מזהים לפי `class="photo"` (כמו mediaNote ב-content.go) ולא לפי תגית פתיחה
+// מדויקת — ל-div יכולות להיות עוד תכונות (id, style וכו') לפני/אחרי class.
 func photoURLs(h, feedURL string) []string {
-	i := strings.Index(h, `<div class="photo">`)
+	i := strings.Index(h, `class="photo"`)
 	if i < 0 {
 		return nil
 	}
@@ -233,7 +235,7 @@ func withPhoto(text, photo string) string {
 	return text + " " + photo
 }
 
-// visionPauseErr: תקלה שלא תיפתר בהודעה הבאה (מכסה / מפתח) — מפסיקים לזמן מה.
+// visionPauseErr: תקלה שלא תיפתר בהודעה הבאה (מכסה / מפתח) — מפסיקים לזמן.
 type visionPauseErr struct{ why string }
 
 func (e *visionPauseErr) Error() string { return e.why }
