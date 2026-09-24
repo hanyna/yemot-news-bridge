@@ -493,18 +493,6 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 	b := a.next
 	if p := st.describePhoto(cfg, it, now); p != "" {
 		it.Text = withPhoto(it.Text, p) // "... פורסמה תמונה. בתמונה: ... כתוב בתמונה: ..."
-	} else if cfg.vision != nil && strings.Contains(it.HTML, `class="photo"`) {
-		// אבחון זמני: נראה שיש תמונה (כמו ב-mediaNote) אבל ניתוח Gemini לא
-		// הוסיף כלום — שומרים את ה-HTML האמיתי לבדיקה (להסיר אחרי האבחון).
-		snippet := it.HTML
-		if len(snippet) > 4000 {
-			snippet = snippet[:4000]
-		}
-		if err := cfg.y.upload(a.ext, "debug-photo.txt", snippet); err != nil {
-			log.Printf("אבחון תמונה: כתיבת debug-photo.txt נכשלה: %v", err)
-		} else {
-			log.Println("אבחון תמונה: נשמר debug-photo.txt (התמונה לא נותחה).")
-		}
 	}
 	text := spokenItem(it, titles, cfg.loc, now, a.withName, maxPerFile)
 	if err := cfg.y.upload(a.ext, introFile(b), text); err != nil {
@@ -710,7 +698,7 @@ func (st *state) reporterExts(cfg *config) map[string]string {
 	return st.chMap
 }
 
-// ensureTitle: הכותרת של שלוחת כתב (99999.tts — נשמעת ראשונה בכניסה).
+// ensureTitle: הכותרת של שלוחת כתב (99999.tts — נשמעת ראשון בכניסה).
 func (st *state) ensureTitle(cfg *config, ext, text string) {
 	if st.titleSet[ext] == text {
 		return
