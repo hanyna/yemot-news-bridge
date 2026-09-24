@@ -1,7 +1,7 @@
 // yemot-news-bridge
 //
-// גשר בין Telegram Popup ("ערוץ חי") לבין קו טלפון בימות המשיח. רץ ב-GitHub Actions ובודק הודעות
-// חדשות כל 20 שניות. כל הודעה נשמרת בקובץ
+// גשר בין Telegram Popup ("ערוץ חי") לבין קו טלפון בימות המשיח.
+// רץ ב-GitHub Actions ובודק הודעות חדשות כל 20 שניות. כל הודעה נשמרת בקובץ
 // משלה, עם מספר קבוע, כל עוד יש מקום בשלוחה (ראו archive.go); סרטונים והודעות
 // קוליות — גם הקול שלהם (audio.go):
 //
@@ -109,22 +109,20 @@ type state struct {
 
 	arch      map[string]*archive // שלוחה → הארכיון שלה (נטען פעם אחת בכל הפעלה)
 	chMap     map[string]string   // ערוץ → שלוחת כתב (קבוע — נשמר באינדקס)
-	mapped    bool                // chMap נקרא מהשלוחות בהפעלה הזאת
+	mapped    bool                // chMap נקרא מהשלוחות בהפעלה הזו
 	titleSet  map[string]string   // כותרות שלוחות כתב שהועלו
 	digitsSet map[string]bool     // file_amount_digits הוגדר
 	aw        *audioWorker        // הקול של סרטונים, הודעות קוליות ופרקי פודקאסטים (ברקע)
 	pods      map[string]*podcast // שלוחה → הפודקאסט שבה (נטען פעם אחת בכל הפעלה)
 	purged    bool                // הודעות של ערוצים שהוצאו מהקו נמחקו (פעם אחת בכל הפעלה)
 
-	photoDebugSaved bool // אבחון זמני: debug-photo.txt כבר נשמר בהפעלה הזאת
-
 	podMenuText string // תפריט הפודקאסטים שהועלה
 
 	noChannels int // כמה סבבים ממתינים לרשימת הערוצים לפני שמוסיפים לארכיון בלעדיה
 
-	special      map[string]bool      // שלוחות מיוחדות בהפעלה הזאת: true=הוגדרה, false=לא של הגשר
+	special      map[string]bool      // שלוחות מיוחדות בהפעלה הזו: true=הוגדרה, false=לא של הגשר
 	failAt       map[string]time.Time // מתי נכשל ניסיון אחרון להגדיר שלוחה (ניסיון חוזר אחרי setupRetry)
-	warned       map[string]bool      // הודעות הסבר שכבר נרשמו בלוג בהפעלה הזאת
+	warned       map[string]bool      // הודעות הסבר שכבר נרשמו בלוג בהפעלה הזו
 	chooserText  string               // תפריט בחירת הכתב שהועלה
 	listMenuText string
 
@@ -333,25 +331,6 @@ func syncOnce(cfg *config, st *state) error {
 
 	now := nowFunc().In(cfg.loc)
 	logFreshness(cfg, st, items, now)
-	// אבחון זמני: דוגמה אמיתית של ה-HTML של הודעה עם תמונה (גם ישנה, לא רק
-	// חדשה) — כדי לבדוק בלי לחכות להודעה חדשה. להסיר אחרי האבחון.
-	if cfg.vision != nil && !st.photoDebugSaved {
-		for _, it := range items {
-			if strings.Contains(it.HTML, `class="photo"`) {
-				snippet := it.HTML
-				if len(snippet) > 4000 {
-					snippet = snippet[:4000]
-				}
-				if err := cfg.y.upload(cfg.ext, "debug-photo.txt", snippet); err != nil {
-					log.Printf("אבחון תמונה: כתיבת debug-photo.txt נכשלה: %v", err)
-				} else {
-					log.Println("אבחון תמונה: נשמר debug-photo.txt מהודעה קיימת בפיד.")
-					st.photoDebugSaved = true
-				}
-				break
-			}
-		}
-	}
 	// ניקוי להקראה, מהישנה לחדשה. כפילויות (אותה הודעה בכמה ערוצים) מסוננות
 	// בארכיון עצמו, מול מה שכבר נשמר.
 	clean := prepareClean(items)
@@ -455,7 +434,7 @@ func syncOnce(cfg *config, st *state) error {
 		menu = append(menu, "לפודקאסטים, הקישו "+cfg.podcastExt+".")
 	}
 	if setupSpecial(cfg, st, resumeExt, "type=last_play") {
-		menu = append(menu, "להמשך האזנה מהמקום שהפסקתם, הקישו "+resumeExt+".")
+		menu = append(menu, "להמשך ההאזנה מהמקום שהפסקתם, הקישו "+resumeExt+".")
 	}
 	// הקלטה למנהל: אחרי כל הודעה שנשמרת (גם בניתוק) — צינתוק לרשימת המנהל.
 	recordIni := "type=record\nsay_record_number=no\nhangup_insert_file=yes"
@@ -485,7 +464,7 @@ func syncOnce(cfg *config, st *state) error {
 			}
 		}
 		if cfg.callback {
-			// שיחה חוזרת מהמערכת אל אותו המספר שהתקשר ממנו — כדי שלא ישתמש בדקות שלו.
+			// שיחה חוזרת מהמערכת אל אותו מספר שהתקשר ממנו — כדי שלא ישתמש בדקות שלו.
 			// ההגדרות כמו בדוגמה בפורום של ימות המשיח (topic/19356).
 			if ok && setupSpecial(cfg, st, listExt+"/3", "type=system_sharing\nsystem_sharing_custom_did=real_did\nsystem_sharing_to_myself=yes") {
 				opts = append(opts, "לשיחה חוזרת מהמערכת, כדי לחסוך בדקות השיחה שלכם, הקישו 3.")
@@ -776,8 +755,8 @@ func ensureChannelExt(cfg *config, st *state, channel, ext string) bool {
 const bridgeMarker = "bridge.txt"
 
 // setupRetry: אחרי כישלון בהגדרת שלוחה, כמה זמן לחכות לפני ניסיון חוזר —
-// בתוך אותה ריצה (ריצה נשארת פתוחה שעות, אז תקלה זמנית, כמו הרשאה שעוד
-// לא נכנסה לתוקף, לא נשארת תקועה עד ההפעלה הבאה).
+// בתוך אותה ריצה (ריצה נשארת פתוחה שעות, אז תקלה זמנית, כמו הרשאה שעוד לא
+// נכנסה לתוקף, לא נשארת תקועה עד ההפעלה הבאה).
 var setupRetry = 3 * time.Minute
 
 func coolingDown(st *state, ext string) bool {
@@ -816,7 +795,7 @@ func createExt(cfg *config, st *state, ext, ini string) error {
 
 // setupSpecial מגדיר שלוחה מיוחדת (תפריט / המשך האזנה / הקלטה / צינתוק...) —
 // פעם אחת בכל הפעלה. יוצר אותה אם היא לא קיימת. שלוחה קיימת עם קבצים שאינם
-// של הגשר ובלי קובץ הסימון: של המשתמש — לא נוגעים ולא מפרסמים.
+// של הגשר ובלי קובץ הסימון — של המשתמש: לא נוגעים ולא מפרסמים.
 // מחזיר true רק כשהשלוחה קיימת בפועל ומוגדרת — רק אז מותר להכריז עליה בתפריט.
 func setupSpecial(cfg *config, st *state, ext, ini string) bool {
 	st.ensureMaps()
@@ -999,7 +978,7 @@ func checkRootIsMenu(y *yemot) {
 		return
 	}
 	if iniValue(ini, "type") != "menu" {
-		log.Printf("אזהרה: השלוחה הראשית אינה מוגדרת type=menu, ולכן הודעת הפתיחה והמקשים לא יעבדו. ext.ini: %.200s", ini)
+		log.Printf("אזהרה: השלוחה הראשית אינה מוגדרת type=menu, ולכן הודעת הפתיחה לא תושמע. ext.ini: %.200s", ini)
 	}
 }
 
@@ -1023,7 +1002,7 @@ func diagnoseRoot(y *yemot) {
 		log.Printf("אבחון: לא הצלחתי לקרוא את ext.ini של השלוחה הראשית: %v", err)
 	case !exists:
 		log.Println("אבחון: אין ext.ini בשלוחה הראשית.")
-default:
+	default:
 		log.Printf("אבחון: ext.ini של השלוחה הראשית: %s", strings.ReplaceAll(strings.TrimSpace(ini), "\n", " | "))
 		if iniValue(ini, "type") != "menu" {
 			log.Println("אבחון: השלוחה הראשית אינה type=menu — לכן הודעת הפתיחה (M1000) לא מושמעת.")
