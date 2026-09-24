@@ -375,7 +375,7 @@ func (st *state) queueVideoByKey(key string, ts int64, ext string, base int) boo
 // audioTick — בסוף כל סבב, בלולאה הראשית: משחרר לעבודה את מה שנוסף בסבב,
 // ומעדכן באינדקסים את מה שה-worker סיים.
 func (st *state) audioTick(cfg *config) {
-	if !cfg.audio {
+	if !cfg.useWorker() {
 		return
 	}
 	st.aw.release()
@@ -388,6 +388,10 @@ func (st *state) audioTick(cfg *config) {
 	st.aw.mu.Unlock()
 	for _, r := range res {
 		for _, t := range r.targets {
+			if p, ok := st.pods[t.ext]; ok {
+				p.onAudio(r.key, r.audio) // פרק של פודקאסט (podcast.go)
+				continue
+			}
 			a, ok := st.arch[t.ext]
 			if !ok {
 				continue
@@ -404,8 +408,11 @@ func (st *state) audioTick(cfg *config) {
 }
 
 func kindName(k string) string {
-	if k == "o" {
+	switch k {
+	case "o":
 		return "הודעה קולית"
+	case "p":
+		return "פרק פודקאסט"
 	}
 	return "סרטון"
 }
@@ -443,7 +450,7 @@ func runAudioJob(cfg *config, j *audioJob) error {
 	if err := downloadMedia(cfg, j, in); err != nil {
 		return err
 	}
-	if err := transcode(in, out, cfg.audioMax); err != nil {
+	if err := transcode(in, out, cfg.audioMax, j.kind == "p"); err != nil {
 		if s := err.Error(); strings.Contains(s, "matches no streams") || strings.Contains(s, "does not contain any stream") {
 			return &permanentError{fmt.Errorf("אין קול בקובץ")}
 		}
@@ -467,11 +474,16 @@ func runAudioJob(cfg *config, j *audioJob) error {
 	return nil
 }
 
-var mediaClient = &http.Client{Timeout: mediaTimeout}
+// mediaClient: בלי מגבלת זמן כללית — לכל הורדה יש מגבלה משלה (mediaTimeout / podcastTimeout).
+var mediaClient = &http.Client{}
 
-// downloadMedia מוריד את הסרטון (דרך השרת של ערוץ חי) או את ההודעה הקולית.
+// downloadMedia מוריד את הסרטון (דרך השרת של ערוץ חי), את ההודעה הקולית, או
+// פרק של פודקאסט.
 func downloadMedia(cfg *config, j *audioJob, path string) error {
-	target := j.src
+	target, maxBytes, timeout := j.src, int64(mediaMaxBytes), mediaTimeout
+	if j.kind == "p" {
+		maxBytes, timeout = podcastMaxBytes, podcastTimeout
+	}
 	if j.kind == "v" {
 		u, err := url.Parse(cfg.feedURL)
 		if err != nil {
@@ -493,7 +505,7 @@ func downloadMedia(cfg *config, j *audioJob, path string) error {
 		}
 		return strings.ReplaceAll(strings.ReplaceAll(s, url.QueryEscape(cfg.feedKey), "***"), cfg.feedKey, "***")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), mediaTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -507,15 +519,17 @@ func downloadMedia(cfg *config, j *audioJob, path string) error {
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusGone:
-		if j.kind == "v" {
-			// השרת לא הצליח (עדיין) להביא את הסרטון מטלגרם — לרוב זמני.
+		switch j.kind {
+		case "v": // השרת לא הצליח (עדיין) להביא את הסרטון מטלגרם — לרוב זמני.
 			return &retryLaterError{fmt.Errorf("השרת לא הביא את הסרטון (סטטוס %d)", resp.StatusCode)}
+		case "p": // פרק שעוד לא עלה לשרת של הפודקאסט, או תקלה אצלם
+			return &retryLaterError{fmt.Errorf("הפרק לא זמין כרגע (סטטוס %d)", resp.StatusCode)}
 		}
 		// הודעה קולית: הכתובת של טלגרם פגה, ואין דרך לחדש אותה.
 		return &permanentError{fmt.Errorf("הקובץ כבר לא זמין (סטטוס %d)", resp.StatusCode)}
 	case resp.StatusCode >= 300:
 		return fmt.Errorf("סטטוס %d בהורדה", resp.StatusCode)
-	case resp.ContentLength > mediaMaxBytes:
+	case resp.ContentLength > maxBytes:
 		return &permanentError{fmt.Errorf("הקובץ גדול מדי (%d MB)", resp.ContentLength>>20)}
 	}
 	f, err := os.Create(path)
@@ -523,11 +537,11 @@ func downloadMedia(cfg *config, j *audioJob, path string) error {
 		return err
 	}
 	defer f.Close()
-	n, err := io.Copy(f, io.LimitReader(resp.Body, mediaMaxBytes+1))
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return fmt.Errorf("הורדה נקטעה: %s", hide(err.Error()))
 	}
-	if n > mediaMaxBytes {
+	if n > maxBytes {
 		return &permanentError{fmt.Errorf("הקובץ גדול מדי")}
 	}
 	if n == 0 {
@@ -542,18 +556,24 @@ var haveFFmpeg = sync.OnceValue(func() bool {
 	return err == nil
 })
 
-// transcode מחלץ את הקול ל-MP3 (מונו, עוצמה אחידה). ימות המשיח ממירים אותו
-// לפורמט של טלפון בזמן ההעלאה (convertAudio=1). משתנה — כדי שבדיקות יוכלו
-// להחליף אותו.
-var transcode = func(in, out string, maxSecs int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", in,
-		"-vn", "-map", "0:a:0", "-ac", "1", "-ar", "22050",
-		"-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-b:a", "48k"}
-	if maxSecs > 0 {
-		args = append(args, "-t", strconv.Itoa(maxSecs))
+// transcode מחלץ את הקול ל-MP3 מונו. ימות המשיח ממירים אותו לפורמט של טלפון
+// בזמן ההעלאה (convertAudio=1). סרטון / הודעה קולית: עוצמה אחידה (loudnorm).
+// פרק של פודקאסט (ארוך, וכבר מעובד): בלי loudnorm — מהיר — ובקצב נמוך יותר,
+// כדי שגם פרק של שעתיים יעבור את מגבלת ההעלאה של ימות. משתנה — לבדיקות.
+var transcode = func(in, out string, maxSecs int, podcast bool) error {
+	timeout := 3 * time.Minute
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", in, "-vn", "-map", "0:a:0", "-ac", "1"}
+	if podcast {
+		timeout = 15 * time.Minute
+		args = append(args, "-ar", "16000", "-b:a", "32k", "-t", strconv.Itoa(podcastMaxSecs))
+	} else {
+		args = append(args, "-ar", "22050", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-b:a", "48k")
+		if maxSecs > 0 {
+			args = append(args, "-t", strconv.Itoa(maxSecs))
+		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	args = append(args, out)
 	var outBuf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)

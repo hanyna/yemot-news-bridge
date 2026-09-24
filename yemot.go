@@ -78,8 +78,8 @@ func (y *yemot) upload(ext, file, text string) error {
 	return err
 }
 
-// uploadClient: העלאת קובץ קול לוקחת יותר זמן מבקשה רגילה.
-var uploadClient = &http.Client{Timeout: 3 * time.Minute}
+// uploadClient: העלאת קובץ קול (ופרק שלם של פודקאסט) לוקחת יותר זמן מבקשה רגילה.
+var uploadClient = &http.Client{Timeout: 10 * time.Minute}
 
 // uploadFile מעלה קובץ (UploadFile, multipart). convert=true: ימות המשיח
 // ממירים אותו (MP3 וכו') לפורמט של טלפון.

@@ -143,7 +143,12 @@ func spokenDuration(d string) string {
 	}
 	h, m, s := secs/3600, secs/60%60, secs%60
 	var out []string
-	if h > 0 {
+	switch {
+	case h == 1:
+		out = append(out, "שעה")
+	case h == 2:
+		out = append(out, "שעתיים")
+	case h > 2:
 		out = append(out, fmt.Sprintf("%d שעות", h))
 	}
 	if m == 1 {

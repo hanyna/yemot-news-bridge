@@ -79,11 +79,14 @@ type config struct {
 	audioMax         int    // שניות; קול ארוך מזה — רק התיאור (0 = בלי הגבלה)
 	welcome          string // "" = אוטומטי, "off" = כבוי
 	voice, rate      string
-	publicList       string // רשימת הצינתוקים הכללית (שלוחה 8/1)
-	lineNumber       string // מספר הקו — יעד החיוג בטלזכור (שלוחה 8/2)
-	callback         bool   // שלוחה 8/3: שיחה חוזרת מהמערכת (חוסכת דקות למתקשר)
-	adminList        string // רשימת הצינתוקים של המנהל (הודעה חדשה בשלוחה 6)
-	adminRegister    bool   // שלוחה 7 = הרשמה לרשימת המנהל (זמני)
+	publicList       string          // רשימת הצינתוקים הכללית (שלוחה 8/1)
+	lineNumber       string          // מספר הקו — יעד החיוג בטלזכור (שלוחה 8/2)
+	callback         bool            // שלוחה 8/3: שיחה חוזרת מהמערכת (חוסכת דקות למתקשר)
+	adminList        string          // רשימת הצינתוקים של המנהל (הודעה חדשה בשלוחה 6)
+	adminRegister    bool            // שלוחה 7 = הרשמה לרשימת המנהל (זמני)
+	podcasts         []podcastSource // שלוחה 3: פודקאסטים (podcast.go)
+	podcastExt       string
+	podcastKeep      int // כמה פרקים אחרונים נשמרים מכל פודקאסט
 	loc              *time.Location
 	y                *yemot
 	client           *http.Client // ל-API של ערוץ חי
@@ -105,7 +108,10 @@ type state struct {
 	mapped    bool                // chMap נקרא מהשלוחות בהפעלה הזו
 	titleSet  map[string]string   // כותרות שלוחות כתב שהועלו
 	digitsSet map[string]bool     // file_amount_digits הוגדר
-	aw        *audioWorker        // הקול של סרטונים והודעות קוליות (ברקע)
+	aw        *audioWorker        // הקול של סרטונים, הודעות קוליות ופרקי פודקאסטים (ברקע)
+	pods      map[string]*podcast // שלוחה → הפודקאסט שבה (נטען פעם אחת בכל הפעלה)
+
+	podMenuText string // תפריט הפודקאסטים שהועלה
 
 	noChannels int // כמה סבבים ממתינים לרשימת הערוצים לפני שמוסיפים לארכיון בלעדיה
 
@@ -135,6 +141,9 @@ func main() {
 		callback:      envOr("CALLBACK_ENABLED", "on") == "on",
 		adminList:     envOr("ADMIN_TZINTUK_LIST", "606"),
 		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
+		podcasts:      parsePodcasts(os.Getenv("PODCASTS")),
+		podcastExt:    envOr("PODCAST_EXT", "3"),
+		podcastKeep:   envInt("PODCAST_KEEP", 10),
 		client:        &http.Client{Timeout: 30 * time.Second},
 		feedClient:    &http.Client{Timeout: 90 * time.Second},
 	}
@@ -160,7 +169,7 @@ func main() {
 	// בלי RUN_MINUTES — סבב אחד וסיום (והקול — בתוך הסבב).
 	runFor := time.Duration(envInt("RUN_MINUTES", 0)) * time.Minute
 	interval := time.Duration(envInt("INTERVAL_SECONDS", 60)) * time.Second
-	if cfg.audio && runFor > 0 {
+	if cfg.useWorker() && runFor > 0 {
 		st.aw.start(&cfg) // ברקע — ההקראות לא מחכות לקול
 	}
 	if runFor == 0 {
@@ -242,7 +251,13 @@ func (st *state) ensureMaps() {
 	if st.aw == nil {
 		st.aw = newAudioWorker()
 	}
+	if st.pods == nil {
+		st.pods = map[string]*podcast{}
+	}
 }
+
+// useWorker: יש עבודה ל-audioWorker — הקול של סרטונים והודעות קוליות, או פודקאסטים.
+func (cfg *config) useWorker() bool { return cfg.audio || len(cfg.podcasts) > 0 }
 
 // nowFunc — השעה הנוכחית (בדיקות מזיזות אותה כדי לבדוק "אתמול").
 var nowFunc = time.Now
@@ -347,9 +362,13 @@ func syncOnce(cfg *config, st *state) error {
 		chooser = append(chooser, c.text)
 	}
 
-	// הקול של סרטונים והודעות קוליות: מה שנוסף בסבב יוצא לעבודה (ברקע), ומה
-	// שה-worker סיים נרשם באינדקס. ואז — שמירת האינדקסים שהשתנו.
+	// שלוחה 3: פודקאסטים — פרקים חדשים לתור (podcast.go).
+	st.syncPodcasts(cfg, now)
+
+	// הקול של סרטונים, הודעות קוליות ופרקי פודקאסטים: מה שנוסף בסבב יוצא לעבודה
+	// (ברקע), ומה שה-worker סיים נרשם. ואז — שמירת האינדקסים שהשתנו.
 	st.audioTick(cfg)
+	podReady := st.finishPodcasts(cfg)
 	if err := st.saveArchives(cfg, now); err != nil && cycleErr == nil {
 		cycleErr = err
 	}
@@ -370,6 +389,9 @@ func syncOnce(cfg *config, st *state) error {
 			}
 		}
 		menu = append(menu, "לבחירת כתב מסוים, הקישו "+chooseExt+".")
+	}
+	if podReady {
+		menu = append(menu, "לפודקאסטים, הקישו "+cfg.podcastExt+".")
 	}
 	if setupSpecial(cfg, st, resumeExt, "type=last_play") {
 		menu = append(menu, "להמשך ההאזנה מהמקום שהפסקתם, הקישו "+resumeExt+".")
@@ -430,6 +452,9 @@ func syncOnce(cfg *config, st *state) error {
 	// שלוחות ריקות מהמבנה הקודם (3, 4, 7, ו-8 כשאין רשימה) — מחזירות לתפריט.
 	for _, old := range []string{"3", "4", "7", "8"} {
 		if old == listExt && (cfg.publicList != "" || cfg.callback) {
+			continue
+		}
+		if old == cfg.podcastExt && len(cfg.podcasts) > 0 {
 			continue
 		}
 		if old == registerExt && cfg.adminRegister {
@@ -850,7 +875,7 @@ func isSystemFile(name string) bool {
 // קבצי הארכיון (NNNNN.tts / NNNNN.wav) והאינדקס שלו.
 func isBridgeFile(name string) bool {
 	n := strings.ToLower(name)
-	if n == "ext.ini" || n == archiveIndex {
+	if n == "ext.ini" || n == archiveIndex || n == podcastIndex {
 		return true
 	}
 	if fileNum(n) >= 0 {

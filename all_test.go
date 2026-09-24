@@ -109,6 +109,7 @@ type fakeYemotServer struct {
 	failWhat    map[string]bool // UploadTextFile לנתיבים האלה נכשל
 	failRead    map[string]bool // GetTextFile לנתיבים האלה נכשל (תקלה זמנית)
 	failText    string          // UploadTextFile של תוכן שמכיל את זה — נכשל
+	rss         string          // /rss/pod — הזנת פודקאסט
 }
 
 func splitWhat(what string) (dir, name string) {
@@ -163,6 +164,12 @@ func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/voice/"):
 		f.mediaHits++
 		w.Write([]byte("VOICE-" + strings.TrimPrefix(r.URL.Path, "/voice/")))
+	case r.URL.Path == "/rss/pod":
+		w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+		w.Write([]byte(f.rss))
+	case strings.HasPrefix(r.URL.Path, "/ep/"):
+		f.mediaHits++
+		w.Write([]byte("EP-" + strings.TrimPrefix(r.URL.Path, "/ep/")))
 	case strings.HasSuffix(r.URL.Path, "UploadFile"):
 		if f.noUpload {
 			w.Write([]byte(`{"responseStatus":"FORBIDDEN","message":"API_KEY_ACL_REJECT"}`))
@@ -856,7 +863,7 @@ func TestReporterMappingStable(t *testing.T) {
 
 func withFakeTranscode(t *testing.T) {
 	oldT, oldF := transcode, haveFFmpeg
-	transcode = func(in, out string, maxSecs int) error {
+	transcode = func(in, out string, maxSecs int, podcast bool) error {
 		b, err := os.ReadFile(in)
 		if err != nil {
 			return err
@@ -1451,6 +1458,77 @@ func TestFirstImportWindow(t *testing.T) {
 	}
 }
 
+// podcastRSS: הזנת RSS לבדיקות, כמו של spreaker — פרק לכל זמן, החדש ראשון.
+func podcastRSS(base string, eps ...int64) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>חושבים בקול - הקול היהודי</title>`)
+	for i := len(eps) - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, `<item><title>פרק %d, שיחה על ההתיישבות</title><guid isPermaLink="false">https://api.example/episode/%d</guid>`+
+			`<pubDate>%s</pubDate><enclosure url="%s/ep/%d.mp3" length="1000" type="audio/mpeg"/><itunes:duration>2671</itunes:duration></item>`,
+			i+1, i+1, time.Unix(eps[i], 0).UTC().Format(time.RFC1123Z), base, i+1)
+	}
+	b.WriteString(`</channel></rss>`)
+	return b.String()
+}
+
+// TestPodcasts: שלוחה 3 — תפריט פודקאסטים ושלוחה לכל פודקאסט. נכנסים הפרקים
+// האחרונים (הקול, ואחריו ההקראה עם שם הפרק); פרק חדש נכנס ראשון והישן ביותר
+// יוצא; ואחרי הפעלה מחדש שום דבר לא נכנס ולא יורד פעמיים.
+func TestPodcasts(t *testing.T) {
+	withFakeTranscode(t)
+	defer func(d time.Duration) { podcastEvery = d }(podcastEvery)
+	podcastEvery = 0
+	day, now := int64(24*3600), time.Now().Unix()
+	f := archiveServer(nil, `{"channels":[]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	f.rss = podcastRSS(srv.URL, now-3*day, now-2*day, now-day)
+	cfg := newTestCfg(srv)
+	cfg.podcasts = parsePodcasts("חושבים בקול של הקול היהודי | " + srv.URL + "/rss/pod")
+	cfg.podcastExt, cfg.podcastKeep = "3", 2
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	fl := f.files
+	if fl["ivr2:/3/ext.ini"] != "type=menu\ndigits=1" || fl["ivr2:/3/M1000.tts"] != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1." {
+		t.Fatalf("ext 3: %q | %q", fl["ivr2:/3/ext.ini"], fl["ivr2:/3/M1000.tts"])
+	}
+	if fl["ivr2:/3/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/3/1/99999.tts"] != "חושבים בקול של הקול היהודי." {
+		t.Fatalf("3/1: %q | %q", fl["ivr2:/3/1/ext.ini"], fl["ivr2:/3/1/99999.tts"])
+	}
+	// שני הפרקים האחרונים (2 ו-3), הישן לפני החדש; הראשון — לא.
+	if fl["ivr2:/3/1/10000.wav"] != "AUDIO:MP3:EP-2.mp3;convert=1" || fl["ivr2:/3/1/10002.wav"] != "AUDIO:MP3:EP-3.mp3;convert=1" || f.has("ivr2:/3/1", "10004.wav") {
+		t.Fatalf("episodes: %v", f.dirs["ivr2:/3/1"])
+	}
+	intro := fl["ivr2:/3/1/10003.tts"]
+	if !strings.HasPrefix(intro, "פרק 3, שיחה על ההתיישבות. פורסם ב ") || !strings.HasSuffix(intro, ", באורך 45 דקות.") {
+		t.Fatalf("intro: %q", intro)
+	}
+	if !strings.Contains(fl["ivr2:/M1000.tts"], "לפודקאסטים, הקישו 3.") {
+		t.Fatalf("welcome: %q", fl["ivr2:/M1000.tts"])
+	}
+	// פרק חדש: נכנס ראשון (המספר הגבוה), והישן ביותר (פרק 2) נמחק.
+	f.rss = podcastRSS(srv.URL, now-3*day, now-2*day, now-day, now-60)
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(fl["ivr2:/3/1/10005.tts"], "פרק 4") || f.has("ivr2:/3/1", "10000.wav") || f.has("ivr2:/3/1", "10001.tts") || !f.has("ivr2:/3/1", "10003.tts") {
+		t.Fatalf("after a new episode: %v", f.dirs["ivr2:/3/1"])
+	}
+	// הפעלה מחדש: שום דבר לא נכנס שוב ולא יורד שוב.
+	hits := f.mediaHits
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.mediaHits != hits || f.has("ivr2:/3/1", "10007.tts") || !f.has("ivr2:/3/1", "10005.tts") {
+		t.Fatalf("restart: downloads %d→%d, files %v", hits, f.mediaHits, f.dirs["ivr2:/3/1"])
+	}
+	if len(parsePodcasts("# הערה\nלא קישור\nhttps://a.example/feed")) != 1 {
+		t.Fatal("parsePodcasts")
+	}
+}
+
 // TestTranscodeReal: הפקודה האמיתית של ffmpeg (כמו שתרוץ ב-GitHub) — קול יוצא,
 // וסרטון בלי קול מזוהה כ"אין קול" (לא מנסים שוב).
 func TestTranscodeReal(t *testing.T) {
@@ -1470,13 +1548,19 @@ func TestTranscodeReal(t *testing.T) {
 	}
 	gen(withSound, true)
 	gen(silent, false)
-	if err := transcode(withSound, dir+"/a.mp3", 20*60); err != nil {
+	if err := transcode(withSound, dir+"/a.mp3", 20*60, false); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := os.Stat(dir + "/a.mp3"); err != nil || st.Size() < 1000 {
 		t.Fatalf("mp3 missing or too small: %v %v", st, err)
 	}
-	err := transcode(silent, dir+"/b.mp3", 60)
+	if err := transcode(withSound, dir+"/p.mp3", 0, true); err != nil { // פרק של פודקאסט
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(dir + "/p.mp3"); err != nil || st.Size() < 1000 {
+		t.Fatalf("podcast mp3 missing or too small: %v %v", st, err)
+	}
+	err := transcode(silent, dir+"/b.mp3", 60, false)
 	if err == nil || !strings.Contains(err.Error(), "matches no streams") {
 		t.Fatalf("silent video should report no audio stream, got %v", err)
 	}
