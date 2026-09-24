@@ -393,10 +393,20 @@ func (st *state) audioTick(cfg *config) {
 				continue
 			}
 			a, ok := st.arch[t.ext]
-			if !ok {
+			var e *archEntry
+			if ok {
+				e = a.entries[r.key]
+			}
+			if e == nil || e.base != t.base {
+				// ההודעה כבר לא בשלוחה (ערוץ שהוצא מהקו) — קול שעלה בינתיים נמחק.
+				if r.audio == audioDone {
+					if err := cfg.y.remove([]string{ivrPath(t.ext, audioFile(t.base))}); err != nil {
+						log.Printf("הערה: מחיקת %s משלוחה %s נכשלה: %v", audioFile(t.base), t.ext, err)
+					}
+				}
 				continue
 			}
-			if e, ok := a.entries[r.key]; ok && e.base == t.base && e.audio != r.audio {
+			if e.audio != r.audio {
 				e.audio, a.dirty = r.audio, true
 			}
 			if r.audio == audioDone {

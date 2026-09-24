@@ -1258,6 +1258,47 @@ func TestSixDigits(t *testing.T) {
 	}
 }
 
+// TestExcludeChannel: ערוץ שהוצא מהקו (EXCLUDE_CHANNELS) — ההודעות שלו נמחקות
+// משלוחה 1, שלוחת הכתב שלו מתרוקנת ויוצאת מתפריט הבחירה, והודעות חדשות שלו לא
+// נכנסות. שאר הערוצים לא נפגעים.
+func TestExcludeChannel(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 300, Text: "של א"},
+		{ID: 2, Channel: "SamariaUpdates", TS: now - 200, Text: "של השומרון"},
+		{ID: 3, Channel: "a", TS: now - 100, Text: "עוד של א"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"},{"name":"SamariaUpdates","title":"עדכוני השומרון"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10003.tts"], "של השומרון") || !f.has("ivr2:/2/2", "10001.tts") {
+		t.Fatalf("setup: %v | %v", f.dirs["ivr2:/1"], f.dirs["ivr2:/2/2"])
+	}
+	// מוציאים את הערוץ מהקו (הפעלה חדשה עם ההגדרה), ומגיעה ממנו הודעה חדשה.
+	cfg.exclude = parseExclude("samariaupdates, @other")
+	f.items = append(f.items, FeedItem{ID: 4, Channel: "SamariaUpdates", TS: now - 10, Text: "חדשה של השומרון"})
+	for run := 1; run <= 2; run++ { // וגם בהפעלה שאחריה — כלום לא חוזר
+		if err := syncOnce(&cfg, &state{}); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(archiveFiles(f.dirs["ivr2:/1"]), ","); got != "10001.tts,10005.tts" {
+			t.Fatalf("run %d, ext 1: %s", run, got)
+		}
+		if len(archiveFiles(f.dirs["ivr2:/2/2"])) != 0 || f.has("ivr2:/2/2", "99999.tts") || f.files["ivr2:/2/2/archive.txt"] != "" {
+			t.Fatalf("run %d, 2/2 not cleared: %v", run, f.dirs["ivr2:/2/2"])
+		}
+		if f.files["ivr2:/2/M1000.tts"] != "בחירת כתב. לעדכוני אלישע ירד הקישו 1." {
+			t.Fatalf("run %d, chooser: %q", run, f.files["ivr2:/2/M1000.tts"])
+		}
+	}
+	if !strings.Contains(f.files["ivr2:/1/archive.txt"], "e SamariaUpdates/2 -1 ") {
+		t.Fatalf("index: %q", f.files["ivr2:/1/archive.txt"])
+	}
+}
+
 // TestPublishedVerb: "פורסם סרטון", "פורסמה תמונה", "פורסמה הודעה קולית", "פורסמו 2 תמונות".
 func TestPublishedVerb(t *testing.T) {
 	now := time.Now().Unix()

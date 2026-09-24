@@ -84,6 +84,7 @@ type config struct {
 	callback         bool            // שלוחה 8/3: שיחה חוזרת מהמערכת (חוסכת דקות למתקשר)
 	adminList        string          // רשימת הצינתוקים של המנהל (הודעה חדשה בשלוחה 6)
 	adminRegister    bool            // שלוחה 7 = הרשמה לרשימת המנהל (זמני)
+	exclude          map[string]bool // ערוצים שהוצאו מהקו (EXCLUDE_CHANNELS; באותיות קטנות)
 	podcasts         []podcastSource // שלוחה 3: פודקאסטים (podcast.go)
 	podcastExt       string
 	podcastKeep      int // כמה פרקים אחרונים נשמרים מכל פודקאסט
@@ -110,6 +111,7 @@ type state struct {
 	digitsSet map[string]bool     // file_amount_digits הוגדר
 	aw        *audioWorker        // הקול של סרטונים, הודעות קוליות ופרקי פודקאסטים (ברקע)
 	pods      map[string]*podcast // שלוחה → הפודקאסט שבה (נטען פעם אחת בכל הפעלה)
+	purged    bool                // הודעות של ערוצים שהוצאו מהקו נמחקו (פעם אחת בכל הפעלה)
 
 	podMenuText string // תפריט הפודקאסטים שהועלה
 
@@ -141,6 +143,7 @@ func main() {
 		callback:      envOr("CALLBACK_ENABLED", "on") == "on",
 		adminList:     envOr("ADMIN_TZINTUK_LIST", "606"),
 		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
+		exclude:       parseExclude(os.Getenv("EXCLUDE_CHANNELS")),
 		podcasts:      parsePodcasts(os.Getenv("PODCASTS")),
 		podcastExt:    envOr("PODCAST_EXT", "3"),
 		podcastKeep:   envInt("PODCAST_KEEP", 10),
@@ -259,6 +262,18 @@ func (st *state) ensureMaps() {
 // useWorker: יש עבודה ל-audioWorker — הקול של סרטונים והודעות קוליות, או פודקאסטים.
 func (cfg *config) useWorker() bool { return cfg.audio || len(cfg.podcasts) > 0 }
 
+// parseExclude: "SamariaUpdates, other" → ערוצים שלא נכנסים לקו (נשארים בערוץ חי).
+func parseExclude(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
+		m[strings.ToLower(strings.TrimPrefix(f, "@"))] = true
+	}
+	return m
+}
+
+// excluded: ערוץ שהוצא מהקו.
+func (cfg *config) excluded(channel string) bool { return cfg.exclude[strings.ToLower(channel)] }
+
 // nowFunc — השעה הנוכחית (בדיקות מזיזות אותה כדי לבדוק "אתמול").
 var nowFunc = time.Now
 
@@ -279,8 +294,22 @@ func syncOnce(cfg *config, st *state) error {
 	if err != nil {
 		return fmt.Errorf("שגיאה בשליפת ההודעות: %w", err)
 	}
+	if len(cfg.exclude) > 0 { // ערוצים שהוצאו מהקו (EXCLUDE_CHANNELS) — כאילו אינם
+		kept := make([]FeedItem, 0, len(items))
+		for _, it := range items {
+			if !cfg.excluded(it.Channel) {
+				kept = append(kept, it)
+			}
+		}
+		items = kept
+	}
 	if chs, err := fetchChannels(cfg.client, cfg.feedURL, cfg.feedKey); err == nil {
-		st.channels = chs
+		st.channels = chs[:0:0]
+		for _, c := range chs {
+			if !cfg.excluded(c.Name) {
+				st.channels = append(st.channels, c)
+			}
+		}
 	} else if st.channels == nil {
 		log.Printf("לא הצלחתי לשלוף את רשימת הערוצים (ממשיך בלי שלוחות לפי ערוץ): %v", err)
 	}
@@ -361,6 +390,8 @@ func syncOnce(cfg *config, st *state) error {
 	for _, c := range choices {
 		chooser = append(chooser, c.text)
 	}
+	// ערוצים שהוצאו מהקו: מה שכבר עלה מהם — נמחק.
+	st.purgeExcluded(cfg)
 
 	// שלוחה 3: פודקאסטים — פרקים חדשים לתור (podcast.go).
 	st.syncPodcasts(cfg, now)
