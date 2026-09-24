@@ -3,7 +3,7 @@ package main
 // ניתוח תמונות עם Gemini (Google AI Studio): הודעה עם תמונה מקבלת בהקראה
 // תיאור קצר של מה רואים בה, ואת הטקסט שכתוב עליה (אם יש):
 //
-//	"אלישע ירד, בשעה 8 בערב. פורסמה תמונה. בתמונה: רכבי צבא בכניסה לישוב. כתוב בתמונה: ..."
+//	"אלישע ירד, בשעה 8 בערב. פורסמה תמונה. בתמונה: רכבי צבא בכניסה ליישוב. כתוב בתמונה: ..."
 //
 // המפתח — ב-GitHub Secrets בשם GEMINI_API_KEY (לא בקוד!). בלי מפתח, או עם
 // VISION=off, הכול עובד כמו קודם ("פורסמה תמונה").
@@ -235,7 +235,7 @@ func withPhoto(text, photo string) string {
 	return text + " " + photo
 }
 
-// visionPauseErr: תקלה שלא תיפתר בהודעה הבאה (מכסה / מפתח) — מפסיקים לזמן.
+// visionPauseErr: תקלה שלא תיפתר בהודעה הבאה (מכסה / מפתח) — מפסיקים לזמן מה.
 type visionPauseErr struct{ why string }
 
 func (e *visionPauseErr) Error() string { return e.why }
