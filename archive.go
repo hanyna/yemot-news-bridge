@@ -698,7 +698,7 @@ func (st *state) reporterExts(cfg *config) map[string]string {
 	return st.chMap
 }
 
-// ensureTitle: הכותרת של שלוחת כתב (99999.tts — נשמעת ראשון בכניסה).
+// ensureTitle: הכותרת של שלוחת כתב (99999.tts — נשמעת ראשונה בכניסה).
 func (st *state) ensureTitle(cfg *config, ext, text string) {
 	if st.titleSet[ext] == text {
 		return
