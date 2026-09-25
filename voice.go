@@ -107,14 +107,15 @@ type speechResult struct {
 }
 
 type speaker struct {
-	key, voice string
-	menuVoice  string // קול התפריטים והכותרות (SPEECH_MENU_VOICE)
-	client     *http.Client
+	keys      []string // מפתחות של Google — כל אחד מפרויקט נפרד = מכסה חינמית נוספת
+	voice     string
+	menuVoice string // קול התפריטים והכותרות (SPEECH_MENU_VOICE)
+	client    *http.Client
 
 	mu         sync.Mutex
 	jobs       map[string]*speechJob
 	results    []speechResult
-	modelPause map[int]time.Time
+	modelPause map[[2]int]time.Time // [מפתח, מודל] → עד מתי במכסה
 	pausedTil  time.Time
 	bg         bool
 	warned     map[string]bool
@@ -125,10 +126,37 @@ func newSpeaker(key, voice, mode string) *speaker {
 	return newSpeakerVoices(key, voice, "", mode)
 }
 
+// speechKeys: המפתח הראשי ועוד מפתחות (GEMINI_API_KEY_2 ... _9), בלי כפילויות.
+func speechKeys(getenv func(string) string) []string {
+	var keys []string
+	seen := map[string]bool{}
+	for i := 1; i <= 9; i++ {
+		name := "GEMINI_API_KEY"
+		if i > 1 {
+			name += "_" + fmt.Sprint(i)
+		}
+		if k := cleanKey(getenv(name)); k != "" && !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
 // newSpeakerVoices: כמו newSpeaker, עם קול נפרד לתפריטים (ריק = Puck).
 func newSpeakerVoices(key, voice, menuVoice, mode string) *speaker {
-	key = cleanKey(key)
-	if key == "" || strings.EqualFold(strings.TrimSpace(mode), "off") {
+	return newSpeakerKeys([]string{key}, voice, menuVoice, mode)
+}
+
+// newSpeakerKeys: כמו newSpeakerVoices, עם כמה מפתחות (כשאחד במכסה — הבא).
+func newSpeakerKeys(keys []string, voice, menuVoice, mode string) *speaker {
+	var ks []string
+	for _, k := range keys {
+		if k = cleanKey(k); k != "" {
+			ks = append(ks, k)
+		}
+	}
+	if len(ks) == 0 || strings.EqualFold(strings.TrimSpace(mode), "off") {
 		return nil
 	}
 	if voice = strings.TrimSpace(voice); voice == "" {
@@ -137,8 +165,8 @@ func newSpeakerVoices(key, voice, menuVoice, mode string) *speaker {
 	if menuVoice = strings.TrimSpace(menuVoice); menuVoice == "" {
 		menuVoice = "Puck"
 	}
-	return &speaker{key: key, voice: voice, menuVoice: menuVoice, client: &http.Client{Timeout: speechTimeout},
-		jobs: map[string]*speechJob{}, modelPause: map[int]time.Time{}, warned: map[string]bool{}}
+	return &speaker{keys: ks, voice: voice, menuVoice: menuVoice, client: &http.Client{Timeout: speechTimeout},
+		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, warned: map[string]bool{}}
 }
 
 // add: קול להודעה בשלוחה. אותה הודעה בכמה שלוחות (1 ושלוחת הכתב) — קובץ קול
@@ -359,42 +387,54 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 	var lastErr error
 	var soonest time.Time // מתי המודל הראשון שבמכסה משתחרר
 	allQuota := true
-	for m, model := range speechModels {
-		s.mu.Lock()
-		paused := time.Now().Before(s.modelPause[m])
-		s.mu.Unlock()
-		if paused {
+	for k, key := range s.keys {
+	models:
+		for m, model := range speechModels {
+			pk := [2]int{k, m}
 			s.mu.Lock()
-			if until := s.modelPause[m]; soonest.IsZero() || until.Before(soonest) {
-				soonest = until
-			}
+			until, paused := s.modelPause[pk], time.Now().Before(s.modelPause[pk])
 			s.mu.Unlock()
-			continue
-		}
-		data, status, err := s.call(model, body)
-		if err == nil {
-			return data, model, nil
-		}
-		lastErr = err
-		switch {
-		case status == http.StatusTooManyRequests:
-			// מגבלה לדקה — ממתינים כמה ש-Google מבקשים (בד"כ פחות מדקה); מכסה יומית — שעה.
-			wait := time.Minute
-			var q *quotaErr
-			if errors.As(err, &q) && q.wait > 0 {
-				wait = q.wait
+			if paused {
+				if soonest.IsZero() || until.Before(soonest) {
+					soonest = until
+				}
+				continue
 			}
-			until := time.Now().Add(wait)
-			s.mu.Lock()
-			s.modelPause[m] = until
-			s.mu.Unlock()
-			if soonest.IsZero() || until.Before(soonest) {
-				soonest = until
+			data, status, err := s.callKey(key, model, body)
+			if err == nil {
+				if len(s.keys) > 1 {
+					model = fmt.Sprintf("%s, מפתח %d", model, k+1)
+				}
+				return data, model, nil
 			}
-		case status == 0, status == http.StatusNotFound, status == http.StatusBadRequest, overloaded(status):
-			allQuota = false // המודל איטי / עמוס / לא זמין — המודל הבא
-		default:
-			return nil, "", err // תקלת מפתח וכו' — ננסה שוב אחר כך
+			lastErr = err
+			switch {
+			case status == http.StatusTooManyRequests:
+				// מגבלה לדקה — ממתינים כמה ש-Google מבקשים (בד"כ פחות מדקה); מכסה יומית — שעה.
+				wait := time.Minute
+				var q *quotaErr
+				if errors.As(err, &q) && q.wait > 0 {
+					wait = q.wait
+				}
+				until := time.Now().Add(wait)
+				s.mu.Lock()
+				s.modelPause[pk] = until
+				s.mu.Unlock()
+				if soonest.IsZero() || until.Before(soonest) {
+					soonest = until
+				}
+			case status == 0, status == http.StatusNotFound, status == http.StatusBadRequest, overloaded(status):
+				allQuota = false // המודל איטי / עמוס / לא זמין — המודל הבא
+			case status == http.StatusUnauthorized, status == http.StatusForbidden:
+				allQuota = false
+				break models // המפתח הזה לא תקין — המפתח הבא
+			default:
+				if len(s.keys) == 1 {
+					return nil, "", err // תקלת רשת וכו' — ננסה שוב אחר כך
+				}
+				allQuota = false
+				break models
+			}
 		}
 	}
 	if lastErr == nil {
@@ -411,16 +451,20 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 }
 
 func (s *speaker) call(model string, body []byte) ([]byte, int, error) {
+	return s.callKey(s.keys[0], model, body)
+}
+
+func (s *speaker) callKey(key, model string, body []byte) ([]byte, int, error) {
 	u := fmt.Sprintf(speechEndpoint, url.PathEscape(model))
 	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", s.key)
+	req.Header.Set("x-goog-api-key", key)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, 0, errors.New(strings.ReplaceAll(err.Error(), s.key, "***"))
+		return nil, 0, errors.New(strings.ReplaceAll(err.Error(), key, "***"))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))

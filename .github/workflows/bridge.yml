@@ -44,6 +44,12 @@ jobs:
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # ניתוח תמונות (Google AI Studio). בלי המפתח — "פורסמה תמונה" כמו קודם
+          # מפתחות נוספים לקול המוכן — כל אחד מפרויקט נפרד ב-Google AI Studio = עוד 40 הודעות ביום בחינם.
+          # כשמפתח אחד מגיע למכסה, הגשר עובר לבא. כשכולם במכסה — ההודעות עולות כטקסט.
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           GITHUB_TOKEN: ${{ github.token }}   # לבדיקה אם יש גרסה חדשה יותר (אז ההפעלה הישנה נעצרת)
           RUN_MINUTES: "330"       # כמה זמן ההפעלה נשארת פתוחה (GitHub מגביל ל-6 שעות)
           INTERVAL_SECONDS: "20"   # כל כמה שניות לבדוק הודעות חדשות (השרת של ערוץ חי עצמו סורק את טלגרם בערך פעם בדקה)

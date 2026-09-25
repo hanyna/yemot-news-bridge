@@ -169,9 +169,9 @@ func main() {
 	} else {
 		log.Println("ניתוח תמונות: כבוי (אין GEMINI_API_KEY ב-Secrets, או VISION=off).")
 	}
-	cfg.speech = newSpeakerVoices(os.Getenv("GEMINI_API_KEY"), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH_MENU_VOICE"), os.Getenv("SPEECH"))
+	cfg.speech = newSpeakerKeys(speechKeys(os.Getenv), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH_MENU_VOICE"), os.Getenv("SPEECH"))
 	if cfg.speech != nil {
-		log.Printf("קול מוכן מראש (Gemini, קול %s): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice)
+		log.Printf("קול מוכן מראש (Gemini, קול %s, %d מפתחות): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice, len(cfg.speech.keys))
 	}
 	var err error
 	if cfg.loc, err = time.LoadLocation("Asia/Jerusalem"); err != nil {

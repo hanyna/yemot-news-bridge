@@ -319,3 +319,18 @@ func (y *yemot) createExt(ext, ini string) error {
 	_, err := y.call("UpdateExtension", form)
 	return err
 }
+
+// removeIniKey מוריד שורת key=... מקובץ ext.ini. removed=true כשהייתה כזו.
+func removeIniKey(ini, key string) (string, bool) {
+	lines := strings.Split(strings.ReplaceAll(ini, "\r\n", "\n"), "\n")
+	kept := lines[:0]
+	removed := false
+	for _, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), key+"=") {
+			removed = true
+			continue
+		}
+		kept = append(kept, l)
+	}
+	return strings.Join(kept, "\n"), removed
+}

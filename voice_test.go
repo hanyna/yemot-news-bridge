@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,8 @@ import (
 // fakeTTS: מדמה את Gemini TTS. מחזיר PCM שהוא הטקסט עצמו (כדי לבדוק מה הוקרא).
 type fakeTTS struct {
 	mu     sync.Mutex
-	status map[string]int // מודל → סטטוס
+	status map[string]int  // מודל → סטטוס
+	quota  map[string]bool // מפתחות שהגיעו למכסה
 	calls  []string
 	texts  []string
 }
@@ -25,6 +27,11 @@ func (g *fakeTTS) handler(w http.ResponseWriter, r *http.Request) {
 	defer g.mu.Unlock()
 	model := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ":generateContent")
 	g.calls = append(g.calls, model)
+	if g.quota[r.Header.Get("x-goog-api-key")] {
+		w.WriteHeader(429)
+		io.WriteString(w, `{"error":{"code":429,"details":[{"violations":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}`)
+		return
+	}
 	if st := g.status[model]; st != 0 {
 		w.WriteHeader(st)
 		io.WriteString(w, `{"error":{"message":"nope"}}`)
@@ -297,5 +304,42 @@ func TestRetryAfter(t *testing.T) {
 	}
 	if retryAfter([]byte(`{}`)) != time.Minute {
 		t.Fatal("default")
+	}
+}
+
+// כמה מפתחות (מפרויקטים נפרדים): כשהראשון במכסה — הבא, בלי לחכות.
+func TestSpeechSeveralKeys(t *testing.T) {
+	g := &fakeTTS{status: map[string]int{}, quota: map[string]bool{"K1": true}}
+	withFakeTTS(t, g)
+	keys := speechKeys(func(n string) string {
+		return map[string]string{"GEMINI_API_KEY": "K1", "GEMINI_API_KEY_2": " K2\n", "GEMINI_API_KEY_3": "K1", "GEMINI_API_KEY_5": "K5"}[n]
+	})
+	if strings.Join(keys, ",") != "K1,K2,K5" {
+		t.Fatalf("keys: %v", keys)
+	}
+	s := newSpeakerKeys(keys, "", "", "on")
+	_, model, err := s.synthesize("שלום", "")
+	if err != nil || !strings.Contains(model, "מפתח 2") {
+		t.Fatalf("second key: %q %v", model, err)
+	}
+	// כל המפתחות במכסה — הפסקה, והקו ממשיך בטקסט
+	g.mu.Lock()
+	g.quota = map[string]bool{"K1": true, "K2": true, "K5": true}
+	g.mu.Unlock()
+	s2 := newSpeakerKeys(keys, "", "", "on")
+	_, _, err = s2.synthesize("שלום", "")
+	var busy *speechBusyErr
+	if !errors.As(err, &busy) || busy.wait < 30*time.Minute {
+		t.Fatalf("all keys at quota: %v", err)
+	}
+}
+
+// הצפצוף בין ההודעות חוזר: play_beep=no שהוכנס בגרסה קודמת — יורד.
+func TestBeepRestored(t *testing.T) {
+	if got, ok := removeIniKey("type=playfile\nfile_amount_digits=5\nplay_beep=no\nvoice=Charon", "play_beep"); !ok || got != "type=playfile\nfile_amount_digits=5\nvoice=Charon" {
+		t.Fatalf("%v %q", ok, got)
+	}
+	if !isBridgeIni("type=playfile\nfile_amount_digits=5\nplay_beep=no") {
+		t.Fatal("old ini still ours")
 	}
 }

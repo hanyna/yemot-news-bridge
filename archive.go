@@ -39,9 +39,9 @@ const (
 	titleFile    = "99999.tts" // "עדכוני אלישע ירד." — נשמע ראשון בכניסה לשלוחת כתב
 	archiveIndex = "archive.txt"
 	fileDigits   = "5"
-	// playfileIni: הגדרות שלוחת השמעה של הגשר. play_beep=no — ימות המשיח משמיעים
-	// כברירת מחדל צפצוף בין קובץ לקובץ; בלעדיו ההודעות נשמעות ברצף, בלי המתנה.
-	playfileIni    = "type=playfile\nfile_amount_digits=" + fileDigits + "\nplay_beep=no"
+	// playfileIni: הגדרות שלוחת השמעה של הגשר. (הצפצוף בין הודעות — ברירת המחדל של
+	// ימות המשיח — נשאר, לבקשת בעל הקו.)
+	playfileIni    = "type=playfile\nfile_amount_digits=" + fileDigits
 	lateWindow     = 12 * 3600 // הודעה ישנה ביותר מזה מהחדשה שבארכיון, ולא באינדקס — כבר טופלה
 	keepIndexDays  = 9         // כמה ימים הודעה נשארת באינדקס (הניסוח משתנה עד היום ה-7)
 	rerenderBudget = 40        // כמה הקראות מעדכנים בסבב אחד (אחרי חצות יש הרבה)
@@ -758,12 +758,15 @@ func (st *state) ensureDigits(cfg *config, ext string) error {
 	if !exists {
 		ini = "type=playfile"
 	}
-	updated, changed := setIniValues(ini, [][2]string{{"file_amount_digits", fileDigits}, {"play_beep", "no"}})
+	updated, changed := setIniValues(ini, [][2]string{{"file_amount_digits", fileDigits}})
+	if u, removed := removeIniKey(updated, "play_beep"); removed {
+		updated, changed = u, true // הצפצוף בין הודעות חוזר (הוסר בגרסה קודמת)
+	}
 	if changed {
 		if err := cfg.y.upload(ext, "ext.ini", updated); err != nil {
 			return fmt.Errorf("עדכון ההגדרות של שלוחה %s: %w%s", ext, err, aclHint(err, "UploadTextFile"))
 		}
-		log.Printf("שלוחה %s: file_amount_digits=%s, play_beep=no (שמות קבצים בני 5 ספרות, בלי צפצוף בין הודעות).", ext, fileDigits)
+		log.Printf("שלוחה %s: ההגדרות עודכנו (file_amount_digits=%s).", ext, fileDigits)
 	}
 	st.digitsSet[ext] = true
 	return nil
