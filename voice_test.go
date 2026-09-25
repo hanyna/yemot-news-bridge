@@ -223,9 +223,9 @@ func TestSpeechLongMessageFull(t *testing.T) {
 	}
 	wav := f.files["ivr2:/1/10001.wav"]
 	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב.") {
-		t.Fatalf("wav should be full: len=%d tail=%q txt=%v", len(wav), wav[len(wav)-120:], f.files["ivr2:/1/10001.txt"] != "")
+		t.Fatalf("wav should be full: len=%d tail=%q txt=%v", len(wav), wav[len(wav)-120:], f.files["ivr2:/1/10001-full.txt"] != "")
 	}
-	if !strings.HasSuffix(f.files["ivr2:/1/10001.txt"], "סוף ההודעה") || !isBridgeFile("10001.txt") {
+	if !strings.HasSuffix(f.files["ivr2:/1/10001-full.txt"], "סוף ההודעה") || !isBridgeFile("10001-full.txt") {
 		t.Fatal("full text not kept")
 	}
 	nowFunc = func() time.Time { return day.Add(6 * time.Hour) }
@@ -252,7 +252,7 @@ func TestSpeechBackfillLong(t *testing.T) {
 	if err := syncOnce(&cfg, &state{}); err != nil { // בלי קול — כמו הגרסה הקודמת
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/1/10001.txt"] != "" || f.files["ivr2:/1/10001.wav"] != "" {
+	if f.files["ivr2:/1/10001-full.txt"] != "" || f.files["ivr2:/1/10001.wav"] != "" {
 		t.Fatal("setup")
 	}
 	cfg.speech = newSpeaker("GKEY", "", "on")
@@ -263,5 +263,12 @@ func TestSpeechBackfillLong(t *testing.T) {
 	st.speechTick(&cfg)
 	if w := f.files["ivr2:/1/10001.wav"]; !strings.Contains(w, "סוף ההודעה") || strings.Contains(w, "לא הוקרא") {
 		t.Fatalf("backfilled wav not full: len=%d", len(w))
+	}
+}
+
+// קובץ הפרטים שימות המשיח יוצרים לכל קובץ קול (NNNNN.txt) — לא נחשב טקסט מלא.
+func TestFullFileName(t *testing.T) {
+	if fullFile(10190) != "10191-full.txt" || fileNum("10191-full.txt") != 10191 || fileNum("10191.txt") != -1 || !isBridgeFile("10191-full.txt") {
+		t.Fatal(fullFile(10190), fileNum("10191-full.txt"), fileNum("10191.txt"))
 	}
 }

@@ -51,8 +51,11 @@ const (
 func speechFile(base int) string { return fmt.Sprintf("%05d.wav", base+1) }
 
 // fullFile: הטקסט המלא של הודעה ארוכה (רק כשההקראה כטקסט נחתכה). ימות המשיח
-// לא משמיעים קבצי txt.
-func fullFile(base int) string { return fmt.Sprintf("%05d.txt", base+1) }
+// לא משמיעים קבצי txt. לא NNNNN.txt — את השם הזה ימות המשיח תופסים לבד: בכל
+// העלאת קובץ קול הם כותבים לידו קובץ פרטים באותו שם (API-DID-...title=...).
+func fullFile(base int) string { return fmt.Sprintf("%05d%s", base+1, fullSuffix) }
+
+const fullSuffix = "-full.txt"
 
 // speechMaxChars: עד כמה תווים הקול מקריא (הודעה ארוכה מזה — נחתכת גם בקול).
 const speechMaxChars = 4000

@@ -194,6 +194,11 @@ func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		f.files[what] = "AUDIO:" + string(data) + ";convert=" + r.FormValue("convertAudio")
 		f.addName(dir, name)
+		// כמו ימות המשיח: לכל קובץ קול נכתב לידו קובץ פרטים באותו שם, בסיומת txt
+		if i := strings.LastIndex(name, "."); i > 0 {
+			f.files[dir+"/"+name[:i]+".txt"] = "API-DID-0770000000-Date-2026\r\ntitle=" + name + "\r\n"
+			f.addName(dir, name[:i]+".txt")
+		}
 		ok(map[string]any{"path": what})
 	case strings.HasSuffix(r.URL.Path, "UploadTextFile"):
 		what := r.PostForm.Get("what")

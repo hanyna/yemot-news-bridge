@@ -109,13 +109,18 @@ func itemKey(it FeedItem) string {
 	return fmt.Sprintf("%s/t%d-%x", it.Channel, it.TS, h.Sum32())
 }
 
-// fileNum: המספר שבשם קובץ ארכיון (12345.tts / 12345.wav / 12345.txt / 123456.tts), או -1.
+// fileNum: המספר שבשם קובץ ארכיון (12345.tts / 12345.wav / 12345-full.txt / 123456.tts), או -1.
 func fileNum(name string) int {
 	n := strings.ToLower(name)
-	if !(strings.HasSuffix(n, ".tts") || strings.HasSuffix(n, ".wav") || strings.HasSuffix(n, ".txt")) {
-		return -1
+	var d string
+	switch {
+	case strings.HasSuffix(n, fullSuffix):
+		d = n[:len(n)-len(fullSuffix)]
+	case strings.HasSuffix(n, ".tts"), strings.HasSuffix(n, ".wav"):
+		d = n[:len(n)-4]
+	default:
+		return -1 // גם NNNNN.txt — קובץ פרטים שימות המשיח יוצרים לבד לכל קובץ קול
 	}
-	d := n[:len(n)-4]
 	if len(d) != 5 && len(d) != 6 {
 		return -1
 	}
