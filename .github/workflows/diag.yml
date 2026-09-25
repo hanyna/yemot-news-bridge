@@ -18,4 +18,5 @@ jobs:
         env:
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}
-        run: go test -tags diag -run TestDiagFull -v -count=1 -timeout 13m .
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: go test -tags diag -run TestDiagQuota -v -count=1 -timeout 13m .

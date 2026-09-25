@@ -36,6 +36,28 @@ func out(title, msg string) {
 
 var reLatin = regexp.MustCompile(`[A-Za-z]{2,}`)
 
+func TestDiagQuota(t *testing.T) {
+	s := newSpeaker(os.Getenv("GEMINI_API_KEY"), "Charon", "on")
+	var b strings.Builder
+	body := []byte(`{"contents":[{"parts":[{"text":"בדיקה"}]}],"generationConfig":{"responseModalities":["AUDIO"],"speechConfig":{"voiceConfig":{"prebuiltVoiceConfig":{"voiceName":"Puck"}}}}}`)
+	for _, m := range speechModels {
+		_, st, err := s.call(m, body)
+		fmt.Fprintf(&b, "%s: %d %v\n", m, st, err)
+	}
+	y := &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: cleanKey(os.Getenv("YEMOT_API_KEY"))}
+	for _, e := range []string{"", "8", "2/4", "1"} {
+		info, _ := y.dir(e)
+		var w []string
+		for _, f := range info.Files {
+			if strings.HasSuffix(f, ".wav") && fileNum(f)%2 != 0 {
+				w = append(w, f)
+			}
+		}
+		fmt.Fprintf(&b, "[%s] wav: %v\n", e, w)
+	}
+	out("quota", b.String())
+}
+
 func TestDiagFull(t *testing.T) {
 	y := &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: cleanKey(os.Getenv("YEMOT_API_KEY"))}
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
