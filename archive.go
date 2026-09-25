@@ -88,6 +88,7 @@ type archive struct {
 	entries  map[string]*archEntry
 	dirty    bool
 	requeued bool
+	spoken   bool           // requeueSpeech כבר רץ בהפעלה הזו
 	adds     int            // הודעות שנוספו מאז השמירה האחרונה
 	addFails map[string]int // ניסיונות העלאה שנכשלו, לכל הודעה
 	rrFails  map[string]int // ניסיונות עדכון זמן שנכשלו, לכל הודעה
@@ -360,6 +361,7 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 		a.requeued = true
 		a.requeue(cfg, st, items, now)
 	}
+	a.requeueSpeech(cfg, now)
 	var seen []string
 	pending := 0
 	for _, it := range items {
@@ -505,6 +507,7 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 	if err := cfg.y.upload(a.ext, introFile(b), text); err != nil {
 		return fmt.Errorf("שליחה לשלוחה %s (%s): %w", a.ext, introFile(b), err)
 	}
+	cfg.speech.add(a.ext, b, text, false) // קול מוכן מראש (voice.go) — ברקע
 	e := &archEntry{key: itemKey(it), base: b, ts: it.TS, class: whenClass(time.Unix(it.TS, 0).In(cfg.loc), now)}
 	if cfg.audio {
 		e.media, e.audio = st.queueAudio(cfg, it, a.ext, b, now)
@@ -587,6 +590,15 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 			continue
 		}
 		e.class, a.dirty = c, true
+		if cfg.speech != nil {
+			// הקול הישן אומר את הניסוח הקודם — נמחק (עד שהחדש מוכן מושמע הטקסט), ונוצר מחדש.
+			if a.hasFile(speechFile(e.base)) {
+				if err := a.dropFile(cfg, speechFile(e.base)); err != nil {
+					log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %s נכשלה: %v", speechFile(e.base), a.ext, err)
+				}
+			}
+			cfg.speech.add(a.ext, e.base, text, true)
+		}
 	}
 }
 

@@ -94,6 +94,7 @@ type config struct {
 	loc              *time.Location
 	y                *yemot
 	vision           *visionClient // ניתוח תמונות עם Gemini (nil = כבוי) — vision.go
+	speech           *speaker      // קול מוכן מראש להודעות (nil = כבוי) — voice.go
 	client           *http.Client  // ל-API של ערוץ חי
 	feedClient       *http.Client  // זמן המתנה ארוך — Render מתעורר לאט
 }
@@ -168,6 +169,10 @@ func main() {
 	} else {
 		log.Println("ניתוח תמונות: כבוי (אין GEMINI_API_KEY ב-Secrets, או VISION=off).")
 	}
+	cfg.speech = newSpeaker(os.Getenv("GEMINI_API_KEY"), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH"))
+	if cfg.speech != nil {
+		log.Printf("קול מוכן מראש (Gemini, קול %s): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice)
+	}
 	var err error
 	if cfg.loc, err = time.LoadLocation("Asia/Jerusalem"); err != nil {
 		cfg.loc = time.FixedZone("IL", 3*3600)
@@ -184,6 +189,9 @@ func main() {
 	interval := time.Duration(envInt("INTERVAL_SECONDS", 60)) * time.Second
 	if cfg.useWorker() && runFor > 0 {
 		st.aw.start(&cfg) // ברקע — ההקראות לא מחכות לקול
+	}
+	if runFor > 0 {
+		cfg.speech.start(&cfg) // ברקע — ההודעה עולה מיד כטקסט, והקול מחליף אותה כשהוא מוכן
 	}
 	if runFor == 0 {
 		if err := syncOnce(&cfg, st); err != nil {
@@ -409,6 +417,7 @@ func syncOnce(cfg *config, st *state) error {
 	// הקול של סרטונים, הודעות קוליות ופרקי פודקאסטים: מה שנוסף בסבב יוצא לעבודה
 	// (ברקע), ומה שה-worker סיים נרשם. ואז — שמירת האינדקסים שהשתנו.
 	st.audioTick(cfg)
+	st.speechTick(cfg)
 	podReady := st.finishPodcasts(cfg)
 	if err := st.saveArchives(cfg, now); err != nil && cycleErr == nil {
 		cycleErr = err
