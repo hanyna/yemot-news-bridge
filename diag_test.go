@@ -140,6 +140,26 @@ func TestDiagDryRun(t *testing.T) {
 			t := cleanForSpeech(it.Text)
 			fmt.Fprintf(&b, "RAW %s ts=%d excluded=%v note=%q only=%v skip=%v isAd=%v text=%.80q html=%.300q\n", itemKey(it), it.TS, cfg.excluded(it.Channel), note, only, skip, t != "" && isAd(t), it.Text, it.HTML)
 		}
+		b.Reset()
+		cnt := 0
+		for _, it := range items {
+			t := cleanForSpeech(it.Text)
+			if t == "" || !isAd(t) {
+				continue
+			}
+			cnt++
+			var hit []string
+			for _, p := range adPhrases {
+				if strings.Contains(t, p) {
+					i := strings.Index(t, p)
+					hit = append(hit, fmt.Sprintf("[%s @%d/%d: ...%s...]", p, len([]rune(t[:i])), len([]rune(t)), string([]rune(t[max(0, i-60):])[:min(len([]rune(t[max(0, i-60):])), 90)])))
+				}
+			}
+			if cnt <= 45 {
+				fmt.Fprintf(&b, "%s: %s\n", itemKey(it), strings.Join(hit, " "))
+			}
+		}
+		fmt.Fprintf(&b, "TOTAL ads=%d of %d\n", cnt, len(items))
 		note("has", b.String())
 	}
 	if os.Getenv("DRY") == "" {
