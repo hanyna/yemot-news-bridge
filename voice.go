@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,12 +39,12 @@ var speechModels = []string{"gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts",
 var speechEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 
 const (
-	speechTries      = 3                 // ניסיונות לכל קובץ
-	speechQuotaPause = time.Hour         // מודל שהגיע למכסה — לא מנסים אותו לפני כן
-	speechBusyPause  = 2 * time.Minute   // כל המודלים עמוסים — הפסקה קצרה
-	speechRequeueAge = 12 * time.Hour    // אחרי הפעלה מחדש: הודעות מהשעות האחרונות בלי קול — חוזרות לתור
-	speechRequeueMax = 40                // כמה לכל היותר בכל שלוחה
-	speechTimeout    = 150 * time.Second // בקשה אחת ל-Gemini (הודעה ארוכה לוקחת עד דקה וחצי)
+	speechTries      = 3                  // ניסיונות לכל קובץ
+	speechQuotaPause = time.Hour          // מודל שהגיע למכסה — לא מנסים אותו לפני כן
+	speechBusyPause  = 2 * time.Minute    // כל המודלים עמוסים — הפסקה קצרה
+	speechRequeueAge = 3 * 24 * time.Hour // הודעות מהימים האחרונים בלי קול — נכנסות לתור (בעדיפות נמוכה, החדשות קודם)
+	speechRequeueMax = 150                // כמה לכל היותר בכל שלוחה
+	speechTimeout    = 150 * time.Second  // בקשה אחת ל-Gemini (הודעה ארוכה לוקחת עד דקה וחצי)
 )
 
 // speechFile: קובץ הקול של ההקראה (אותו מספר כמו introFile, בסיומת wav).
@@ -490,8 +491,13 @@ func (a *archive) requeueSpeech(cfg *config, now time.Time) {
 		return
 	}
 	a.spoken = true
-	n := 0
+	list := make([]*archEntry, 0, len(a.entries))
 	for _, e := range a.entries {
+		list = append(list, e)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].base > list[j].base }) // החדשות קודם
+	n := 0
+	for _, e := range list {
 		if n >= speechRequeueMax {
 			break
 		}
