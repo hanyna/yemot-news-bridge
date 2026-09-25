@@ -13,26 +13,25 @@ import (
 
 func TestDiagTTS(t *testing.T) {
 	y := &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: cleanKey(os.Getenv("YEMOT_API_KEY"))}
-	s := newSpeaker(os.Getenv("GEMINI_API_KEY"), "Charon", "on")
-	os.MkdirAll("samples", 0o755)
 	var rep strings.Builder
-	for i, f := range []string{"10215.tts", "10191.tts", "10205.tts"} {
-		text, _, err := y.read("1", f)
-		if err != nil || text == "" {
-			fmt.Fprintf(&rep, "%s read: %v\n", f, err)
-			continue
-		}
-		t0 := time.Now()
-		wav, model, err := s.synthesize(text)
-		if err == nil {
-			wav, err = prepareSpeech(wav)
-		}
+	for _, ext := range []string{"1", "2/3", "2/7"} {
+		info, err := y.dir(ext)
 		if err != nil {
-			fmt.Fprintf(&rep, "%s: %v\n", f, err)
+			fmt.Fprintf(&rep, "%s: %v\n", ext, err)
 			continue
 		}
-		os.WriteFile(fmt.Sprintf("samples/line-%d.wav", i+1), wav, 0o644)
-		fmt.Fprintf(&rep, "%s: %d chars, %s, %.1fs audio, took %v\n", f, len([]rune(text)), model, float64(len(wav)-44)/16000, time.Since(t0).Round(100*time.Millisecond))
+		files := archiveFiles(info.Files)
+		var wavs []string
+		for _, f := range files {
+			if fileNum(f)%2 == 1 && strings.HasSuffix(f, ".wav") {
+				wavs = append(wavs, f)
+			}
+		}
+		last := files
+		if len(last) > 8 {
+			last = last[len(last)-8:]
+		}
+		fmt.Fprintf(&rep, "ext %s: files=%d speech-wavs=%d %v | newest: %v\n", ext, len(files), len(wavs), wavs, last)
 	}
-	fmt.Printf("::notice title=tts::%s\n", strings.ReplaceAll(rep.String(), "\n", "%0A"))
+	fmt.Printf("::notice title=line::%s\n", strings.ReplaceAll(rep.String(), "\n", "%0A"))
 }
