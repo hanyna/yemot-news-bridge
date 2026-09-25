@@ -44,11 +44,18 @@ const (
 	speechBusyPause  = 2 * time.Minute    // כל המודלים עמוסים — הפסקה קצרה
 	speechRequeueAge = 3 * 24 * time.Hour // הודעות מהימים האחרונים בלי קול — נכנסות לתור (בעדיפות נמוכה, החדשות קודם)
 	speechRequeueMax = 150                // כמה לכל היותר בכל שלוחה
-	speechTimeout    = 150 * time.Second  // בקשה אחת ל-Gemini (הודעה ארוכה לוקחת עד דקה וחצי)
+	speechTimeout    = 5 * time.Minute    // בקשה אחת (הודעה ארוכה במלואה לוקחת כמה דקות)
 )
 
 // speechFile: קובץ הקול של ההקראה (אותו מספר כמו introFile, בסיומת wav).
 func speechFile(base int) string { return fmt.Sprintf("%05d.wav", base+1) }
+
+// fullFile: הטקסט המלא של הודעה ארוכה (רק כשההקראה כטקסט נחתכה). ימות המשיח
+// לא משמיעים קבצי txt.
+func fullFile(base int) string { return fmt.Sprintf("%05d.txt", base+1) }
+
+// speechMaxChars: עד כמה תווים הקול מקריא (הודעה ארוכה מזה — נחתכת גם בקול).
+const speechMaxChars = 4000
 
 type speechJob struct {
 	ext       string
@@ -486,7 +493,7 @@ func (a *archive) dropFile(cfg *config, name string) error {
 
 // requeueSpeech: אחרי הפעלה מחדש (התור נשמר רק בזיכרון) — הודעות מהשעות האחרונות
 // שעדיין בלי קול חוזרות לתור. פעם אחת לכל שלוחה בכל הפעלה.
-func (a *archive) requeueSpeech(cfg *config, now time.Time) {
+func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string]string, now time.Time) {
 	if cfg.speech == nil || a.spoken {
 		return
 	}
@@ -496,15 +503,40 @@ func (a *archive) requeueSpeech(cfg *config, now time.Time) {
 		list = append(list, e)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].base > list[j].base }) // החדשות קודם
-	n := 0
+	byKey := map[string]FeedItem{}
+	for _, it := range items {
+		byKey[itemKey(it)] = it
+	}
+	n, long := 0, 0
 	for _, e := range list {
 		if n >= speechRequeueMax {
 			break
 		}
-		if e.base < 0 || now.Sub(time.Unix(e.ts, 0)) > speechRequeueAge || a.hasFile(speechFile(e.base)) || !a.hasFile(introFile(e.base)) {
+		if e.base < 0 || now.Sub(time.Unix(e.ts, 0)) > speechRequeueAge || !a.hasFile(introFile(e.base)) {
 			continue
 		}
-		text, exists, err := cfg.y.read(a.ext, introFile(e.base))
+		// הודעה ארוכה מלפני שהקול הקריא הודעות במלואן — הטקסט המלא מהשרת
+		if it, ok := byKey[e.key]; ok && !a.hasFile(fullFile(e.base)) {
+			full := spokenItem(it, titles, cfg.loc, now, a.withName, speechMaxChars)
+			if full != spokenItem(it, titles, cfg.loc, now, a.withName, maxPerFile) && cfg.y.upload(a.ext, fullFile(e.base), full) == nil {
+				a.addFile(fullFile(e.base))
+				if a.hasFile(speechFile(e.base)) {
+					_ = a.dropFile(cfg, speechFile(e.base)) // הקול המקוצר — יוחלף במלא
+				}
+				cfg.speech.add(a.ext, e.base, full, true)
+				n++
+				long++
+				continue
+			}
+		}
+		if a.hasFile(speechFile(e.base)) {
+			continue
+		}
+		name := introFile(e.base)
+		if a.hasFile(fullFile(e.base)) {
+			name = fullFile(e.base)
+		}
+		text, exists, err := cfg.y.read(a.ext, name)
 		if err != nil || !exists {
 			continue
 		}
@@ -512,7 +544,7 @@ func (a *archive) requeueSpeech(cfg *config, now time.Time) {
 		n++
 	}
 	if n > 0 {
-		log.Printf("שלוחה %s: %d הודעות אחרונות בלי קול מוכן — נכנסו לתור.", a.ext, n)
+		log.Printf("שלוחה %s: %d הודעות אחרונות בלי קול מוכן (מהן %d ארוכות — במלואן) — נכנסו לתור.", a.ext, n, long)
 	}
 }
 

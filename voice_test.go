@@ -198,3 +198,70 @@ func TestSpeechMenuVoice(t *testing.T) {
 		t.Fatalf("menu first with menu voice: %+v", j)
 	}
 }
+
+// הודעה ארוכה: הטקסט נחתך (מגבלת ימות), אבל הקול מקריא הכול — גם אחרי שינוי ניסוח הזמן.
+func TestSpeechLongMessageFull(t *testing.T) {
+	g := &fakeTTS{status: map[string]int{}}
+	withFakeTTS(t, g)
+	defer func() { nowFunc = time.Now }()
+	loc, _ := time.LoadLocation("Asia/Jerusalem")
+	day := time.Date(2026, 9, 24, 20, 0, 0, 0, loc)
+	nowFunc = func() time.Time { return day }
+	long := strings.Repeat("זה משפט ארוך מאוד עם הרבה מילים. ", 60) + "סוף ההודעה."
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: day.Add(-time.Hour).Unix(), Text: long}},
+		`{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.speech = newSpeaker("GKEY", "", "on")
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "המשך ההודעה לא הוקרא.") {
+		t.Fatalf("tts should be cut: %q", f.files["ivr2:/1/10001.tts"][len(f.files["ivr2:/1/10001.tts"])-80:])
+	}
+	wav := f.files["ivr2:/1/10001.wav"]
+	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב.") {
+		t.Fatalf("wav should be full: len=%d tail=%q txt=%v", len(wav), wav[len(wav)-120:], f.files["ivr2:/1/10001.txt"] != "")
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.txt"], "סוף ההודעה") || !isBridgeFile("10001.txt") {
+		t.Fatal("full text not kept")
+	}
+	nowFunc = func() time.Time { return day.Add(6 * time.Hour) }
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	wav = f.files["ivr2:/1/10001.wav"]
+	if !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, אתמול בשעה 7 בערב.") || !strings.Contains(wav, "סוף ההודעה") {
+		t.Fatalf("rerendered full wav: %.120q", wav)
+	}
+}
+
+// הודעה ארוכה שעלתה לפני התיקון (טקסט מקוצר, בלי טקסט מלא) — אחרי הפעלה מחדש
+// הקול נוצר במלואו מההודעה שבשרת.
+func TestSpeechBackfillLong(t *testing.T) {
+	g := &fakeTTS{status: map[string]int{}}
+	withFakeTTS(t, g)
+	now := time.Now().Unix()
+	long := strings.Repeat("זה משפט ארוך מאוד עם הרבה מילים. ", 60) + "סוף ההודעה"
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 3600, Text: long}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil { // בלי קול — כמו הגרסה הקודמת
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10001.txt"] != "" || f.files["ivr2:/1/10001.wav"] != "" {
+		t.Fatal("setup")
+	}
+	cfg.speech = newSpeaker("GKEY", "", "on")
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	st.speechTick(&cfg)
+	if w := f.files["ivr2:/1/10001.wav"]; !strings.Contains(w, "סוף ההודעה") || strings.Contains(w, "לא הוקרא") {
+		t.Fatalf("backfilled wav not full: len=%d", len(w))
+	}
+}

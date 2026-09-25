@@ -109,10 +109,10 @@ func itemKey(it FeedItem) string {
 	return fmt.Sprintf("%s/t%d-%x", it.Channel, it.TS, h.Sum32())
 }
 
-// fileNum: המספר שבשם קובץ ארכיון (12345.tts / 12345.wav / 123456.tts), או -1.
+// fileNum: המספר שבשם קובץ ארכיון (12345.tts / 12345.wav / 12345.txt / 123456.tts), או -1.
 func fileNum(name string) int {
 	n := strings.ToLower(name)
-	if !(strings.HasSuffix(n, ".tts") || strings.HasSuffix(n, ".wav")) {
+	if !(strings.HasSuffix(n, ".tts") || strings.HasSuffix(n, ".wav") || strings.HasSuffix(n, ".txt")) {
 		return -1
 	}
 	d := n[:len(n)-4]
@@ -361,7 +361,7 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 		a.requeued = true
 		a.requeue(cfg, st, items, now)
 	}
-	a.requeueSpeech(cfg, now)
+	a.requeueSpeech(cfg, items, titles, now)
 	var seen []string
 	pending := 0
 	for _, it := range items {
@@ -507,7 +507,21 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 	if err := cfg.y.upload(a.ext, introFile(b), text); err != nil {
 		return fmt.Errorf("שליחה לשלוחה %s (%s): %w", a.ext, introFile(b), err)
 	}
-	cfg.speech.add(a.ext, b, text, false) // קול מוכן מראש (voice.go) — ברקע
+	// קול מוכן מראש (voice.go) — ברקע. הודעה ארוכה: ההקראה כטקסט נחתכת (מגבלה של
+	// ימות המשיח), אבל הקול מקריא אותה במלואה — והטקסט המלא נשמר ליד (NNNNN.txt),
+	// כדי שאפשר יהיה ליצור את הקול מחדש כשניסוח הזמן משתנה.
+	spoken := text
+	if cfg.speech != nil {
+		if full := spokenItem(it, titles, cfg.loc, now, a.withName, speechMaxChars); full != text {
+			if err := cfg.y.upload(a.ext, fullFile(b), full); err != nil {
+				log.Printf("הערה: שמירת הטקסט המלא %s בשלוחה %s נכשלה (הקול יהיה מקוצר): %v", fullFile(b), a.ext, err)
+			} else {
+				spoken = full
+				a.addFile(fullFile(b))
+			}
+		}
+	}
+	cfg.speech.add(a.ext, b, spoken, false)
 	e := &archEntry{key: itemKey(it), base: b, ts: it.TS, class: whenClass(time.Unix(it.TS, 0).In(cfg.loc), now)}
 	if cfg.audio {
 		e.media, e.audio = st.queueAudio(cfg, it, a.ext, b, now)
@@ -580,6 +594,7 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 			giveUp("קריאה", err)
 			continue
 		}
+		prevClass := e.class
 		text, ok := replaceWhen(old, t, e.class, c)
 		if !ok {
 			e.class, a.dirty = c, true // לא מצאנו את ביטוי הזמן בפתיחה — משאירים כמו שהיא
@@ -590,6 +605,15 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 			continue
 		}
 		e.class, a.dirty = c, true
+		spoken := text
+		if cfg.speech != nil && a.hasFile(fullFile(e.base)) {
+			// הודעה ארוכה — גם הטקסט המלא (של הקול) מקבל את הניסוח החדש
+			if full, ok, err := cfg.y.read(a.ext, fullFile(e.base)); err == nil && ok {
+				if f2, ok := replaceWhen(full, t, prevClass, c); ok && cfg.y.upload(a.ext, fullFile(e.base), f2) == nil {
+					spoken = f2
+				}
+			}
+		}
 		if cfg.speech != nil {
 			// הקול הישן אומר את הניסוח הקודם — נמחק (עד שהחדש מוכן מושמע הטקסט), ונוצר מחדש.
 			if a.hasFile(speechFile(e.base)) {
@@ -597,7 +621,7 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 					log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %s נכשלה: %v", speechFile(e.base), a.ext, err)
 				}
 			}
-			cfg.speech.add(a.ext, e.base, text, true)
+			cfg.speech.add(a.ext, e.base, spoken, true)
 		}
 	}
 }
