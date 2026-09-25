@@ -132,7 +132,18 @@ func TestDiagDryRun(t *testing.T) {
 			}
 			fmt.Fprintf(&b, "%s ts=%d has=%v inIdx=%v <cutoff=%v media=%v text=%.40q\n", itemKey(it), it.TS, a.has(it, now), inIdx, it.TS < a.cutoff, it.MediaOnly, it.Text)
 		}
+		for _, it := range items {
+			if it.TS <= a.last {
+				continue
+			}
+			note, only, skip := mediaNote(it.HTML)
+			t := cleanForSpeech(it.Text)
+			fmt.Fprintf(&b, "RAW %s ts=%d excluded=%v note=%q only=%v skip=%v isAd=%v text=%.80q html=%.300q\n", itemKey(it), it.TS, cfg.excluded(it.Channel), note, only, skip, t != "" && isAd(t), it.Text, it.HTML)
+		}
 		note("has", b.String())
+	}
+	if os.Getenv("DRY") == "" {
+		return
 	}
 	done := make(chan struct{})
 	go func() {
