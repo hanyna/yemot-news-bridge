@@ -725,7 +725,7 @@ func ensureChannelExt(cfg *config, st *state, channel, ext string) bool {
 		log.Printf(format, args...)
 		return false
 	}
-	want, _ := setIniValues("type=playfile\nfile_amount_digits="+fileDigits, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+	want, _ := setIniValues(playfileIni, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
 	info, err := cfg.y.dir(ext)
 	if err != nil {
 		return failed(st, ext, "הערה: לא הצלחתי לבדוק את שלוחה %s: %v", ext, err)
@@ -957,7 +957,7 @@ func isBridgeIni(ini string) bool {
 		case t == "":
 		case t == "type=playfile":
 			sawType = true
-		case strings.HasPrefix(t, "voice="), strings.HasPrefix(t, "rate="), strings.HasPrefix(t, "file_amount_digits="):
+		case strings.HasPrefix(t, "voice="), strings.HasPrefix(t, "rate="), strings.HasPrefix(t, "file_amount_digits="), strings.HasPrefix(t, "play_beep="):
 		default:
 			return false
 		}

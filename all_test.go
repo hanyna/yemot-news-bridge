@@ -372,7 +372,7 @@ func TestNewMenuStructure(t *testing.T) {
 	if fl["ivr2:/2/M1000.tts"] != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2." {
 		t.Fatalf("chooser: %q", fl["ivr2:/2/M1000.tts"])
 	}
-	if fl["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/2/1/99999.tts"] != "עדכוני אלישע ירד." ||
+	if fl["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5\nplay_beep=no" || fl["ivr2:/2/1/99999.tts"] != "עדכוני אלישע ירד." ||
 		!strings.Contains(fl["ivr2:/2/1/10001.tts"], "ביהודה ושומרון") || strings.HasPrefix(fl["ivr2:/2/1/10001.tts"], "אלישע ירד") {
 		t.Fatalf("2/1: %q %q %q", fl["ivr2:/2/1/ext.ini"], fl["ivr2:/2/1/99999.tts"], fl["ivr2:/2/1/10001.tts"])
 	}
@@ -619,7 +619,7 @@ func TestCreatesMissingSubExtensions(t *testing.T) {
 			t.Errorf("extension %s was not created", ext)
 		}
 	}
-	if f.files["ivr2:/2/3/ext.ini"] != "type=playfile\nfile_amount_digits=5" || f.files["ivr2:/2/3/99999.tts"] != "עדכוני השומרון." ||
+	if f.files["ivr2:/2/3/ext.ini"] != "type=playfile\nfile_amount_digits=5\nplay_beep=no" || f.files["ivr2:/2/3/99999.tts"] != "עדכוני השומרון." ||
 		!strings.HasSuffix(f.files["ivr2:/2/3/10001.tts"], "שלישית") {
 		t.Errorf("2/3: %q %q %q", f.files["ivr2:/2/3/ext.ini"], f.files["ivr2:/2/3/99999.tts"], f.files["ivr2:/2/3/10001.tts"])
 	}
@@ -689,7 +689,7 @@ func TestSubExtWithoutIni(t *testing.T) {
 	if err := syncOnce(&cfg, &state{}); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" {
+	if f.files["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5\nplay_beep=no" {
 		t.Fatalf("2/1 ext.ini: %q", f.files["ivr2:/2/1/ext.ini"])
 	}
 }
@@ -1540,7 +1540,7 @@ func TestPodcasts(t *testing.T) {
 	if fl["ivr2:/3/ext.ini"] != "type=menu\ndigits=1" || fl["ivr2:/3/M1000.tts"] != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1." {
 		t.Fatalf("ext 3: %q | %q", fl["ivr2:/3/ext.ini"], fl["ivr2:/3/M1000.tts"])
 	}
-	if fl["ivr2:/3/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/3/1/99999.tts"] != "חושבים בקול של הקול היהודי." {
+	if fl["ivr2:/3/1/ext.ini"] != "type=playfile\nfile_amount_digits=5\nplay_beep=no" || fl["ivr2:/3/1/99999.tts"] != "חושבים בקול של הקול היהודי." {
 		t.Fatalf("3/1: %q | %q", fl["ivr2:/3/1/ext.ini"], fl["ivr2:/3/1/99999.tts"])
 	}
 	// שני הפרקים האחרונים (2 ו-3), הישן לפני החדש; הראשון — לא.

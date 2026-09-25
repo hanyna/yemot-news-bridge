@@ -32,13 +32,16 @@ import (
 )
 
 const (
-	archiveFirst   = 10000       // הבסיס של ההודעה הראשונה (מתחת — שמור לייבוא היסטוריה בעתיד)
-	archiveLast    = 99990       // הבסיס האחרון בן 5 ספרות; 99999 שמור לכותרת של שלוחת כתב
-	sixFirst       = 100000      // משם ממשיכים ב-6 ספרות (בקצב הנוכחי — אחרי יותר משנה בשלוחה 1)
-	sixLast        = 999990      // תקרה
-	titleFile      = "99999.tts" // "עדכוני אלישע ירד." — נשמע ראשון בכניסה לשלוחת כתב
-	archiveIndex   = "archive.txt"
-	fileDigits     = "5"
+	archiveFirst = 10000       // הבסיס של ההודעה הראשונה (מתחת — שמור לייבוא היסטוריה בעתיד)
+	archiveLast  = 99990       // הבסיס האחרון בן 5 ספרות; 99999 שמור לכותרת של שלוחת כתב
+	sixFirst     = 100000      // משם ממשיכים ב-6 ספרות (בקצב הנוכחי — אחרי יותר משנה בשלוחה 1)
+	sixLast      = 999990      // תקרה
+	titleFile    = "99999.tts" // "עדכוני אלישע ירד." — נשמע ראשון בכניסה לשלוחת כתב
+	archiveIndex = "archive.txt"
+	fileDigits   = "5"
+	// playfileIni: הגדרות שלוחת השמעה של הגשר. play_beep=no — ימות המשיח משמיעים
+	// כברירת מחדל צפצוף בין קובץ לקובץ; בלעדיו ההודעות נשמעות ברצף, בלי המתנה.
+	playfileIni    = "type=playfile\nfile_amount_digits=" + fileDigits + "\nplay_beep=no"
 	lateWindow     = 12 * 3600 // הודעה ישנה ביותר מזה מהחדשה שבארכיון, ולא באינדקס — כבר טופלה
 	keepIndexDays  = 9         // כמה ימים הודעה נשארת באינדקס (הניסוח משתנה עד היום ה-7)
 	rerenderBudget = 40        // כמה הקראות מעדכנים בסבב אחד (אחרי חצות יש הרבה)
@@ -284,7 +287,7 @@ func loadArchive(cfg *config, ext, channel string, withName bool, now time.Time)
 	}
 	if !info.Exists {
 		// שלוחה שלא קיימת — יוצרים (העלאת קבצים לשלוחה שלא קיימת "מצליחה" בלי לעשות כלום).
-		ini, _ := setIniValues("type=playfile\nfile_amount_digits="+fileDigits, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
+		ini, _ := setIniValues(playfileIni, [][2]string{{"voice", cfg.voice}, {"rate", cfg.rate}})
 		if err := cfg.y.createExt(ext, ini); err != nil {
 			return nil, fmt.Errorf("יצירת שלוחה %s: %w", ext, err)
 		}
@@ -771,12 +774,12 @@ func (st *state) ensureDigits(cfg *config, ext string) error {
 	if !exists {
 		ini = "type=playfile"
 	}
-	updated, changed := setIniValues(ini, [][2]string{{"file_amount_digits", fileDigits}})
+	updated, changed := setIniValues(ini, [][2]string{{"file_amount_digits", fileDigits}, {"play_beep", "no"}})
 	if changed {
 		if err := cfg.y.upload(ext, "ext.ini", updated); err != nil {
 			return fmt.Errorf("עדכון ההגדרות של שלוחה %s: %w%s", ext, err, aclHint(err, "UploadTextFile"))
 		}
-		log.Printf("שלוחה %s: file_amount_digits=%s (שמות קבצים בני 5 ספרות).", ext, fileDigits)
+		log.Printf("שלוחה %s: file_amount_digits=%s, play_beep=no (שמות קבצים בני 5 ספרות, בלי צפצוף בין הודעות).", ext, fileDigits)
 	}
 	st.digitsSet[ext] = true
 	return nil
