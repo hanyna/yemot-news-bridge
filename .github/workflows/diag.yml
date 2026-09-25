@@ -21,4 +21,5 @@ jobs:
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DRY: "1"
         run: go test -tags diag -run TestDiagDryRun -v -count=1 -timeout 12m .

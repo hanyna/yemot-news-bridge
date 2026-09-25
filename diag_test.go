@@ -195,7 +195,7 @@ func TestDiagDryRun(t *testing.T) {
 	// מסננים שורות "טריות" הרבות
 	var lines []string
 	for _, s := range strings.Split(l, "\n") {
-		if strings.Contains(s, "טריות: ערוץ") {
+		if strings.Contains(s, "טריות: ערוץ") || strings.Contains(s, "הוגדרה") || strings.Contains(s, "תפריט") || strings.Contains(s, "הודעת פתיחה") {
 			continue
 		}
 		lines = append(lines, s)
