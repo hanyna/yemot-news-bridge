@@ -77,7 +77,7 @@ func (a *archive) purge(cfg *config, gone func(channel string) bool) error {
 	del := map[string]bool{}
 	var paths []string
 	for _, e := range victims {
-		for _, n := range []string{audioFile(e.base), introFile(e.base)} {
+		for _, n := range []string{audioFile(e.base), introFile(e.base), speechFile(e.base)} {
 			if have[n] {
 				del[n] = true
 				paths = append(paths, ivrPath(a.ext, n))
