@@ -37,6 +37,7 @@ type FeedItem struct {
 
 	Flash     bool `json:"-"` // מכיל מילת מבזק
 	MediaOnly bool `json:"-"` // אין טקסט — רק מדיה (לא עובר סינון כפילויות)
+	OldPromo  bool `json:"-"` // היה נזרק ככלל הישן ("להצטרפות לערוץ..." = פרסומת) — ראו promoSince
 }
 
 type Channel struct {
@@ -623,6 +624,11 @@ func prepareClean(items []FeedItem) []FeedItem {
 		}
 		it.RawText = it.Text
 		text := cleanForSpeech(it.Text)
+		if t, ok := stripPromo(text); ok {
+			text = t
+			it.OldPromo = wasPromoAd(cleanForSpeech(it.Text))
+			it.RawText, _ = stripPromo(it.RawText)
+		}
 		switch {
 		case onlyMedia && note != "":
 			text = cleanForSpeech(publishedVerb(note) + " " + note)

@@ -342,6 +342,10 @@ func (a *archive) has(it FeedItem, now time.Time) bool {
 	return it.TS < a.cutoff || (it.TS <= a.last-lateWindow && it.TS < now.Add(-keepIndexDays*24*time.Hour).Unix())
 }
 
+// promoBacklog: הודעה עם חתימת "להצטרפות לערוץ" מלפני התיקון (promoSince) — לא
+// נכנסת באיחור (הכלל הישן זרק אותה; ראו stripPromo ב-content.go).
+func promoBacklog(it FeedItem) bool { return it.OldPromo && it.TS < promoSince }
+
 // sync מוסיף לארכיון את ההודעות החדשות. items: נקיות (prepareClean), מהישנה
 // לחדשה. הודעה שדומה להודעה שכבר בארכיון (אותה הודעה שהועברה בערוץ אחר) — לא
 // נוספת. כישלון בהעלאה עוצר (כדי לשמור על הסדר) — ננסה שוב בסבב הבא; הודעה
@@ -359,6 +363,9 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 	var seen []string
 	pending := 0
 	for _, it := range items {
+		if promoBacklog(it) {
+			continue
+		}
 		if a.has(it, now) {
 			if !it.MediaOnly {
 				seen = append(seen, dedupeKey(it.Text))
@@ -372,7 +379,7 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 		log.Printf("שלוחה %s: מוסיף %d הודעות לארכיון.", a.ext, pending)
 	}
 	for _, it := range items {
-		if it.TS <= 0 || a.has(it, now) {
+		if it.TS <= 0 || promoBacklog(it) || a.has(it, now) {
 			continue
 		}
 		k := ""

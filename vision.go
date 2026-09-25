@@ -287,10 +287,28 @@ func (v *visionClient) analyze(urls []string, msgText string) (desc, text string
 // generate: מוצא בפעם הראשונה כתובת ומודל שעובדים עם המפתח, ונשאר איתם.
 func (v *visionClient) generate(body []byte) (string, error) {
 	if v.found {
-		out, _, err := v.call(v.endpoint, v.model, body)
+		out, status, err := v.call(v.endpoint, v.model, body)
+		if err == nil || !overloaded(status) {
+			return out, err
+		}
+		// "עומס גבוה על המודל" (503) — קורה לא מעט. במקום לוותר על התיאור,
+		// מנסים את שאר המודלים ברשימה (לבקשה הזו בלבד).
+		for m := range v.models {
+			if m == v.model {
+				continue
+			}
+			o, s, e := v.call(v.endpoint, m, body)
+			if e == nil {
+				log.Printf("ניתוח תמונות: %s עמוס — נעזר ב-%s.", v.models[v.model], v.models[m])
+				return o, nil
+			}
+			if !overloaded(s) && s != http.StatusNotFound && s != http.StatusBadRequest {
+				break
+			}
+		}
 		return out, err
 	}
-	var lastErr error
+	var lastErr, busyErr error
 endpoints:
 	for e := range visionEndpoints {
 		for m := range v.models {
@@ -306,6 +324,9 @@ endpoints:
 				continue // המודל לא קיים / לא זמין למפתח הזה — המודל הבא
 			case status == http.StatusUnauthorized, status == http.StatusForbidden:
 				continue endpoints // המפתח לא מתאים לכתובת הזו — הכתובת הבאה
+			case overloaded(status):
+				busyErr = err
+				continue // המודל עמוס — המודל הבא
 			case status == http.StatusTooManyRequests:
 				return "", &visionPauseErr{"חריגה מהמכסה של Gemini"}
 			default:
@@ -313,7 +334,16 @@ endpoints:
 			}
 		}
 	}
+	if busyErr != nil {
+		return "", busyErr // עומס זמני — ננסה שוב בהודעה הבאה, בלי הפסקה
+	}
 	return "", &visionPauseErr{fmt.Sprintf("המפתח GEMINI_API_KEY לא התקבל (בדקו שהוא הועתק נכון ל-Secrets): %v", lastErr)}
+}
+
+// overloaded: תקלה זמנית בצד של Google (עומס / שגיאת שרת) — מודל אחר כנראה יעבוד.
+func overloaded(status int) bool {
+	return status == http.StatusServiceUnavailable || status == http.StatusInternalServerError ||
+		status == http.StatusGatewayTimeout || status == http.StatusBadGateway
 }
 
 // call: בקשה אחת ל-Gemini. מחזיר את הטקסט שבתשובה, או את קוד השגיאה.

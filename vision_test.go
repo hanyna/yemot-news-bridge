@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -197,5 +198,45 @@ func TestVisionOff(t *testing.T) {
 	}
 	if v := newVisionClient(" k\n", "my-model", ""); v == nil || v.key != "k" || v.models[0] != "my-model" {
 		t.Fatalf("%+v", v)
+	}
+}
+
+// עומס על המודל הראשי (503) — מנסים מודל אחר ברשימה, ולא מוותרים על התיאור.
+func TestVisionOverloadFallsBack(t *testing.T) {
+	g := &fakeGemini{reply: `{"description": "תצלומי דיוקן של שני חיילים", "text": ""}`}
+	withFakeGemini(t, g)
+	pic := testPNG()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(pic) }))
+	defer srv.Close()
+	v := newVisionClient("GKEY", "", "on")
+	// בפעם הראשונה המודל הראשי עונה — הוא נבחר
+	if _, _, err := v.analyze([]string{srv.URL + "/a.jpg"}, ""); err != nil || v.model != 0 {
+		t.Fatalf("first: %v model=%d", err, v.model)
+	}
+	// עכשיו הוא עמוס
+	g.mu.Lock()
+	g.status = map[string]int{"/" + visionModels[0] + ":": 503}
+	g.mu.Unlock()
+	desc, _, err := v.analyze([]string{srv.URL + "/b.jpg"}, "")
+	if err != nil || desc != "תצלומי דיוקן של שני חיילים" {
+		t.Fatalf("fallback: %q %v (paths %v)", desc, err, g.paths)
+	}
+	if v.model != 0 {
+		t.Fatal("the main model should stay the default")
+	}
+	// גם בגילוי הראשון: מודל עמוס → הבא, בלי "המפתח לא התקבל"
+	v2 := newVisionClient("GKEY", "", "on")
+	if _, _, err := v2.analyze([]string{srv.URL + "/c.jpg"}, ""); err != nil || v2.model != 1 {
+		t.Fatalf("discovery: %v model=%d", err, v2.model)
+	}
+	// כולם עמוסים — שגיאה רגילה (ננסה שוב), לא הפסקה של 10 דקות
+	g.mu.Lock()
+	g.status = map[string]int{"/": 503}
+	g.mu.Unlock()
+	v3 := newVisionClient("GKEY", "", "on")
+	_, _, err = v3.analyze([]string{srv.URL + "/d.jpg"}, "")
+	var pe *visionPauseErr
+	if err == nil || errors.As(err, &pe) {
+		t.Fatalf("all busy: %v", err)
 	}
 }

@@ -1606,3 +1606,38 @@ func TestTranscodeReal(t *testing.T) {
 		t.Fatalf("silent video should report no audio stream, got %v", err)
 	}
 }
+
+// חתימת "להצטרפות לערוץ..." בסוף הודעה — לא פרסומת: ההודעה נכנסת, בלי החתימה.
+func TestPromoFooterIsNotAnAd(t *testing.T) {
+	cases := map[string]string{
+		"הותרו לפרסום שמותיהם של שני חללי צהל. השם יקום דמם. להצטרפות לערוץ הטלגרם של אלחנן גרונר": "הותרו לפרסום שמותיהם של שני חללי צהל. השם יקום דמם.",
+		"פיגוע דריסה באזור כביש 443. המחבל חוסל. להצטרפות לערוץ >> t.me/x":                         "פיגוע דריסה באזור כביש 443. המחבל חוסל.",
+		"עדכון מהשטח. להצטרפות לעדכוני הקול היהודי בוואטסאפ":                                       "עדכון מהשטח.",
+		"מבצע צבאי נרחב בשומרון": "מבצע צבאי נרחב בשומרון",
+	}
+	for in, want := range cases {
+		if got, _ := stripPromo(in); got != want {
+			t.Errorf("stripPromo(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// ביטוי באמצע הודעה ארוכה — לא נוגעים
+	mid := "קוראים להצטרפות לערוץ החדש של המועצה. " + strings.Repeat("ועוד פרטים רבים על האירוע. ", 10)
+	if got, found := stripPromo(mid); found || got != mid {
+		t.Errorf("mid: %v %q", found, got)
+	}
+	// פרסומת אמיתית — עדיין נזרקת
+	now := time.Now().Unix()
+	items := prepareClean([]FeedItem{
+		{ID: 1, Channel: "realelchangr", TS: now, Text: "המחבל חוסל. להצטרפות לערוץ הטלגרם של אלחנן גרונר"},
+		{ID: 2, Channel: "realelchangr", TS: now, Text: "הספר החדש לרכישה במחיר מבצע עם קוד קופון GRONER69. להצטרפות לערוץ הטלגרם של אלחנן גרונר"},
+		{ID: 3, Channel: "realelchangr", TS: promoSince - 3600, Text: "הודעה ישנה. להצטרפות לערוץ הטלגרם של אלחנן גרונר"},
+		{ID: 4, Channel: "hakolhayehudi", TS: promoSince - 3600, Text: "הודעה ישנה. להצטרפות לעדכוני הקול היהודי בוואטסאפ"},
+	})
+	if len(items) != 3 || items[0].Text != "המחבל חוסל." || items[0].OldPromo != true || promoBacklog(items[0]) {
+		t.Fatalf("%+v", items)
+	}
+	// הודעה ישנה שהכלל הישן זרק — לא נכנסת באיחור; הודעה ישנה שהכלל הישן לא זרק — כרגיל
+	if !promoBacklog(items[1]) || promoBacklog(items[2]) {
+		t.Fatalf("backlog: %+v", items[1:])
+	}
+}
