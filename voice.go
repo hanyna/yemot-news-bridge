@@ -675,7 +675,17 @@ func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string
 // מושמע הטקסט). טקסט שלא השתנה, ויש לו כבר קול — לא נוגעים.
 func uploadSpoken(cfg *config, ext, name, text string) error {
 	if cfg.speech == nil {
-		return cfg.y.upload(ext, name, text)
+		// הקול כבוי — אבל קול ישן (מלפני שכובה) היה ממשיך להשמיע את הנוסח הקודם
+		if err := cfg.y.upload(ext, name, text); err != nil {
+			return err
+		}
+		wav := strings.TrimSuffix(name, ".tts") + ".wav"
+		if info, err := cfg.y.dir(ext); err == nil && hasName(info.Files, wav) {
+			if err := cfg.y.remove([]string{ivrPath(ext, wav)}); err == nil {
+				log.Printf("שלוחה %q: הקול הישן %s נמחק (הקול המוכן כבוי).", ext, wav)
+			}
+		}
+		return nil
 	}
 	wav := strings.TrimSuffix(name, ".tts") + ".wav"
 	hasWav := false

@@ -213,6 +213,7 @@ func main() {
 				log.Printf("יש גרסה חדשה של הגשר (%.7s, אני %.7s) — מסיים כדי שהיא תרוץ במקומי.", latest, mySHA)
 				// סימון לשלב השרשרת ב-Workflow: לא להפעיל עוד הפעלה (החדשה כבר בתור).
 				_ = os.WriteFile(".no-chain", []byte(latest), 0o644)
+				st.flush(&cfg)
 				return
 			}
 		}
@@ -228,9 +229,21 @@ func main() {
 		}
 		if time.Now().Add(interval).After(deadline) {
 			log.Println("זמן הריצה הסתיים — ההפעלה הבאה של ה-Workflow תמשיך מכאן.")
+			st.flush(&cfg)
 			return
 		}
 		time.Sleep(interval)
+	}
+}
+
+// flush — לפני סיום ההפעלה: מה שה-workers (קול סרטונים, קול מוכן) סיימו מאז הסבב
+// האחרון נרשם באינדקסים ונשמר. בלי זה, קול שעלה ברגע האחרון לא מסומן, וההפעלה
+// הבאה לא יודעת עליו (למשל: קול בניסוח "ביום שישי" נמחק בחצות כאילו הוא ישן).
+func (st *state) flush(cfg *config) {
+	st.audioTick(cfg)
+	st.speechTick(cfg)
+	if err := st.saveArchives(cfg, nowFunc().In(cfg.loc)); err != nil {
+		log.Printf("הערה: שמירה לפני סיום נכשלה: %v", err)
 	}
 }
 
