@@ -97,13 +97,13 @@ func TestDiagTTS(t *testing.T) {
 	fmt.Fprintf(&rep, "gemini tts models: %v\n", ttsModels)
 
 	// 2. Gemini TTS
-	for _, m := range ttsModels {
-		for _, voice := range []string{"Charon", "Kore"} {
+	for _, m := range []string{"gemini-3.8-flash-tts"} {
+		for _, voice := range []string{"bare", "instr", "bare2"} {
 			st, raw, d := post("https://generativelanguage.googleapis.com/v1beta/models/"+m+":generateContent", key, map[string]any{
-				"contents": []any{map[string]any{"parts": []any{map[string]any{"text": "הקרא בעברית, בקול של קריין חדשות רגוע וברור: " + sample}}}},
+				"contents": []any{map[string]any{"parts": []any{map[string]any{"text": map[string]string{"instr": "הקרא בעברית, בקול של קריין חדשות רגוע וברור: " + sample, "bare": sample, "bare2": sample + " " + sample}[voice]}}}},
 				"generationConfig": map[string]any{
 					"responseModalities": []string{"AUDIO"},
-					"speechConfig": map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": voice}}},
+					"speechConfig": map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": "Charon"}}},
 				},
 			})
 			if st != 200 {
@@ -136,24 +136,5 @@ func TestDiagTTS(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 
-	// 3. Google Cloud Text-to-Speech באותו מפתח
-	for _, voice := range []string{"he-IL-Chirp3-HD-Charon", "he-IL-Wavenet-B", "he-IL-Standard-B"} {
-		st, raw, d := post("https://texttospeech.googleapis.com/v1/text:synthesize", key, map[string]any{
-			"input":       map[string]any{"text": sample},
-			"voice":       map[string]any{"languageCode": "he-IL", "name": voice},
-			"audioConfig": map[string]any{"audioEncoding": "LINEAR16", "sampleRateHertz": 8000},
-		})
-		if st != 200 {
-			fmt.Fprintf(&rep, "cloud %s: HTTP %d %s\n", voice, st, short(raw))
-			continue
-		}
-		var r struct {
-			AudioContent string `json:"audioContent"`
-		}
-		json.Unmarshal(raw, &r)
-		wav, _ := base64.StdEncoding.DecodeString(r.AudioContent)
-		os.WriteFile("samples/cloud-"+voice+".wav", wav, 0o644)
-		fmt.Fprintf(&rep, "cloud %s: OK %d bytes took %v\n", voice, len(wav), d.Round(time.Millisecond))
-	}
 	note("tts", rep.String())
 }
