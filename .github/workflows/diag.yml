@@ -18,6 +18,7 @@ jobs:
       - name: Diag
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
         run: go test -tags diag -run TestDiagTTS -v -count=1 -timeout 8m .
       - name: Save samples to the branch
         if: always()
