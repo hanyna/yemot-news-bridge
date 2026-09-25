@@ -2,73 +2,150 @@
 
 package main
 
-// בדיקה חד-פעמית (רק בענף diag-vision): למה תמונות לא מקבלות תיאור בקו.
+// בדיקה חד-פעמית (רק בענף diag-vision): הרצה "יבשה" של סבב אחד של הגשר מול
+// הנתונים האמיתיים — קריאות מימות המשיח אמיתיות, כתיבות מדומות (לא נוגעים בקו).
 // מדווח דרך הערות (annotations) של GitHub — בלי לחשוף מפתחות.
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
-	"sort"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
+var noteCount int
+
 func note(title, msg string) {
 	r := strings.NewReplacer("%", "%25", "\r", "", "\n", "%0A")
-	if len(msg) > 3500 {
-		msg = msg[:3500]
+	for len(msg) > 0 && noteCount < 9 {
+		chunk := msg
+		if len(chunk) > 3800 {
+			chunk = chunk[:3800]
+		}
+		msg = msg[len(chunk):]
+		noteCount++
+		fmt.Printf("::notice title=%s-%d::%s\n", title, noteCount, r.Replace(chunk))
 	}
-	fmt.Printf("::notice title=%s::%s\n", title, r.Replace(msg))
 }
 
-func TestDiagVision(t *testing.T) {
-	feedURL := envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages")
-	feedKey := strings.TrimSpace(os.Getenv("TGPOPUP_KEY"))
-	gkey := cleanKey(os.Getenv("GEMINI_API_KEY"))
-	var b strings.Builder
+type safeBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
 
-	_ = gkey
-	_ = feedKey
-	_ = feedURL
-	var _ = sort.Strings
-	var _ = time.Now
-	// 5. מה באמת יושב בשלוחה 1
-	b.Reset()
-	y := &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: cleanKey(os.Getenv("YEMOT_API_KEY"))}
-	info, err := y.dir("1")
-	if err != nil {
-		fmt.Fprintf(&b, "dir 1 error: %v\n", err)
-	} else {
-		files := archiveFiles(info.Files)
-		fmt.Fprintf(&b, "ext 1 files=%d\n", len(files))
-		var tts []string
-		for _, f := range files {
-			if strings.HasSuffix(f, ".tts") {
-				tts = append(tts, f)
-			}
-		}
-		if len(tts) > 40 {
-			tts = tts[len(tts)-40:]
-		}
-		for i := len(tts) - 1; i >= 0; i-- {
-			c, _, err := y.read("1", tts[i])
+func (s *safeBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *safeBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+func TestDiagDryRun(t *testing.T) {
+	real := yemotBase
+	var writes safeBuf
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method := strings.TrimPrefix(r.URL.Path, "/")
+		switch method {
+		case "GetIVR2Dir", "GetTextFile":
+			body, _ := io.ReadAll(r.Body)
+			req, _ := http.NewRequest(http.MethodPost, real+method, bytes.NewReader(body))
+			req.Header = r.Header.Clone()
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				fmt.Fprintf(&b, "%s read err %v\n", tts[i], err)
-				continue
+				http.Error(w, err.Error(), 502)
+				return
 			}
-			if i >= len(tts)-15 || strings.Contains(c, "תמונ") {
-				r := []rune(c)
-				if len(r) > 110 {
-					r = r[:110]
-				}
-				fmt.Fprintf(&b, "%s (%d chars) has-desc=%v: %s\n", tts[i], len([]rune(c)), strings.Contains(c, "בתמונה:") || strings.Contains(c, "בתמונות:"), string(r))
+			defer resp.Body.Close()
+			w.WriteHeader(resp.StatusCode)
+			io.Copy(w, resp.Body)
+		default:
+			_ = r.ParseMultipartForm(64 << 20)
+			what := r.FormValue("what") + r.FormValue("path")
+			fmt.Fprintf(&writes, "%s %s %s\n", time.Now().Format("15:04:05"), method, what)
+			w.Write([]byte(`{"responseStatus":"OK","message":"File upload expected"}`))
+		}
+	}))
+	defer fake.Close()
+	yemotBase = fake.URL + "/"
+
+	var logs safeBuf
+	log.SetOutput(&logs)
+	log.SetFlags(log.Ltime)
+
+	cfg := config{
+		feedURL:       envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
+		feedKey:       strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
+		ext:           "1",
+		channelExts:   true,
+		audio:         true,
+		audioMax:      20 * 60,
+		voice:         "Elik_2100",
+		rate:          "0",
+		publicList:    "800",
+		lineNumber:    "0772263731",
+		callback:      true,
+		adminList:     "606",
+		exclude:       parseExclude("SamariaUpdates"),
+		podcasts:      parsePodcasts("חושבים בקול של הקול היהודי | https://www.spreaker.com/show/4524009/episodes/feed"),
+		podcastExt:    "3",
+		podcastKeep:   10,
+		client:        &http.Client{Timeout: 30 * time.Second},
+		feedClient:    &http.Client{Timeout: 90 * time.Second},
+	}
+	cfg.y = &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: cleanKey(os.Getenv("YEMOT_API_KEY"))}
+	cfg.vision = newVisionClient(os.Getenv("GEMINI_API_KEY"), "", "on")
+	cfg.loc, _ = time.LoadLocation("Asia/Jerusalem")
+	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}, special: map[string]bool{}}
+	st.ensureMaps()
+	st.aw.start(&cfg)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 1; i <= 3; i++ {
+			start := time.Now()
+			err := syncOnce(&cfg, st)
+			log.Printf("=== DIAG cycle %d took %v err=%v", i, time.Since(start).Round(time.Second), err)
+			time.Sleep(20 * time.Second)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(6 * time.Minute):
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		stack := string(buf[:n])
+		// רק ה-goroutines שבקוד שלנו
+		var keep []string
+		for _, g := range strings.Split(stack, "\n\n") {
+			if strings.Contains(g, "yemot-news-bridge") && !strings.Contains(g, "testing.tRunner") || strings.Contains(g, "syncOnce") {
+				keep = append(keep, g)
 			}
 		}
-		idx, _, err := y.read("1", archiveIndex)
-		fmt.Fprintf(&b, "archive.txt len=%d err=%v\n", len(idx), err)
-		note("5-index", idx[max(0, len(idx)-2500):])
+		note("stack", strings.Join(keep, "\n\n"))
 	}
-	note("4-line", b.String())
+	time.Sleep(5 * time.Second)
+	l := logs.String()
+	// מסננים שורות "טריות" הרבות
+	var lines []string
+	for _, s := range strings.Split(l, "\n") {
+		if strings.Contains(s, "טריות: ערוץ") {
+			continue
+		}
+		lines = append(lines, s)
+	}
+	note("log", strings.Join(lines, "\n"))
+	w := writes.String()
+	if len(w) > 3000 {
+		w = w[:3000]
+	}
+	note("writes", w)
 }
