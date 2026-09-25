@@ -107,6 +107,33 @@ func TestDiagDryRun(t *testing.T) {
 	st.ensureMaps()
 	st.aw.start(&cfg)
 
+	{
+		now := time.Now().In(cfg.loc)
+		items, err := fetchFeed(cfg.feedClient, cfg.feedURL, cfg.feedKey)
+		var b strings.Builder
+		fmt.Fprintf(&b, "fetch err=%v items=%d now=%d\n", err, len(items), now.Unix())
+		clean := prepareClean(items)
+		fmt.Fprintf(&b, "clean=%d\n", len(clean))
+		txt, _, _ := cfg.y.read("1", archiveIndex)
+		if i := strings.Index(txt, "\ne "); i > 0 {
+			fmt.Fprintf(&b, "HEAD: %s\n", txt[:i])
+		}
+		a, err := loadArchive(&cfg, "1", "", true, now)
+		fmt.Fprintf(&b, "load err=%v next=%d last=%d cutoff=%d entries=%d fresh=%v files=%d\n", err, a.next, a.last, a.cutoff, len(a.entries), a.fresh, len(a.files))
+		n := 0
+		for _, it := range clean {
+			if it.TS < a.last-3*3600 {
+				continue
+			}
+			_, inIdx := a.entries[itemKey(it)]
+			n++
+			if n > 40 {
+				break
+			}
+			fmt.Fprintf(&b, "%s ts=%d has=%v inIdx=%v <cutoff=%v media=%v text=%.40q\n", itemKey(it), it.TS, a.has(it, now), inIdx, it.TS < a.cutoff, it.MediaOnly, it.Text)
+		}
+		note("has", b.String())
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
