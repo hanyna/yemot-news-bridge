@@ -51,7 +51,10 @@ func speechFile(base int) string { return fmt.Sprintf("%05d.wav", base+1) }
 
 type speechJob struct {
 	ext       string
-	base      int
+	file      string // שם קובץ הקול בשלוחה (NNNNN.wav / M1000.wav / 99999.wav)
+	base      int    // הודעה בארכיון; -1: תפריט / כותרת
+	menu      bool   // תפריט או כותרת — לפני הכול (זה הדבר הראשון שהמאזין שומע)
+	voice     string
 	text      string
 	low       bool // עדכון ניסוח זמן — אחרי הודעות חדשות
 	held      bool // נוסף בסבב הנוכחי — יוצא לעבודה בסוף הסבב (speechTick)
@@ -68,6 +71,7 @@ type speechResult struct {
 
 type speaker struct {
 	key, voice string
+	menuVoice  string // קול התפריטים והכותרות (SPEECH_MENU_VOICE)
 	client     *http.Client
 
 	mu         sync.Mutex
@@ -81,6 +85,11 @@ type speaker struct {
 
 // newSpeaker: nil כשאין מפתח או ש-SPEECH=off.
 func newSpeaker(key, voice, mode string) *speaker {
+	return newSpeakerVoices(key, voice, "", mode)
+}
+
+// newSpeakerVoices: כמו newSpeaker, עם קול נפרד לתפריטים (ריק = Puck).
+func newSpeakerVoices(key, voice, menuVoice, mode string) *speaker {
 	key = cleanKey(key)
 	if key == "" || strings.EqualFold(strings.TrimSpace(mode), "off") {
 		return nil
@@ -88,11 +97,14 @@ func newSpeaker(key, voice, mode string) *speaker {
 	if voice = strings.TrimSpace(voice); voice == "" {
 		voice = "Charon"
 	}
-	return &speaker{key: key, voice: voice, client: &http.Client{Timeout: speechTimeout},
+	if menuVoice = strings.TrimSpace(menuVoice); menuVoice == "" {
+		menuVoice = "Puck"
+	}
+	return &speaker{key: key, voice: voice, menuVoice: menuVoice, client: &http.Client{Timeout: speechTimeout},
 		jobs: map[string]*speechJob{}, modelPause: map[int]time.Time{}, warned: map[string]bool{}}
 }
 
-func jobKey(ext string, base int) string { return fmt.Sprintf("%s/%d", ext, base) }
+func jobKey(ext, file string) string { return ext + "|" + file }
 
 // add מכניס (או מעדכן) עבודה. טקסט חדש לאותו קובץ מחליף את הישן.
 func (s *speaker) add(ext string, base int, text string, low bool) {
@@ -101,14 +113,29 @@ func (s *speaker) add(ext string, base int, text string, low bool) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := jobKey(ext, base)
-	if j, ok := s.jobs[k]; ok {
-		// אם היא רצה עכשיו — ה-worker רואה שהטקסט השתנה, לא מעלה, ומנסה שוב עם החדש.
-		j.text, j.tries, j.notBefore = text, 0, time.Time{}
-		j.low = j.low && low
+	s.put(&speechJob{ext: ext, file: speechFile(base), base: base, text: text, low: low, held: true, voice: s.voice})
+}
+
+// addMenu: קול לתפריט / כותרת (M1000.wav, 99999.wav) — בעדיפות ראשונה, בקול התפריטים.
+func (s *speaker) addMenu(ext, file, text string) {
+	if s == nil {
 		return
 	}
-	s.jobs[k] = &speechJob{ext: ext, base: base, text: text, low: low, held: true}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.put(&speechJob{ext: ext, file: file, base: -1, menu: true, text: text, voice: s.menuVoice})
+}
+
+// put (עם s.mu): טקסט חדש לאותו קובץ מחליף את הישן.
+func (s *speaker) put(n *speechJob) {
+	k := jobKey(n.ext, n.file)
+	if j, ok := s.jobs[k]; ok {
+		// אם היא רצה עכשיו — ה-worker רואה שהטקסט השתנה, לא מעלה, ומנסה שוב עם החדש.
+		j.text, j.tries, j.notBefore = n.text, 0, time.Time{}
+		j.low = j.low && n.low
+		return
+	}
+	s.jobs[k] = n
 }
 
 func (s *speaker) warnOnce(key, msg string) {
@@ -134,7 +161,7 @@ func (s *speaker) next() (*speechJob, speechJob) {
 		if j.running || j.held || now.Before(j.notBefore) {
 			continue
 		}
-		if best == nil || (best.low && !j.low) || (best.low == j.low && j.base > best.base) {
+		if best == nil || (j.menu && !best.menu) || (j.menu == best.menu && ((best.low && !j.low) || (best.low == j.low && j.base > best.base))) {
 			best = j
 		}
 	}
@@ -159,7 +186,7 @@ func (s *speaker) step(cfg *config) bool {
 		return false
 	}
 	start := time.Now()
-	data, model, err := s.synthesize(job.text)
+	data, model, err := s.synthesize(job.text, job.voice)
 	if err == nil {
 		data, err = prepareSpeech(data)
 	}
@@ -167,7 +194,7 @@ func (s *speaker) step(cfg *config) bool {
 	changed := j.text != job.text // הטקסט עודכן בזמן שעבדנו — הקול כבר לא מתאים
 	s.mu.Unlock()
 	if err == nil && !changed {
-		err = cfg.y.uploadFile(job.ext, speechFile(job.base), "speech.wav", data, true)
+		err = cfg.y.uploadFile(job.ext, job.file, "speech.wav", data, true)
 	}
 	var busy *speechBusyErr
 	s.mu.Lock()
@@ -177,9 +204,9 @@ func (s *speaker) step(cfg *config) bool {
 	case changed:
 		// נשאר בתור עם הטקסט החדש
 	case err == nil:
-		delete(s.jobs, jobKey(job.ext, job.base))
+		delete(s.jobs, jobKey(job.ext, job.file))
 		s.results = append(s.results, speechResult{job.ext, job.base, true})
-		log.Printf("קול מוכן: שלוחה %s / %s (%s, %v).", job.ext, speechFile(job.base), model, time.Since(start).Round(100*time.Millisecond))
+		log.Printf("קול מוכן: שלוחה %q / %s (%s, %s, %v).", job.ext, job.file, model, job.voice, time.Since(start).Round(100*time.Millisecond))
 	case errors.As(err, &busy):
 		// מכסה / עומס בכל המודלים — לא אשמת הקובץ; לא סופרים ניסיון
 		s.pausedTil = time.Now().Add(busy.wait)
@@ -190,9 +217,9 @@ func (s *speaker) step(cfg *config) bool {
 	default:
 		j.tries++
 		if j.tries >= speechTries {
-			delete(s.jobs, jobKey(job.ext, job.base))
+			delete(s.jobs, jobKey(job.ext, job.file))
 			s.results = append(s.results, speechResult{job.ext, job.base, false})
-			log.Printf("הערה: הקול של %s בשלוחה %s לא נוצר (נשאר טקסט): %v", speechFile(job.base), job.ext, err)
+			log.Printf("הערה: הקול של %s בשלוחה %q לא נוצר (נשאר טקסט): %v", job.file, job.ext, err)
 		} else {
 			j.notBefore = time.Now().Add(time.Duration(j.tries) * time.Minute)
 		}
@@ -223,13 +250,16 @@ type speechBusyErr struct {
 func (e *speechBusyErr) Error() string { return e.why }
 
 // synthesize: טקסט → WAV (כפי ש-Gemini מחזיר). מנסה את המודלים לפי הסדר.
-func (s *speaker) synthesize(text string) ([]byte, string, error) {
+func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
+	if voice == "" {
+		voice = s.voice
+	}
 	body, _ := json.Marshal(map[string]any{
 		// בלי הוראות לפני הטקסט — המודל מקריא אותן בקול.
 		"contents": []any{map[string]any{"parts": []any{map[string]any{"text": text}}}},
 		"generationConfig": map[string]any{
 			"responseModalities": []string{"AUDIO"},
-			"speechConfig":       map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": s.voice}}},
+			"speechConfig":       map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": voice}}},
 		},
 	})
 	var lastErr error
@@ -406,7 +436,7 @@ func (st *state) speechTick(cfg *config) {
 	s.mu.Unlock()
 	for _, r := range res {
 		a, ok := st.arch[r.ext]
-		if !ok || !r.ok {
+		if !ok || !r.ok || r.base < 0 {
 			continue
 		}
 		if !a.hasBase(r.base) {
@@ -478,4 +508,33 @@ func (a *archive) requeueSpeech(cfg *config, now time.Time) {
 	if n > 0 {
 		log.Printf("שלוחה %s: %d הודעות אחרונות בלי קול מוכן — נכנסו לתור.", a.ext, n)
 	}
+}
+
+// uploadSpoken: מעלה קובץ טקסט של תפריט / כותרת (M1000.tts, 99999.tts), ומחליף
+// גם את קובץ הקול שלו. קול ישן אומר את הטקסט הישן — נמחק מיד (עד שהחדש מוכן
+// מושמע הטקסט). טקסט שלא השתנה, ויש לו כבר קול — לא נוגעים.
+func uploadSpoken(cfg *config, ext, name, text string) error {
+	if cfg.speech == nil {
+		return cfg.y.upload(ext, name, text)
+	}
+	wav := strings.TrimSuffix(name, ".tts") + ".wav"
+	hasWav := false
+	if info, err := cfg.y.dir(ext); err == nil {
+		hasWav = hasName(info.Files, wav)
+	}
+	if hasWav {
+		if old, _, err := cfg.y.read(ext, name); err == nil && old == text {
+			return nil // בדיוק מה שכבר בשלוחה, עם קול
+		}
+	}
+	if err := cfg.y.upload(ext, name, text); err != nil {
+		return err
+	}
+	if hasWav {
+		if err := cfg.y.remove([]string{ivrPath(ext, wav)}); err != nil {
+			log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %q נכשלה: %v", wav, ext, err)
+		}
+	}
+	cfg.speech.addMenu(ext, wav, text)
+	return nil
 }

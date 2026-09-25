@@ -548,7 +548,7 @@ func (st *state) finishPodcasts(cfg *config) bool {
 		text = "פודקאסטים. " + strings.Join(opts, " ")
 	}
 	if text != st.podMenuText {
-		if err := cfg.y.upload(cfg.podcastExt, "M1000.tts", text); err != nil {
+		if err := uploadSpoken(cfg, cfg.podcastExt, "M1000.tts", text); err != nil {
 			log.Printf("הערה: עדכון תפריט הפודקאסטים נכשל: %v", err)
 		} else {
 			st.podMenuText = text

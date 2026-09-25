@@ -722,7 +722,7 @@ func (st *state) ensureTitle(cfg *config, ext, text string) {
 	if st.titleSet[ext] == text {
 		return
 	}
-	if err := cfg.y.upload(ext, titleFile, text); err != nil {
+	if err := uploadSpoken(cfg, ext, titleFile, text); err != nil {
 		log.Printf("הערה: כותרת שלוחה %s נכשלה: %v", ext, err)
 		return
 	}

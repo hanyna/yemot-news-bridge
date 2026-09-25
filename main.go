@@ -169,7 +169,7 @@ func main() {
 	} else {
 		log.Println("ניתוח תמונות: כבוי (אין GEMINI_API_KEY ב-Secrets, או VISION=off).")
 	}
-	cfg.speech = newSpeaker(os.Getenv("GEMINI_API_KEY"), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH"))
+	cfg.speech = newSpeakerVoices(os.Getenv("GEMINI_API_KEY"), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH_MENU_VOICE"), os.Getenv("SPEECH"))
 	if cfg.speech != nil {
 		log.Printf("קול מוכן מראש (Gemini, קול %s): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice)
 	}
@@ -431,7 +431,7 @@ func syncOnce(cfg *config, st *state) error {
 			text = cutAtWord(r[:maxPerFile])
 		}
 		if text != st.chooserText {
-			if err := cfg.y.upload(chooseExt, "M1000.tts", text); err != nil {
+			if err := uploadSpoken(cfg, chooseExt, "M1000.tts", text); err != nil {
 				log.Printf("הערה: עדכון תפריט בחירת הכתב נכשל: %v", err)
 			} else {
 				st.chooserText = text
@@ -489,7 +489,7 @@ func syncOnce(cfg *config, st *state) error {
 				menu = append(menu, "לצינתוקים ותזכורות, הקישו "+listExt+".")
 			}
 			if text != st.listMenuText {
-				if err := cfg.y.upload(listExt, "M1000.tts", text); err == nil {
+				if err := uploadSpoken(cfg, listExt, "M1000.tts", text); err == nil {
 					st.listMenuText = text
 				}
 			}
@@ -546,7 +546,7 @@ func syncOnce(cfg *config, st *state) error {
 			w = cutAtWord(r[:maxPerFile])
 		}
 		if w != st.welcome {
-			if err := cfg.y.upload("", "M1000.tts", w); err != nil {
+			if err := uploadSpoken(cfg, "", "M1000.tts", w); err != nil {
 				log.Printf("הערה: עדכון הודעת הפתיחה נכשל: %v", err)
 			} else {
 				st.welcome = w
@@ -849,7 +849,7 @@ func setupSpecial(cfg *config, st *state, ext, ini string) bool {
 // foreignFile: קובץ ראשון שאינו של הגשר (ext.ini, NNN.tts, M1000.tts), או "".
 func foreignFile(files []string) string {
 	for _, n := range files {
-		if !isBridgeFile(n) && !isSystemFile(n) && !strings.EqualFold(n, "M1000.tts") {
+		if !isBridgeFile(n) && !isSystemFile(n) && !strings.EqualFold(n, "M1000.tts") && !strings.EqualFold(n, "M1000.wav") {
 			return n
 		}
 	}

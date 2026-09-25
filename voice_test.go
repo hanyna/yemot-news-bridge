@@ -144,3 +144,57 @@ func TestSpeechOff(t *testing.T) {
 		t.Fatal("default voice")
 	}
 }
+
+// התפריט הראשי, תפריט בחירת הכתב וכותרות הכתבים — גם כקול מוכן, בקול התפריטים.
+// כשהטקסט משתנה, הקול הישן נמחק ונוצר חדש; כשלא השתנה — לא נוגעים.
+func TestSpeechMenus(t *testing.T) {
+	g := &fakeTTS{status: map[string]int{}}
+	withFakeTTS(t, g)
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 60, Text: "הודעה"}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.speech = newSpeakerVoices("GKEY", "Charon", "Puck", "on")
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	st.speechTick(&cfg) // התפריט עולה בסוף הסבב — ברקע הוא נוצר מיד
+	welcome := f.files["ivr2:/M1000.tts"]
+	if welcome == "" || f.files["ivr2:/M1000.wav"] != "AUDIO:PHONE:"+welcome+";convert=1" {
+		t.Fatalf("welcome wav: %q (tts %q)", f.files["ivr2:/M1000.wav"], welcome)
+	}
+	if f.files["ivr2:/2/M1000.wav"] == "" || f.files["ivr2:/2/1/99999.wav"] != "AUDIO:PHONE:עדכוני אלישע ירד.;convert=1" {
+		t.Fatalf("chooser/title wav: %q | %q", f.files["ivr2:/2/M1000.wav"], f.files["ivr2:/2/1/99999.wav"])
+	}
+	// הפעלה מחדש, אותו טקסט — לא מוחקים ולא יוצרים שוב
+	calls := len(g.calls)
+	cfg.speech = newSpeakerVoices("GKEY", "Charon", "Puck", "on")
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.calls) != calls {
+		t.Fatalf("regenerated unchanged menus: %v", g.calls[calls:])
+	}
+	// הודעת פתיחה חדשה — הקול מתעדכן
+	cfg.welcome = "ברוכים הבאים. נוסח חדש."
+	st2 := &state{}
+	if err := syncOnce(&cfg, st2); err != nil {
+		t.Fatal(err)
+	}
+	st2.speechTick(&cfg)
+	if f.files["ivr2:/M1000.wav"] != "AUDIO:PHONE:ברוכים הבאים. נוסח חדש.;convert=1" {
+		t.Fatalf("new welcome wav: %q", f.files["ivr2:/M1000.wav"])
+	}
+}
+
+func TestSpeechMenuVoice(t *testing.T) {
+	s := newSpeakerVoices("k", "Charon", "", "on")
+	s.addMenu("", "M1000.wav", "שלום")
+	s.add("1", 10000, "הודעה", false)
+	j, _ := s.next()
+	if j.file != "M1000.wav" || j.voice != "Puck" {
+		t.Fatalf("menu first with menu voice: %+v", j)
+	}
+}
