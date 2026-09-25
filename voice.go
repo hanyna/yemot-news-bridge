@@ -1,16 +1,22 @@
 package main
 
-// קול מוכן מראש: כל הודעה בשלוחה עולה גם כקובץ שמע (NNNNN.wav, באותו מספר
-// של ההקראה NNNNN.tts). ימות המשיח משמיעים קובץ wav במקום קובץ tts באותו שם
-// — ככה המאזין לא מחכה להמרת הטקסט לדיבור בזמן ההאזנה (זה מה שגרם להמתנה בין
-// הודעות ולגמגום בתחילת השמעה).
+// קול מוכן מראש: כל הודעה חדשה עולה גם כקובץ שמע (NNNNN.wav, באותו מספר של
+// ההקראה NNNNN.tts). ימות המשיח משמיעים קובץ wav במקום קובץ tts באותו שם — ככה
+// המאזין לא מחכה להמרת הטקסט לדיבור בזמן ההאזנה (זה מה שגרם להמתנה בין הודעות
+// ולגמגום בתחילת השמעה).
 //
 // הקול נוצר ב-Gemini (אותו מפתח GEMINI_API_KEY של ניתוח התמונות), ברקע —
 // ההודעה עצמה עולה מיד כטקסט, והקול מחליף אותה כשהוא מוכן (שניות ספורות).
 // כל תקלה (מכסה, עומס, אין ffmpeg) — ההודעה פשוט נשארת כטקסט, כמו קודם.
 //
-// כשניסוח הזמן בהודעה משתנה ("היום" ← "אתמול"), הקול הישן נמחק מיד (כדי שלא
-// יושמע ניסוח לא נכון) ונוצר מחדש בעדיפות נמוכה, אחרי הודעות חדשות.
+// חיסכון במכסה: בחינם Google נותנים רק 10 קבצי קול ביום לכל מודל. לכן:
+//   - קובץ קול אחד לכל הודעה — אותו קובץ עולה לשלוחה 1 ולשלוחת הכתב (עם שם הכתב).
+//   - בקול, הזמן נאמר כיום בשבוע ("ביום שישי בשעה 8 בבוקר") ולא "היום"/"אתמול" —
+//     ככה הקול לא צריך להיווצר מחדש בכל חצות. אחרי שבוע (כשהניסוח עובר לתאריך)
+//     הקול נמחק, וההודעה הישנה מושמעת כטקסט.
+//   - הודעות ישנות לא מקבלות קול בדיעבד; רק הודעות חדשות (ואחרי הפעלה מחדש —
+//     הודעות מהשעות האחרונות שעוד לא קיבלו).
+//   - הודעה ארוכה: הטקסט נחתך (מגבלה של ימות המשיח), אבל הקול מקריא אותה במלואה.
 
 import (
 	"bytes"
@@ -28,7 +34,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,20 +45,20 @@ var speechModels = []string{"gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts",
 var speechEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 
 const (
-	speechTries      = 3                  // ניסיונות לכל קובץ
-	speechDayPause   = time.Hour          // מודל שהגיע למכסה היומית — לא מנסים אותו לפני כן
-	speechBusyPause  = 30 * time.Second   // כל המודלים עמוסים — הפסקה קצרה
-	speechRequeueAge = 3 * 24 * time.Hour // הודעות מהימים האחרונים בלי קול — נכנסות לתור (בעדיפות נמוכה, החדשות קודם)
-	speechRequeueMax = 150                // כמה לכל היותר בכל שלוחה
-	speechTimeout    = 5 * time.Minute    // בקשה אחת (הודעה ארוכה במלואה לוקחת כמה דקות)
+	speechTries      = 3                // ניסיונות לכל קובץ
+	speechDayPause   = time.Hour        // מודל שהגיע למכסה היומית — לא מנסים אותו לפני כן
+	speechBusyPause  = 30 * time.Second // כל המודלים עמוסים — הפסקה קצרה
+	speechRequeueAge = 6 * time.Hour    // אחרי הפעלה מחדש: הודעות מהשעות האחרונות בלי קול — חוזרות לתור
+	speechRequeueMax = 20               // כמה לכל היותר בכל שלוחה
+	speechTimeout    = 5 * time.Minute  // בקשה אחת (הודעה ארוכה במלואה לוקחת כמה דקות)
 )
 
 // speechFile: קובץ הקול של ההקראה (אותו מספר כמו introFile, בסיומת wav).
 func speechFile(base int) string { return fmt.Sprintf("%05d.wav", base+1) }
 
-// fullFile: הטקסט המלא של הודעה ארוכה (רק כשההקראה כטקסט נחתכה). ימות המשיח
-// לא משמיעים קבצי txt. לא NNNNN.txt — את השם הזה ימות המשיח תופסים לבד: בכל
-// העלאת קובץ קול הם כותבים לידו קובץ פרטים באותו שם (API-DID-...title=...).
+// fullFile: טקסט מלא של הודעה ארוכה — מגרסה קודמת (כבר לא נכתב; נמחק עם ההודעה).
+// לא NNNNN.txt — את השם הזה ימות המשיח תופסים לבד: בכל העלאת קובץ קול הם
+// כותבים לידו קובץ פרטים באותו שם (API-DID-...title=...).
 func fullFile(base int) string { return fmt.Sprintf("%05d%s", base+1, fullSuffix) }
 
 const fullSuffix = "-full.txt"
@@ -61,24 +66,44 @@ const fullSuffix = "-full.txt"
 // speechMaxChars: עד כמה תווים הקול מקריא (הודעה ארוכה מזה — נחתכת גם בקול).
 const speechMaxChars = 4000
 
+// audioItem: טקסט הקול של הודעה — הזמן כיום בשבוע, כדי שלא יתיישן בחצות.
+func audioItem(it FeedItem, titles map[string]string, loc *time.Location, withName bool) string {
+	t := time.Unix(it.TS, 0).In(loc)
+	head := itemHead(it.Channel, t, whenThisWeek, titles, withName)
+	body := it.Text
+	const cutNote = " המשך ההודעה לא הוקרא."
+	room := speechMaxChars - len([]rune(head)) - len([]rune(cutNote))
+	if r := []rune(body); len(r) > room {
+		body = cutAtSentence(r[:room]) + cutNote
+	}
+	return head + body
+}
+
+// speechTarget: לאן קובץ הקול עולה.
+type speechTarget struct {
+	ext, file string
+	base      int // הודעה בארכיון; -1: תפריט / כותרת
+}
+
 type speechJob struct {
-	ext       string
-	file      string // שם קובץ הקול בשלוחה (NNNNN.wav / M1000.wav / 99999.wav)
-	base      int    // הודעה בארכיון; -1: תפריט / כותרת
-	menu      bool   // תפריט או כותרת — לפני הכול (זה הדבר הראשון שהמאזין שומע)
+	key       string
+	targets   []speechTarget
+	done      map[speechTarget]bool
+	menu      bool // תפריט או כותרת — לפני הכול (זה הדבר הראשון שהמאזין שומע)
+	named     bool // הטקסט כולל את שם הכתב (משלוחה 1)
 	voice     string
 	text      string
-	low       bool // עדכון ניסוח זמן — אחרי הודעות חדשות
-	held      bool // נוסף בסבב הנוכחי — יוצא לעבודה בסוף הסבב (speechTick)
+	ts        int64
+	data      []byte // הקול שכבר נוצר (אם נשארו יעדים שעוד לא עלה אליהם)
+	held      bool   // נוסף בסבב הנוכחי — יוצא לעבודה בסוף הסבב (speechTick)
 	running   bool
 	tries     int
 	notBefore time.Time
 }
 
 type speechResult struct {
-	ext  string
-	base int
-	ok   bool
+	ext, key string
+	base     int
 }
 
 type speaker struct {
@@ -87,7 +112,7 @@ type speaker struct {
 	client     *http.Client
 
 	mu         sync.Mutex
-	jobs       map[string]*speechJob // ext/base → העבודה (הטקסט האחרון)
+	jobs       map[string]*speechJob
 	results    []speechResult
 	modelPause map[int]time.Time
 	pausedTil  time.Time
@@ -116,38 +141,55 @@ func newSpeakerVoices(key, voice, menuVoice, mode string) *speaker {
 		jobs: map[string]*speechJob{}, modelPause: map[int]time.Time{}, warned: map[string]bool{}}
 }
 
-func jobKey(ext, file string) string { return ext + "|" + file }
-
-// add מכניס (או מעדכן) עבודה. טקסט חדש לאותו קובץ מחליף את הישן.
-func (s *speaker) add(ext string, base int, text string, low bool) {
+// add: קול להודעה בשלוחה. אותה הודעה בכמה שלוחות (1 ושלוחת הכתב) — קובץ קול
+// אחד, שעולה לכולן. הטקסט עם שם הכתב (withName, משלוחה 1) עדיף.
+func (s *speaker) add(key string, ts int64, ext string, base int, text string, withName bool) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.put(&speechJob{ext: ext, file: speechFile(base), base: base, text: text, low: low, held: true, voice: s.voice})
+	t := speechTarget{ext, speechFile(base), base}
+	k := "m|" + key
+	if j, ok := s.jobs[k]; ok {
+		if !j.has(t) {
+			j.targets = append(j.targets, t)
+		}
+		if withName && !j.named && !j.running && j.data == nil {
+			j.text, j.named = text, true
+		}
+		return
+	}
+	s.jobs[k] = &speechJob{key: key, targets: []speechTarget{t}, done: map[speechTarget]bool{}, named: withName,
+		voice: s.voice, text: text, ts: ts, held: true}
 }
 
 // addMenu: קול לתפריט / כותרת (M1000.wav, 99999.wav) — בעדיפות ראשונה, בקול התפריטים.
+// טקסט חדש לאותו קובץ מחליף את הישן.
 func (s *speaker) addMenu(ext, file, text string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.put(&speechJob{ext: ext, file: file, base: -1, menu: true, text: text, voice: s.menuVoice})
-}
-
-// put (עם s.mu): טקסט חדש לאותו קובץ מחליף את הישן.
-func (s *speaker) put(n *speechJob) {
-	k := jobKey(n.ext, n.file)
+	k := "f|" + ext + "|" + file
 	if j, ok := s.jobs[k]; ok {
 		// אם היא רצה עכשיו — ה-worker רואה שהטקסט השתנה, לא מעלה, ומנסה שוב עם החדש.
-		j.text, j.tries, j.notBefore = n.text, 0, time.Time{}
-		j.low = j.low && n.low
+		j.text, j.data, j.tries, j.notBefore = text, nil, 0, time.Time{}
+		j.done = map[speechTarget]bool{}
 		return
 	}
-	s.jobs[k] = n
+	s.jobs[k] = &speechJob{key: k, targets: []speechTarget{{ext, file, -1}}, done: map[speechTarget]bool{}, menu: true,
+		voice: s.menuVoice, text: text}
+}
+
+func (j *speechJob) has(t speechTarget) bool {
+	for _, x := range j.targets {
+		if x == t {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *speaker) warnOnce(key, msg string) {
@@ -160,20 +202,20 @@ func (s *speaker) warnOnce(key, msg string) {
 	}
 }
 
-// next: העבודה הבאה — חדשות קודם (low=false), ובתוכן המספר הגבוה (החדש) קודם.
+// next: העבודה הבאה — תפריטים קודם, ואז ההודעה החדשה ביותר.
 func (s *speaker) next() (*speechJob, speechJob) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	if now.Before(s.pausedTil) {
-		return nil, speechJob{}
-	}
 	var best *speechJob
 	for _, j := range s.jobs {
 		if j.running || j.held || now.Before(j.notBefore) {
 			continue
 		}
-		if best == nil || (j.menu && !best.menu) || (j.menu == best.menu && ((best.low && !j.low) || (best.low == j.low && j.base > best.base))) {
+		if j.data == nil && now.Before(s.pausedTil) {
+			continue // צריך ליצור קול — ויצירת הקול מושהית (מכסה)
+		}
+		if best == nil || (j.menu && !best.menu) || (j.menu == best.menu && j.ts > best.ts) {
 			best = j
 		}
 	}
@@ -181,7 +223,9 @@ func (s *speaker) next() (*speechJob, speechJob) {
 		return nil, speechJob{}
 	}
 	best.running = true
-	return best, *best
+	cp := *best
+	cp.targets = append([]speechTarget(nil), best.targets...)
+	return best, cp
 }
 
 // step: עבודה אחת. false כשאין כרגע מה לעשות.
@@ -198,27 +242,53 @@ func (s *speaker) step(cfg *config) bool {
 		return false
 	}
 	start := time.Now()
-	data, model, err := s.synthesize(job.text, job.voice)
-	if err == nil {
-		data, err = prepareSpeech(data)
+	data, model, err := job.data, "", error(nil)
+	if data == nil {
+		data, model, err = s.synthesize(job.text, job.voice)
+		if err == nil {
+			data, err = prepareSpeech(data)
+		}
 	}
 	s.mu.Lock()
 	changed := j.text != job.text // הטקסט עודכן בזמן שעבדנו — הקול כבר לא מתאים
 	s.mu.Unlock()
+	var uploaded []speechTarget
 	if err == nil && !changed {
-		err = cfg.y.uploadFile(job.ext, job.file, "speech.wav", data, true)
+		for _, t := range job.targets {
+			if job.done[t] {
+				continue
+			}
+			if e := cfg.y.uploadFile(t.ext, t.file, "speech.wav", data, true); e != nil {
+				err = e
+				continue
+			}
+			uploaded = append(uploaded, t)
+		}
 	}
 	var busy *speechBusyErr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j.running = false
+	for _, t := range uploaded {
+		j.done[t] = true
+		s.results = append(s.results, speechResult{t.ext, job.key, t.base})
+	}
+	if len(uploaded) > 0 {
+		log.Printf("קול מוכן: %s → %d שלוחות (%s, %s, %v).", job.key, len(uploaded), model, job.voice, time.Since(start).Round(100*time.Millisecond))
+	}
+	allDone := true
+	for _, t := range j.targets {
+		if !j.done[t] {
+			allDone = false
+		}
+	}
 	switch {
 	case changed:
 		// נשאר בתור עם הטקסט החדש
+	case err == nil && allDone:
+		delete(s.jobs, s.jobKeyOf(j))
 	case err == nil:
-		delete(s.jobs, jobKey(job.ext, job.file))
-		s.results = append(s.results, speechResult{job.ext, job.base, true})
-		log.Printf("קול מוכן: שלוחה %q / %s (%s, %s, %v).", job.ext, job.file, model, job.voice, time.Since(start).Round(100*time.Millisecond))
+		j.data = data // נוספה שלוחה בזמן שעבדנו — הקול כבר מוכן, רק להעלות
 	case errors.As(err, &busy):
 		// מכסה / עומס בכל המודלים — לא אשמת הקובץ; לא סופרים ניסיון
 		s.pausedTil = time.Now().Add(busy.wait)
@@ -227,16 +297,28 @@ func (s *speaker) step(cfg *config) bool {
 			log.Printf("הערה: יצירת קול מושהית ל-%v (%v). בינתיים ההודעות מושמעות כטקסט.", busy.wait, err)
 		}
 	default:
+		if data != nil && len(uploaded) > 0 {
+			j.data = data
+		}
 		j.tries++
 		if j.tries >= speechTries {
-			delete(s.jobs, jobKey(job.ext, job.file))
-			s.results = append(s.results, speechResult{job.ext, job.base, false})
-			log.Printf("הערה: הקול של %s בשלוחה %q לא נוצר (נשאר טקסט): %v", job.file, job.ext, err)
+			delete(s.jobs, s.jobKeyOf(j))
+			log.Printf("הערה: הקול של %s לא עלה (נשאר טקסט): %v", job.key, err)
 		} else {
 			j.notBefore = time.Now().Add(time.Duration(j.tries) * time.Minute)
 		}
 	}
 	return true
+}
+
+// jobKeyOf (עם s.mu): המפתח של העבודה במפה.
+func (s *speaker) jobKeyOf(j *speechJob) string {
+	for k, x := range s.jobs {
+		if x == j {
+			return k
+		}
+	}
+	return ""
 }
 
 // start: ברקע, לכל אורך ההפעלה.
@@ -471,15 +553,19 @@ func (st *state) speechTick(cfg *config) {
 	s.mu.Unlock()
 	for _, r := range res {
 		a, ok := st.arch[r.ext]
-		if !ok || !r.ok || r.base < 0 {
+		if !ok || r.base < 0 {
 			continue
 		}
-		if !a.hasBase(r.base) {
+		e := a.entries[r.key]
+		if e == nil || e.base != r.base {
 			// ההודעה כבר לא בשלוחה (נמחקה בינתיים) — גם הקול שעלה
 			_ = cfg.y.remove([]string{ivrPath(r.ext, speechFile(r.base))})
 			continue
 		}
 		a.addFile(speechFile(r.base))
+		if !e.voiced {
+			e.voiced, a.dirty = true, true
+		}
 	}
 }
 
@@ -519,59 +605,24 @@ func (a *archive) dropFile(cfg *config, name string) error {
 }
 
 // requeueSpeech: אחרי הפעלה מחדש (התור נשמר רק בזיכרון) — הודעות מהשעות האחרונות
-// שעדיין בלי קול חוזרות לתור. פעם אחת לכל שלוחה בכל הפעלה.
+// שעדיין בלי קול חוזרות לתור (הטקסט מההודעה שבשרת). פעם אחת לכל שלוחה בכל הפעלה.
 func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string]string, now time.Time) {
 	if cfg.speech == nil || a.spoken {
 		return
 	}
 	a.spoken = true
-	list := make([]*archEntry, 0, len(a.entries))
-	for _, e := range a.entries {
-		list = append(list, e)
-	}
-	sort.Slice(list, func(i, j int) bool { return list[i].base > list[j].base }) // החדשות קודם
-	byKey := map[string]FeedItem{}
+	n := 0
 	for _, it := range items {
-		byKey[itemKey(it)] = it
-	}
-	n, long := 0, 0
-	for _, e := range list {
-		if n >= speechRequeueMax {
-			break
-		}
-		if e.base < 0 || now.Sub(time.Unix(e.ts, 0)) > speechRequeueAge || !a.hasFile(introFile(e.base)) {
+		e := a.entries[itemKey(it)]
+		if e == nil || e.base < 0 || n >= speechRequeueMax || now.Sub(time.Unix(e.ts, 0)) > speechRequeueAge ||
+			a.hasFile(speechFile(e.base)) || !a.hasFile(introFile(e.base)) {
 			continue
 		}
-		// הודעה ארוכה מלפני שהקול הקריא הודעות במלואן — הטקסט המלא מהשרת
-		if it, ok := byKey[e.key]; ok && !a.hasFile(fullFile(e.base)) {
-			full := spokenItem(it, titles, cfg.loc, now, a.withName, speechMaxChars)
-			if full != spokenItem(it, titles, cfg.loc, now, a.withName, maxPerFile) && cfg.y.upload(a.ext, fullFile(e.base), full) == nil {
-				a.addFile(fullFile(e.base))
-				if a.hasFile(speechFile(e.base)) {
-					_ = a.dropFile(cfg, speechFile(e.base)) // הקול המקוצר — יוחלף במלא
-				}
-				cfg.speech.add(a.ext, e.base, full, true)
-				n++
-				long++
-				continue
-			}
-		}
-		if a.hasFile(speechFile(e.base)) {
-			continue
-		}
-		name := introFile(e.base)
-		if a.hasFile(fullFile(e.base)) {
-			name = fullFile(e.base)
-		}
-		text, exists, err := cfg.y.read(a.ext, name)
-		if err != nil || !exists {
-			continue
-		}
-		cfg.speech.add(a.ext, e.base, text, true)
+		cfg.speech.add(e.key, e.ts, a.ext, e.base, audioItem(it, titles, cfg.loc, a.withName), a.withName)
 		n++
 	}
 	if n > 0 {
-		log.Printf("שלוחה %s: %d הודעות אחרונות בלי קול מוכן (מהן %d ארוכות — במלואן) — נכנסו לתור.", a.ext, n, long)
+		log.Printf("שלוחה %s: %d הודעות מהשעות האחרונות בלי קול מוכן — נכנסו לתור.", a.ext, n)
 	}
 }
 

@@ -72,12 +72,13 @@ const (
 )
 
 type archEntry struct {
-	key   string // ערוץ/מזהה ההודעה
-	base  int    // -1: דילגנו על ההודעה (ההעלאה נכשלה שוב ושוב)
-	ts    int64
-	class int    // ניסוח הזמן שבהקראה שבשלוחה (whenClass)
-	audio int    // audioNone / audioPending / audioDone / audioNo
-	media string // "v" סרטון, "o" הודעה קולית, "" אין
+	key    string // ערוץ/מזהה ההודעה
+	base   int    // -1: דילגנו על ההודעה (ההעלאה נכשלה שוב ושוב)
+	ts     int64
+	class  int    // ניסוח הזמן שבהקראה שבשלוחה (whenClass)
+	audio  int    // audioNone / audioPending / audioDone / audioNo
+	media  string // "v" סרטון, "o" הודעה קולית, "" אין
+	voiced bool   // יש לה קול מוכן בניסוח "ביום שישי..." (voice.go) — לא מתיישן בחצות
 }
 
 type archive struct {
@@ -215,6 +216,7 @@ func parseArchive(txt string) archiveFile {
 			if len(p) > 6 && p[6] != "-" {
 				e.media = p[6]
 			}
+			e.voiced = len(p) > 7 && p[7] == "w"
 			f.entries[e.key] = e
 		}
 	}
@@ -252,7 +254,11 @@ func (a *archive) encode(now time.Time) string {
 			media = "-"
 		}
 		// שורה לכל הודעה: e <ערוץ/מזהה> <מספר> <זמן> <ניסוח הזמן> <מצב הקול> <סוג המדיה>
-		fmt.Fprintf(&b, "e %s %d %d %d %d %s\n", e.key, e.base, e.ts, e.class, e.audio, media)
+		voice := ""
+		if e.voiced {
+			voice = " w" // קול מוכן בניסוח יום בשבוע (voice.go)
+		}
+		fmt.Fprintf(&b, "e %s %d %d %d %d %s%s\n", e.key, e.base, e.ts, e.class, e.audio, media, voice)
 	}
 	return b.String()
 }
@@ -515,21 +521,9 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 	if err := cfg.y.upload(a.ext, introFile(b), text); err != nil {
 		return fmt.Errorf("שליחה לשלוחה %s (%s): %w", a.ext, introFile(b), err)
 	}
-	// קול מוכן מראש (voice.go) — ברקע. הודעה ארוכה: ההקראה כטקסט נחתכת (מגבלה של
-	// ימות המשיח), אבל הקול מקריא אותה במלואה — והטקסט המלא נשמר ליד (NNNNN.txt),
-	// כדי שאפשר יהיה ליצור את הקול מחדש כשניסוח הזמן משתנה.
-	spoken := text
-	if cfg.speech != nil {
-		if full := spokenItem(it, titles, cfg.loc, now, a.withName, speechMaxChars); full != text {
-			if err := cfg.y.upload(a.ext, fullFile(b), full); err != nil {
-				log.Printf("הערה: שמירת הטקסט המלא %s בשלוחה %s נכשלה (הקול יהיה מקוצר): %v", fullFile(b), a.ext, err)
-			} else {
-				spoken = full
-				a.addFile(fullFile(b))
-			}
-		}
-	}
-	cfg.speech.add(a.ext, b, spoken, false)
+	// קול מוכן מראש (voice.go) — ברקע. קובץ אחד להודעה, לכל השלוחות שלה; הודעה
+	// ארוכה — במלואה.
+	cfg.speech.add(itemKey(it), it.TS, a.ext, b, audioItem(it, titles, cfg.loc, a.withName), a.withName)
 	e := &archEntry{key: itemKey(it), base: b, ts: it.TS, class: whenClass(time.Unix(it.TS, 0).In(cfg.loc), now)}
 	if cfg.audio {
 		e.media, e.audio = st.queueAudio(cfg, it, a.ext, b, now)
@@ -602,7 +596,6 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 			giveUp("קריאה", err)
 			continue
 		}
-		prevClass := e.class
 		text, ok := replaceWhen(old, t, e.class, c)
 		if !ok {
 			e.class, a.dirty = c, true // לא מצאנו את ביטוי הזמן בפתיחה — משאירים כמו שהיא
@@ -613,23 +606,14 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 			continue
 		}
 		e.class, a.dirty = c, true
-		spoken := text
-		if cfg.speech != nil && a.hasFile(fullFile(e.base)) {
-			// הודעה ארוכה — גם הטקסט המלא (של הקול) מקבל את הניסוח החדש
-			if full, ok, err := cfg.y.read(a.ext, fullFile(e.base)); err == nil && ok {
-				if f2, ok := replaceWhen(full, t, prevClass, c); ok && cfg.y.upload(a.ext, fullFile(e.base), f2) == nil {
-					spoken = f2
-				}
+		// הקול: מגרסה קודמת ("היום"/"אתמול") — מתיישן, נמחק (מושמע הטקסט המעודכן).
+		// קול בניסוח יום בשבוע — נשאר עד שההודעה בת שבוע (אז הניסוח עובר לתאריך).
+		if a.hasFile(speechFile(e.base)) && (!e.voiced || c == whenDate) {
+			if err := a.dropFile(cfg, speechFile(e.base)); err != nil {
+				log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %s נכשלה: %v", speechFile(e.base), a.ext, err)
+			} else {
+				e.voiced = false
 			}
-		}
-		if cfg.speech != nil {
-			// הקול הישן אומר את הניסוח הקודם — נמחק (עד שהחדש מוכן מושמע הטקסט), ונוצר מחדש.
-			if a.hasFile(speechFile(e.base)) {
-				if err := a.dropFile(cfg, speechFile(e.base)); err != nil {
-					log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %s נכשלה: %v", speechFile(e.base), a.ext, err)
-				}
-			}
-			cfg.speech.add(a.ext, e.base, spoken, true)
 		}
 	}
 }

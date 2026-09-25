@@ -72,11 +72,24 @@ func TestSpeechUploadsWav(t *testing.T) {
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.files["ivr2:/1/10001.wav"]; got != "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב. הודעה חדשה;convert=1" {
+	// קובץ קול אחד — לשלוחה 1 ולשלוחת הכתב, עם שם הכתב והיום בשבוע
+	if got := f.files["ivr2:/1/10001.wav"]; got != "AUDIO:PHONE:אלישע ירד, ביום חמישי בשעה 7 בערב. הודעה חדשה;convert=1" {
 		t.Fatalf("ext 1 wav: %q", got)
 	}
-	if got := f.files["ivr2:/2/1/10001.wav"]; got != "AUDIO:PHONE:בשעה 7 בערב. הודעה חדשה;convert=1" {
+	if got := f.files["ivr2:/2/1/10001.wav"]; got != f.files["ivr2:/1/10001.wav"] {
 		t.Fatalf("reporter wav: %q", got)
+	}
+	msgs := 0
+	for _, tx := range g.texts {
+		if strings.Contains(tx, "הודעה חדשה") {
+			msgs++
+		}
+	}
+	if msgs != 1 {
+		t.Fatalf("one synthesis per message, got %d", msgs)
+	}
+	if !strings.Contains(f.files["ivr2:/1/archive.txt"], "e a/1 10000 ") || !strings.Contains(f.files["ivr2:/1/archive.txt"], " w\n") {
+		t.Fatalf("voiced flag not saved: %q", f.files["ivr2:/1/archive.txt"])
 	}
 	if f.files["ivr2:/1/10001.tts"] == "" {
 		t.Fatal("text must stay as fallback")
@@ -100,13 +113,23 @@ func TestSpeechUploadsWav(t *testing.T) {
 		}
 	}
 
-	// אחרי חצות: הטקסט מתעדכן ל"אתמול", והקול נוצר מחדש עם הניסוח החדש
+	st.speechTick(&cfg) // התפריטים (עולים בסוף הסבב) — כמו ברקע
+	// אחרי חצות: הטקסט מתעדכן ל"אתמול"; הקול ("ביום חמישי") נשאר — בלי ליצור מחדש
 	nowFunc = func() time.Time { return day.Add(6 * time.Hour) }
-	if err := syncOnce(&cfg, st); err != nil {
+	n = len(g.texts)
+	if err := syncOnce(&cfg, &state{}); err != nil { // גם אחרי הפעלה מחדש
 		t.Fatal(err)
 	}
-	if got := f.files["ivr2:/1/10001.wav"]; got != "AUDIO:PHONE:אלישע ירד, אתמול בשעה 7 בערב. הודעה חדשה;convert=1" {
-		t.Fatalf("rerendered wav: %q", got)
+	if !strings.Contains(f.files["ivr2:/1/10001.tts"], "אתמול בשעה 7 בערב") || f.files["ivr2:/1/10001.wav"] == "" || len(g.texts) != n {
+		t.Fatalf("after midnight: tts=%q wav=%q synth=%q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10001.wav"], g.texts[n:])
+	}
+	// אחרי שבוע (תאריך) — הקול נמחק, מושמע הטקסט
+	nowFunc = func() time.Time { return day.Add(8 * 24 * time.Hour) }
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/1/10001.wav"] != "" || !strings.Contains(f.files["ivr2:/1/10001.tts"], "ב 24 בספטמבר") {
+		t.Fatalf("after a week: wav=%q tts=%q", f.files["ivr2:/1/10001.wav"], f.files["ivr2:/1/10001.tts"])
 	}
 }
 
@@ -139,7 +162,7 @@ func TestSpeechOff(t *testing.T) {
 		t.Fatal("should be off")
 	}
 	var s *speaker
-	s.add("1", 10000, "x", false) // nil — לא קורס
+	s.add("a/1", 1, "1", 10000, "x", false) // nil — לא קורס
 	if v := newSpeaker("k", "", ""); v == nil || v.voice != "Charon" {
 		t.Fatal("default voice")
 	}
@@ -192,9 +215,9 @@ func TestSpeechMenus(t *testing.T) {
 func TestSpeechMenuVoice(t *testing.T) {
 	s := newSpeakerVoices("k", "Charon", "", "on")
 	s.addMenu("", "M1000.wav", "שלום")
-	s.add("1", 10000, "הודעה", false)
+	s.add("a/1", 1, "1", 10000, "הודעה", true)
 	j, _ := s.next()
-	if j.file != "M1000.wav" || j.voice != "Puck" {
+	if j.targets[0].file != "M1000.wav" || j.voice != "Puck" {
 		t.Fatalf("menu first with menu voice: %+v", j)
 	}
 }
@@ -222,19 +245,8 @@ func TestSpeechLongMessageFull(t *testing.T) {
 		t.Fatalf("tts should be cut: %q", f.files["ivr2:/1/10001.tts"][len(f.files["ivr2:/1/10001.tts"])-80:])
 	}
 	wav := f.files["ivr2:/1/10001.wav"]
-	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב.") {
-		t.Fatalf("wav should be full: len=%d tail=%q txt=%v", len(wav), wav[len(wav)-120:], f.files["ivr2:/1/10001-full.txt"] != "")
-	}
-	if !strings.HasSuffix(f.files["ivr2:/1/10001-full.txt"], "סוף ההודעה") || !isBridgeFile("10001-full.txt") {
-		t.Fatal("full text not kept")
-	}
-	nowFunc = func() time.Time { return day.Add(6 * time.Hour) }
-	if err := syncOnce(&cfg, st); err != nil {
-		t.Fatal(err)
-	}
-	wav = f.files["ivr2:/1/10001.wav"]
-	if !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, אתמול בשעה 7 בערב.") || !strings.Contains(wav, "סוף ההודעה") {
-		t.Fatalf("rerendered full wav: %.120q", wav)
+	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, ביום חמישי בשעה 7 בערב.") {
+		t.Fatalf("wav should be full: len=%d", len(wav))
 	}
 }
 
