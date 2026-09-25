@@ -38,12 +38,12 @@ var speechModels = []string{"gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts",
 var speechEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 
 const (
-	speechTries      = 3                // ניסיונות לכל קובץ
-	speechQuotaPause = time.Hour        // מודל שהגיע למכסה — לא מנסים אותו לפני כן
-	speechBusyPause  = 2 * time.Minute  // כל המודלים עמוסים — הפסקה קצרה
-	speechRequeueAge = 12 * time.Hour   // אחרי הפעלה מחדש: הודעות מהשעות האחרונות בלי קול — חוזרות לתור
-	speechRequeueMax = 40               // כמה לכל היותר בכל שלוחה
-	speechTimeout    = 90 * time.Second // בקשה אחת ל-Gemini
+	speechTries      = 3                 // ניסיונות לכל קובץ
+	speechQuotaPause = time.Hour         // מודל שהגיע למכסה — לא מנסים אותו לפני כן
+	speechBusyPause  = 2 * time.Minute   // כל המודלים עמוסים — הפסקה קצרה
+	speechRequeueAge = 12 * time.Hour    // אחרי הפעלה מחדש: הודעות מהשעות האחרונות בלי קול — חוזרות לתור
+	speechRequeueMax = 40                // כמה לכל היותר בכל שלוחה
+	speechTimeout    = 150 * time.Second // בקשה אחת ל-Gemini (הודעה ארוכה לוקחת עד דקה וחצי)
 )
 
 // speechFile: קובץ הקול של ההקראה (אותו מספר כמו introFile, בסיומת wav).
@@ -251,10 +251,10 @@ func (s *speaker) synthesize(text string) ([]byte, string, error) {
 			s.mu.Lock()
 			s.modelPause[m] = time.Now().Add(speechQuotaPause)
 			s.mu.Unlock()
-		case status == http.StatusNotFound, status == http.StatusBadRequest, overloaded(status):
-			allQuota = false
+		case status == 0, status == http.StatusNotFound, status == http.StatusBadRequest, overloaded(status):
+			allQuota = false // המודל איטי / עמוס / לא זמין — המודל הבא
 		default:
-			return nil, "", err // תקלת רשת / מפתח — ננסה שוב אחר כך
+			return nil, "", err // תקלת מפתח וכו' — ננסה שוב אחר כך
 		}
 	}
 	if lastErr == nil {
