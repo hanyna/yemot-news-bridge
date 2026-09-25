@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -40,8 +41,8 @@ var speechEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s
 
 const (
 	speechTries      = 3                  // ניסיונות לכל קובץ
-	speechQuotaPause = time.Hour          // מודל שהגיע למכסה — לא מנסים אותו לפני כן
-	speechBusyPause  = 2 * time.Minute    // כל המודלים עמוסים — הפסקה קצרה
+	speechDayPause   = time.Hour          // מודל שהגיע למכסה היומית — לא מנסים אותו לפני כן
+	speechBusyPause  = 30 * time.Second   // כל המודלים עמוסים — הפסקה קצרה
 	speechRequeueAge = 3 * 24 * time.Hour // הודעות מהימים האחרונים בלי קול — נכנסות לתור (בעדיפות נמוכה, החדשות קודם)
 	speechRequeueMax = 150                // כמה לכל היותר בכל שלוחה
 	speechTimeout    = 5 * time.Minute    // בקשה אחת (הודעה ארוכה במלואה לוקחת כמה דקות)
@@ -274,12 +275,18 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 		},
 	})
 	var lastErr error
+	var soonest time.Time // מתי המודל הראשון שבמכסה משתחרר
 	allQuota := true
 	for m, model := range speechModels {
 		s.mu.Lock()
 		paused := time.Now().Before(s.modelPause[m])
 		s.mu.Unlock()
 		if paused {
+			s.mu.Lock()
+			if until := s.modelPause[m]; soonest.IsZero() || until.Before(soonest) {
+				soonest = until
+			}
+			s.mu.Unlock()
 			continue
 		}
 		data, status, err := s.call(model, body)
@@ -289,9 +296,19 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 		lastErr = err
 		switch {
 		case status == http.StatusTooManyRequests:
+			// מגבלה לדקה — ממתינים כמה ש-Google מבקשים (בד"כ פחות מדקה); מכסה יומית — שעה.
+			wait := time.Minute
+			var q *quotaErr
+			if errors.As(err, &q) && q.wait > 0 {
+				wait = q.wait
+			}
+			until := time.Now().Add(wait)
 			s.mu.Lock()
-			s.modelPause[m] = time.Now().Add(speechQuotaPause)
+			s.modelPause[m] = until
 			s.mu.Unlock()
+			if soonest.IsZero() || until.Before(soonest) {
+				soonest = until
+			}
 		case status == 0, status == http.StatusNotFound, status == http.StatusBadRequest, overloaded(status):
 			allQuota = false // המודל איטי / עמוס / לא זמין — המודל הבא
 		default:
@@ -302,8 +319,11 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 		lastErr = errors.New("כל המודלים הגיעו למכסה")
 	}
 	wait := speechBusyPause
-	if allQuota {
-		wait = 15 * time.Minute
+	if allQuota && !soonest.IsZero() {
+		wait = time.Until(soonest) + time.Second
+	}
+	if wait < 5*time.Second {
+		wait = 5 * time.Second
 	}
 	return nil, "", &speechBusyErr{wait, lastErr.Error()}
 }
@@ -335,7 +355,11 @@ func (s *speaker) call(model string, body []byte) ([]byte, int, error) {
 		if len(msg) > 160 {
 			msg = msg[:160]
 		}
-		return nil, resp.StatusCode, fmt.Errorf("%s: HTTP %d: %s", model, resp.StatusCode, msg)
+		err := fmt.Errorf("%s: HTTP %d: %s", model, resp.StatusCode, msg)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, resp.StatusCode, &quotaErr{err, retryAfter(raw)}
+		}
+		return nil, resp.StatusCode, err
 	}
 	var r struct {
 		Candidates []struct {
@@ -578,4 +602,34 @@ func uploadSpoken(cfg *config, ext, name, text string) error {
 	}
 	cfg.speech.addMenu(ext, wav, text)
 	return nil
+}
+
+// quotaErr: ‏429 מ-Google, עם כמה זמן לחכות.
+type quotaErr struct {
+	err  error
+	wait time.Duration
+}
+
+func (e *quotaErr) Error() string { return e.err.Error() }
+
+var (
+	reRetryDelay = regexp.MustCompile(`"retryDelay":\s*"([\d.]+)s"`)
+	reRetryIn    = regexp.MustCompile(`retry in ([\d.]+)\s*s`)
+)
+
+// retryAfter: כמה לחכות לפי התשובה של Google. מכסה יומית (PerDay) — שעה.
+func retryAfter(raw []byte) time.Duration {
+	s := string(raw)
+	if strings.Contains(s, "PerDay") {
+		return speechDayPause
+	}
+	for _, re := range []*regexp.Regexp{reRetryDelay, reRetryIn} {
+		if m := re.FindStringSubmatch(s); m != nil {
+			var sec float64
+			if _, err := fmt.Sscanf(m[1], "%g", &sec); err == nil && sec > 0 {
+				return time.Duration(sec*float64(time.Second)) + time.Second
+			}
+		}
+	}
+	return time.Minute
 }

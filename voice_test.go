@@ -272,3 +272,18 @@ func TestFullFileName(t *testing.T) {
 		t.Fatal(fullFile(10190), fileNum("10191-full.txt"), fileNum("10191.txt"))
 	}
 }
+
+// מגבלה לדקה — ממתינים כמה ש-Google מבקשים, לא שעה; מכסה יומית — שעה.
+func TestRetryAfter(t *testing.T) {
+	perMin := []byte(`{"error":{"code":429,"message":"You exceeded your current quota. Please retry in 7.5s.","details":[{"violations":[{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"7s"}]}}`)
+	if w := retryAfter(perMin); w < 7*time.Second || w > 10*time.Second {
+		t.Fatalf("per minute: %v", w)
+	}
+	perDay := []byte(`{"error":{"code":429,"details":[{"violations":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}]}]}}`)
+	if retryAfter(perDay) != speechDayPause {
+		t.Fatal("per day")
+	}
+	if retryAfter([]byte(`{}`)) != time.Minute {
+		t.Fatal("default")
+	}
+}
