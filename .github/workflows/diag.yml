@@ -1,0 +1,30 @@
+name: Diag TTS
+on:
+  push:
+    branches: [diag-tts]
+    paths: [diag_test.go, .github/workflows/diag.yml]
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+      - name: Diag
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: go test -tags diag -run TestDiagTTS -v -count=1 -timeout 8m .
+      - name: Save samples to the branch
+        if: always()
+        run: |
+          ls -la samples || exit 0
+          git config user.name "bridge-diag"
+          git config user.email "bridge-diag@users.noreply.github.com"
+          git add samples
+          git commit -m "TTS samples" || exit 0
+          git push
