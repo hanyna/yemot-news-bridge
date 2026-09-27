@@ -1647,24 +1647,25 @@ func TestPromoFooterIsNotAnAd(t *testing.T) {
 	}
 }
 
-// שלוחה 4: האזנה נסתרת להודעות שבשלוחה 6, עם סיסמת הניהול. לא מוכרזת בתפריט.
+// 0 ואז 148: האזנה נסתרת להודעות שבשלוחה 6, בלי סיסמה נוספת. לא מוכרזת בתפריט.
 func TestAdminListenExt(t *testing.T) {
 	now := time.Now().Unix()
 	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 60, Text: "הודעה"}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	defer srv.Close()
 	cfg := newTestCfg(srv)
-	cfg.adminListen = "4"
+	cfg.adminListen = "0/148"
 	if err := syncOnce(&cfg, &state{}); err != nil {
 		t.Fatal(err)
 	}
-	ini := f.files["ivr2:/4/ext.ini"]
-	for _, want := range []string{"type=playfile", "folder_to_play=6", "start=max", "password=password_admin", "password_error_goto=/"} {
-		if !strings.Contains(ini, want) {
-			t.Fatalf("ext 4 ini missing %q: %q", want, ini)
-		}
+	if p := f.files["ivr2:/0/ext.ini"]; !strings.Contains(p, "type=menu") || !strings.Contains(p, "digits=3") || !strings.Contains(p, "menu_error_goto=/") {
+		t.Fatalf("ext 0: %q", p)
 	}
-	if strings.Contains(f.files["ivr2:/M1000.tts"], "הקישו 4") {
+	ini := f.files["ivr2:/0/148/ext.ini"]
+	if !strings.Contains(ini, "type=playfile") || !strings.Contains(ini, "folder_to_play=6") || !strings.Contains(ini, "start=max") || strings.Contains(ini, "password") {
+		t.Fatalf("0/148: %q", ini)
+	}
+	if strings.Contains(f.files["ivr2:/M1000.tts"], "הקישו 0") {
 		t.Fatal("hidden ext announced in the menu")
 	}
 }
