@@ -1669,3 +1669,19 @@ func TestAdminListenExt(t *testing.T) {
 		t.Fatal("hidden ext announced in the menu")
 	}
 }
+
+// שלוחה 0 חוזרת להיות שלוחת הניהול כשההאזנה לא שם.
+func TestAdminLoginRestored(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 60, Text: "הודעה"}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.adminListen = "4"
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.files["ivr2:/0/ext.ini"], "type=admin_login") || !strings.Contains(f.files["ivr2:/4/ext.ini"], "folder_to_play=6") {
+		t.Fatalf("0: %q | 4: %q", f.files["ivr2:/0/ext.ini"], f.files["ivr2:/4/ext.ini"])
+	}
+}

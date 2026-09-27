@@ -150,7 +150,7 @@ func main() {
 		callback:      envOr("CALLBACK_ENABLED", "on") == "on",
 		adminList:     envOr("ADMIN_TZINTUK_LIST", "606"),
 		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
-		adminListen:   envOr("ADMIN_LISTEN_EXT", "0/148"),
+		adminListen:   envOr("ADMIN_LISTEN_EXT", "4"),
 		exclude:       parseExclude(os.Getenv("EXCLUDE_CHANNELS")),
 		podcasts:      parsePodcasts(os.Getenv("PODCASTS")),
 		podcastExt:    envOr("PODCAST_EXT", "3"),
@@ -514,6 +514,11 @@ func syncOnce(cfg *config, st *state) error {
 	// הרשמה חד-פעמית של בעל הקו לרשימת צינתוקי המנהל — שלוחה 7 זמנית, לא מופיעה בתפריט.
 	// האזנה להודעות שהשאירו למנהל (שלוחה 6): שלוחה נסתרת (לא בתפריט). ברירת המחדל
 	// 0/148 — מקישים 0, אז 148, ואז את סיסמת הניהול. החדשה קודם.
+	// שלוחה 0 היא שלוחת הניהול של ימות המשיח (admin_login). גרסה קודמת של הגשר
+	// דרסה אותה (0/148) — מחזירים, כל עוד היא לא משמשת להאזנה.
+	if !strings.HasPrefix(cfg.adminListen, "0/") {
+		setupSpecial(cfg, st, "0", "type=admin_login")
+	}
 	if l := cfg.adminListen; l != "" && l != "off" {
 		ok := true
 		if parent, code, nested := strings.Cut(l, "/"); nested {
