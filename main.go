@@ -97,6 +97,7 @@ type config struct {
 	y                *yemot
 	vision           *visionClient // ניתוח תמונות עם Gemini (nil = כבוי) — vision.go
 	speech           *speaker      // קול מוכן מראש להודעות (nil = כבוי) — voice.go
+	music            *menuMusic    // שיר ברקע של התפריט הראשי (nil = בלי) — music.go
 	client           *http.Client  // ל-API של ערוץ חי
 	feedClient       *http.Client  // זמן המתנה ארוך — Render מתעורר לאט
 }
@@ -175,6 +176,14 @@ func main() {
 	cfg.speech = newSpeakerKeys(speechKeys(os.Getenv), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH_MENU_VOICE"), os.Getenv("SPEECH"))
 	if cfg.speech != nil {
 		log.Printf("קול מוכן מראש (Gemini, קול %s, %d מפתחות): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice, len(cfg.speech.keys))
+	}
+	cfg.music = loadMenuMusic(os.Getenv("MENU_MUSIC"), os.Getenv("MENU_MUSIC_INTRO"), os.Getenv("MENU_MUSIC_VOLUME"))
+	switch {
+	case cfg.music != nil && cfg.speech == nil:
+		log.Println("הערה: מוזיקה בתפריט צריכה את הקול המוכן (SPEECH=on ומפתח GEMINI_API_KEY) — בינתיים התפריט בלי מוזיקה.")
+		cfg.music = nil
+	case cfg.music != nil:
+		log.Printf("מוזיקה בתפריט הראשי: %s — %g שניות שיר, ואז התפריט עם השיר ב-%g%% עוצמה.", cfg.music.name, cfg.music.intro, cfg.music.level*100)
 	}
 	var err error
 	if cfg.loc, err = time.LoadLocation("Asia/Jerusalem"); err != nil {

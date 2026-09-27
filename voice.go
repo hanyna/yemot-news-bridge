@@ -286,9 +286,24 @@ func (s *speaker) step(cfg *config) bool {
 			if job.done[t] {
 				continue
 			}
-			if e := cfg.y.uploadFile(t.ext, t.file, "speech.wav", data, true); e != nil {
+			body, sig := data, menuMusicNone
+			if isWelcomeWav(t) && cfg.music != nil {
+				// התפריט הראשי: שיר ← העוצמה יורדת ← התפריט מעל השיר (music.go)
+				if mixed, e := mixMenuMusic(data, cfg.music); e != nil {
+					log.Printf("הערה: הוספת המוזיקה לתפריט נכשלה — התפריט עולה בלי מוזיקה: %v", e)
+					sig = ""
+				} else {
+					body, sig = mixed, cfg.music.sig
+				}
+			}
+			if e := cfg.y.uploadFile(t.ext, t.file, "speech.wav", body, true); e != nil {
 				err = e
 				continue
+			}
+			if isWelcomeWav(t) && sig != "" {
+				if e := cfg.y.upload("", menuMusicMarker, sig); e != nil {
+					log.Printf("הערה: שמירת %s נכשלה: %v", menuMusicMarker, e)
+				}
 			}
 			uploaded = append(uploaded, t)
 		}
@@ -693,8 +708,8 @@ func uploadSpoken(cfg *config, ext, name, text string) error {
 		hasWav = hasName(info.Files, wav)
 	}
 	if hasWav {
-		if old, _, err := cfg.y.read(ext, name); err == nil && old == text {
-			return nil // בדיוק מה שכבר בשלוחה, עם קול
+		if old, _, err := cfg.y.read(ext, name); err == nil && old == text && sameMusic(cfg, ext, name) {
+			return nil // בדיוק מה שכבר בשלוחה, עם קול (ועם אותו שיר ברקע)
 		}
 	}
 	if err := cfg.y.upload(ext, name, text); err != nil {
@@ -707,6 +722,22 @@ func uploadSpoken(cfg *config, ext, name, text string) error {
 	}
 	cfg.speech.addMenu(ext, wav, text)
 	return nil
+}
+
+// sameMusic: בתפריט הראשי — השיר שבקול שכבר עלה הוא השיר שמוגדר עכשיו (או
+// שאין שיר בשניהם). שיר חדש / הוסר / הגדרות אחרות — הקול נוצר מחדש.
+func sameMusic(cfg *config, ext, name string) bool {
+	if ext != "" || name != "M1000.tts" {
+		return true
+	}
+	got, exists, err := cfg.y.read("", menuMusicMarker)
+	if err != nil {
+		return true // לא יודעים — לא יוצרים מחדש סתם (חוסך מכסה)
+	}
+	if !exists {
+		got = menuMusicNone
+	}
+	return strings.TrimSpace(got) == cfg.music.musicSig()
 }
 
 // quotaErr: ‏429 מ-Google, עם כמה זמן לחכות.
