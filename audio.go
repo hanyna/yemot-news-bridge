@@ -490,6 +490,22 @@ var mediaClient = &http.Client{}
 // downloadMedia מוריד את הסרטון (דרך השרת של ערוץ חי), את ההודעה הקולית, או
 // פרק של פודקאסט.
 func downloadMedia(cfg *config, j *audioJob, path string) error {
+	if j.kind == "v" {
+		err := downloadMediaVia(cfg, j, path, true)
+		if !errors.Is(err, errDirectFailed) {
+			return err
+		}
+		log.Printf("סרטון %s: הורדה ישירה מטלגרם נכשלה — מוריד דרך השרת של ערוץ חי.", j.key)
+	}
+	return downloadMediaVia(cfg, j, path, false)
+}
+
+// errDirectFailed: ההורדה הישירה מטלגרם (אחרי הפניה מהשרת) נכשלה — מנסים דרך השרת.
+var errDirectFailed = errors.New("הורדה ישירה נכשלה")
+
+// downloadMediaVia: direct — סרטון שהשרת מפנה לכתובת הישירה שלו בטלגרם.
+func downloadMediaVia(cfg *config, j *audioJob, path string, direct bool) error {
+	feedHost := ""
 	target, maxBytes, timeout := j.src, int64(mediaMaxBytes), mediaTimeout
 	if j.kind == "p" {
 		maxBytes, timeout = podcastMaxBytes, podcastTimeout
@@ -503,8 +519,15 @@ func downloadMedia(cfg *config, j *audioJob, path string) error {
 		q.Set("channel", j.channel)
 		q.Set("id", strconv.Itoa(j.id))
 		q.Set("k", cfg.feedKey)
+		if direct {
+			// חיסכון ברוחב הפס של Render: השרת מחזיר את הכתובת הישירה של טלגרם,
+			// והסרטון יורד משם ישר — לא עובר דרך Render. אם זה נכשל, בניסיון
+			// הבא מורידים דרך השרת כמו קודם.
+			q.Set("redirect", "1")
+		}
 		u.Path, u.RawQuery = "/api/media", q.Encode()
 		target = u.String()
+		feedHost = u.Host
 	}
 	if target == "" {
 		return &permanentError{fmt.Errorf("אין כתובת להורדה")}
@@ -524,9 +547,16 @@ func downloadMedia(cfg *config, j *audioJob, path string) error {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 	resp, err := mediaClient.Do(req)
 	if err != nil {
+		if direct {
+			return errDirectFailed
+		}
 		return errors.New(hide(err.Error()))
 	}
 	defer resp.Body.Close()
+	redirected := direct && resp.Request != nil && resp.Request.URL.Host != feedHost
+	if redirected && resp.StatusCode >= 300 {
+		return errDirectFailed // השרת הפנה, אבל טלגרם לא נתן את הקובץ
+	}
 	switch {
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusGone:
 		switch j.kind {
@@ -549,6 +579,9 @@ func downloadMedia(cfg *config, j *audioJob, path string) error {
 	defer f.Close()
 	n, err := io.Copy(f, io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
+		if redirected {
+			return errDirectFailed
+		}
 		return fmt.Errorf("הורדה נקטעה: %s", hide(err.Error()))
 	}
 	if n > maxBytes {

@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata" // שעון ישראל עובד גם אם בשרת אין קבצי אזורי זמן
 )
@@ -1147,10 +1148,22 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("כתובת לא תקינה: %w", err)
 	}
+	cacheKey := u.String() // בלי המפתח
 	q := u.Query()
 	q.Set("k", key)
 	u.RawQuery = q.Encode()
-	resp, err := client.Get(u.String())
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("כתובת לא תקינה")
+	}
+	etagMu.Lock()
+	prev, havePrev := etagCache[cacheKey]
+	etagMu.Unlock()
+	if havePrev {
+		// חיסכון ברוחב הפס של Render: אם שום דבר לא השתנה, השרת עונה 304 בלי גוף.
+		req.Header.Set("If-None-Match", prev.etag)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		// שגיאת רשת כוללת את הכתובת המלאה — עם המפתח. מסתירים אותו.
 		if ue, ok := err.(*url.Error); ok {
@@ -1159,6 +1172,9 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified && havePrev {
+		return prev.body, nil
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -1166,8 +1182,26 @@ func getJSON(client *http.Client, rawURL, key string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("סטטוס %d מ-%s: %.200s", resp.StatusCode, u.Path, string(body))
 	}
+	if et := resp.Header.Get("ETag"); et != "" {
+		etagMu.Lock()
+		etagCache[cacheKey] = etagEntry{et, body}
+		etagMu.Unlock()
+	}
 	return body, nil
 }
+
+// etagCache: התשובה האחרונה מכל כתובת של ערוץ חי, עם ה-ETag שלה. בבדיקה
+// הבאה שולחים את ה-ETag, ואם לא השתנה כלום השרת עונה 304 (כמה מאות בתים
+// במקום כל רשימת ההודעות) — חוסך את רוב רוחב הפס של Render.
+type etagEntry struct {
+	etag string
+	body []byte
+}
+
+var (
+	etagMu    sync.Mutex
+	etagCache = map[string]etagEntry{}
+)
 
 // latestSHA מחזיר את מזהה הקומיט האחרון ב-main (דרך ה-API של GitHub).
 func latestSHA(client *http.Client) (string, error) {
