@@ -512,7 +512,7 @@ func syncOnce(cfg *config, st *state) error {
 	}
 	// הרשמה חד-פעמית של בעל הקו לרשימת צינתוקי המנהל — שלוחה 7 זמנית, לא מופיעה בתפריט.
 	// האזנה להודעות שהשאירו למנהל (שלוחה 6): שלוחה נסתרת (לא בתפריט). ברירת המחדל
-	// 0/148 — מקישים 0 ואז 148 (הקוד הוא עצמו הסיסמה). החדשה קודם.
+	// 0/148 — מקישים 0, אז 148, ואז את סיסמת הניהול. החדשה קודם.
 	if l := cfg.adminListen; l != "" && l != "off" {
 		ok := true
 		if parent, code, nested := strings.Cut(l, "/"); nested {
@@ -520,7 +520,8 @@ func syncOnce(cfg *config, st *state) error {
 			ok = setupSpecial(cfg, st, parent, "type=menu\ndigits="+strconv.Itoa(len(code))+"\nmenu_error_goto=/")
 		}
 		if ok {
-			setupSpecial(cfg, st, l, "type=playfile\nfolder_to_play="+recordExt+"\nstart=max")
+			// סיסמת הניהול של המערכת — לא נשמרת בקוד. נדרשת בכל כניסה; שגויה — לתפריט הראשי.
+			setupSpecial(cfg, st, l, "type=playfile\nfolder_to_play="+recordExt+"\nstart=max\npassword=password_admin\npassword_always_required=yes\npassword_error_goto=/")
 		}
 	}
 	if cfg.adminRegister && cfg.adminList != "" {

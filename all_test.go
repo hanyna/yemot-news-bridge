@@ -1647,7 +1647,7 @@ func TestPromoFooterIsNotAnAd(t *testing.T) {
 	}
 }
 
-// 0 ואז 148: האזנה נסתרת להודעות שבשלוחה 6, בלי סיסמה נוספת. לא מוכרזת בתפריט.
+// 0, 148 וסיסמה: האזנה נסתרת להודעות שבשלוחה 6. לא מוכרזת בתפריט.
 func TestAdminListenExt(t *testing.T) {
 	now := time.Now().Unix()
 	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 60, Text: "הודעה"}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
@@ -1662,7 +1662,7 @@ func TestAdminListenExt(t *testing.T) {
 		t.Fatalf("ext 0: %q", p)
 	}
 	ini := f.files["ivr2:/0/148/ext.ini"]
-	if !strings.Contains(ini, "type=playfile") || !strings.Contains(ini, "folder_to_play=6") || !strings.Contains(ini, "start=max") || strings.Contains(ini, "password") {
+	if !strings.Contains(ini, "type=playfile") || !strings.Contains(ini, "folder_to_play=6") || !strings.Contains(ini, "start=max") || !strings.Contains(ini, "password=password_admin") {
 		t.Fatalf("0/148: %q", ini)
 	}
 	if strings.Contains(f.files["ivr2:/M1000.tts"], "הקישו 0") {
