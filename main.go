@@ -87,6 +87,7 @@ type config struct {
 	callback         bool            // שלוחה 8/3: שיחה חוזרת מהמערכת (חוסכת דקות למתקשר)
 	adminList        string          // רשימת הצינתוקים של המנהל (הודעה חדשה בשלוחה 6)
 	adminRegister    bool            // שלוחה 7 = הרשמה לרשימת המנהל (זמני)
+	adminListen      string          // שלוחה נסתרת עם סיסמת הניהול: השמעת ההודעות שהשאירו בשלוחה 6 ("" = כבוי)
 	exclude          map[string]bool // ערוצים שהוצאו מהקו (EXCLUDE_CHANNELS; באותיות קטנות)
 	podcasts         []podcastSource // שלוחה 3: פודקאסטים (podcast.go)
 	podcastExt       string
@@ -148,6 +149,7 @@ func main() {
 		callback:      envOr("CALLBACK_ENABLED", "on") == "on",
 		adminList:     envOr("ADMIN_TZINTUK_LIST", "606"),
 		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
+		adminListen:   envOr("ADMIN_LISTEN_EXT", "4"),
 		exclude:       parseExclude(os.Getenv("EXCLUDE_CHANNELS")),
 		podcasts:      parsePodcasts(os.Getenv("PODCASTS")),
 		podcastExt:    envOr("PODCAST_EXT", "3"),
@@ -509,6 +511,11 @@ func syncOnce(cfg *config, st *state) error {
 		}
 	}
 	// הרשמה חד-פעמית של בעל הקו לרשימת צינתוקי המנהל — שלוחה 7 זמנית, לא מופיעה בתפריט.
+	// האזנה להודעות שהשאירו למנהל (שלוחה 6): שלוחה נסתרת (לא בתפריט), עם סיסמת
+	// הניהול של המערכת — הסיסמה לא נשמרת בקוד. החדשה קודם. סיסמה שגויה — לתפריט הראשי.
+	if cfg.adminListen != "" && cfg.adminListen != "off" {
+		setupSpecial(cfg, st, cfg.adminListen, "type=playfile\nfolder_to_play="+recordExt+"\nstart=max\npassword=password_admin\npassword_always_required=yes\npassword_error_goto=/")
+	}
 	if cfg.adminRegister && cfg.adminList != "" {
 		setupSpecial(cfg, st, registerExt, "type=tzintuk\nlist_tzintuk="+cfg.adminList)
 	}
@@ -518,6 +525,9 @@ func syncOnce(cfg *config, st *state) error {
 			continue
 		}
 		if old == cfg.podcastExt && len(cfg.podcasts) > 0 {
+			continue
+		}
+		if old == cfg.adminListen {
 			continue
 		}
 		if old == registerExt && cfg.adminRegister {

@@ -1646,3 +1646,25 @@ func TestPromoFooterIsNotAnAd(t *testing.T) {
 		t.Fatalf("backlog: %+v", items[1:])
 	}
 }
+
+// שלוחה 4: האזנה נסתרת להודעות שבשלוחה 6, עם סיסמת הניהול. לא מוכרזת בתפריט.
+func TestAdminListenExt(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 60, Text: "הודעה"}}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.adminListen = "4"
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	ini := f.files["ivr2:/4/ext.ini"]
+	for _, want := range []string{"type=playfile", "folder_to_play=6", "start=max", "password=password_admin", "password_error_goto=/"} {
+		if !strings.Contains(ini, want) {
+			t.Fatalf("ext 4 ini missing %q: %q", want, ini)
+		}
+	}
+	if strings.Contains(f.files["ivr2:/M1000.tts"], "הקישו 4") {
+		t.Fatal("hidden ext announced in the menu")
+	}
+}
