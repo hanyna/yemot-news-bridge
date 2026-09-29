@@ -685,6 +685,11 @@ func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string
 	}
 }
 
+// spokenFile: הנוסח של קול התפריט / הכותרת (M1000-spoken.txt).
+func spokenFile(name string) string { return strings.TrimSuffix(name, ".tts") + spokenSuffix }
+
+const spokenSuffix = "-spoken.txt"
+
 // uploadSpoken: מעלה קובץ טקסט של תפריט / כותרת (M1000.tts, 99999.tts), ומחליף
 // גם את קובץ הקול שלו. קול ישן אומר את הטקסט הישן — נמחק מיד (עד שהחדש מוכן
 // מושמע הטקסט). טקסט שלא השתנה, ויש לו כבר קול — לא נוגעים.
@@ -708,12 +713,21 @@ func uploadSpoken(cfg *config, ext, name, text string) error {
 		hasWav = hasName(info.Files, wav)
 	}
 	if hasWav {
-		if old, _, err := cfg.y.read(ext, name); err == nil && old == text && sameMusic(cfg, ext, name) {
+		// ימות המשיח מוחקים את M1000.tts כשעולה M1000.wav — לכן הנוסח שהקול אומר
+		// שמור גם בקובץ נפרד (ימות לא משמיעים ולא מציגים קבצי txt).
+		old, exists, err := cfg.y.read(ext, name)
+		if err == nil && !exists {
+			old, _, err = cfg.y.read(ext, spokenFile(name))
+		}
+		if err == nil && old == text && sameMusic(cfg, ext, name) {
 			return nil // בדיוק מה שכבר בשלוחה, עם קול (ועם אותו שיר ברקע)
 		}
 	}
 	if err := cfg.y.upload(ext, name, text); err != nil {
 		return err
+	}
+	if err := cfg.y.upload(ext, spokenFile(name), text); err != nil {
+		log.Printf("הערה: שמירת %s בשלוחה %q נכשלה: %v", spokenFile(name), ext, err)
 	}
 	if hasWav {
 		if err := cfg.y.remove([]string{ivrPath(ext, wav)}); err != nil {

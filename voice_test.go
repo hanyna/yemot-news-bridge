@@ -201,9 +201,11 @@ func TestSpeechMenus(t *testing.T) {
 	// הפעלה מחדש, אותו טקסט — לא מוחקים ולא יוצרים שוב
 	calls := len(g.calls)
 	cfg.speech = newSpeakerVoices("GKEY", "Charon", "Puck", "on")
-	if err := syncOnce(&cfg, &state{}); err != nil {
+	stR := &state{}
+	if err := syncOnce(&cfg, stR); err != nil {
 		t.Fatal(err)
 	}
+	stR.speechTick(&cfg)
 	if len(g.calls) != calls {
 		t.Fatalf("regenerated unchanged menus: %v", g.calls[calls:])
 	}

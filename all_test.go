@@ -194,6 +194,18 @@ func (f *fakeYemotServer) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		f.files[what] = "AUDIO:" + string(data) + ";convert=" + r.FormValue("convertAudio")
 		f.addName(dir, name)
+		// כמו ימות המשיח: M1000.wav מוחק את M1000.tts
+		if strings.HasPrefix(name, "M") && strings.HasSuffix(name, ".wav") {
+			tts := strings.TrimSuffix(name, ".wav") + ".tts"
+			delete(f.files, dir+"/"+tts)
+			var keep []string
+			for _, n := range f.dirs[dir] {
+				if n != tts {
+					keep = append(keep, n)
+				}
+			}
+			f.dirs[dir] = keep
+		}
 		// כמו ימות המשיח: לכל קובץ קול נכתב לידו קובץ פרטים באותו שם, בסיומת txt
 		if i := strings.LastIndex(name, "."); i > 0 {
 			f.files[dir+"/"+name[:i]+".txt"] = "API-DID-0770000000-Date-2026\r\ntitle=" + name + "\r\n"

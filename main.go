@@ -981,7 +981,7 @@ func isSystemFile(name string) bool {
 // קבצי הארכיון (NNNNN.tts / NNNNN.wav) והאינדקס שלו.
 func isBridgeFile(name string) bool {
 	n := strings.ToLower(name)
-	if n == "ext.ini" || n == archiveIndex || n == podcastIndex {
+	if n == "ext.ini" || n == archiveIndex || n == podcastIndex || strings.HasSuffix(n, spokenSuffix) {
 		return true
 	}
 	if fileNum(n) >= 0 {
