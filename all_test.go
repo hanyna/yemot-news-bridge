@@ -1685,3 +1685,34 @@ func TestAdminLoginRestored(t *testing.T) {
 		t.Fatalf("0: %q | 4: %q", f.files["ivr2:/0/ext.ini"], f.files["ivr2:/4/ext.ini"])
 	}
 }
+
+// תקלה זמנית בטעינת הפודקאסט אחרי הפעלה מחדש — התפריט לא יורד ל"שלוחה זו אינה פעילה".
+func TestPodcastMenuSurvivesLoadFailure(t *testing.T) {
+	withFakeTranscode(t)
+	defer func(d time.Duration) { podcastEvery = d }(podcastEvery)
+	podcastEvery = 0
+	day, now := int64(24*3600), time.Now().Unix()
+	f := archiveServer(nil, `{"channels":[]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	f.rss = podcastRSS(srv.URL, now-3*day, now-2*day, now-day)
+	cfg := newTestCfg(srv)
+	cfg.podcasts = parsePodcasts("חושבים בקול של הקול היהודי | " + srv.URL + "/rss/pod")
+	cfg.podcastExt, cfg.podcastKeep = "3", 2
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	active := f.files["ivr2:/3/M1000.tts"]
+	if !strings.HasPrefix(active, "פודקאסטים.") {
+		t.Fatalf("setup: %q", active)
+	}
+	// הפעלה מחדש, וקריאת האינדקס של הפודקאסט נכשלת
+	f.failRead = map[string]bool{"ivr2:/3/1/" + podcastIndex: true}
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/3/M1000.tts"] != active || !strings.Contains(f.files["ivr2:/M1000.tts"], "לפודקאסטים") {
+		t.Fatalf("menu downgraded: %q | welcome %q", f.files["ivr2:/3/M1000.tts"], f.files["ivr2:/M1000.tts"])
+	}
+}

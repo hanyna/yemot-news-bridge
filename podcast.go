@@ -534,9 +534,14 @@ func (st *state) finishPodcasts(cfg *config) bool {
 		return false
 	}
 	var opts []string
+	loaded := true
 	for i, src := range cfg.podcasts {
+		if i >= 9 {
+			break
+		}
 		p := st.pods[cfg.podcastExt+"/"+strconv.Itoa(i+1)]
 		if p == nil || p.src.url != src.url {
+			loaded = false // לא נטען בסבב הזה (תקלה זמנית מול ימות) — לא יודעים
 			continue
 		}
 		p.finish(cfg, cfg.podcastKeep)
@@ -546,6 +551,12 @@ func (st *state) finishPodcasts(cfg *config) bool {
 		st.ensureTitle(cfg, p.ext, p.name()+". "+podcastNavHint)
 		opts = append(opts, fmt.Sprintf("ל%s הקישו %d.", p.name(), i+1))
 	}
+	if !loaded && (len(opts) == 0 || st.podActive) {
+		// תקלה זמנית בטעינה: לא מורידים את התפריט ל"אינה פעילה" ולא מקצרים אותו —
+		// זה מה שהמאזינים שמעו לפעמים, וגם יצר מחדש את הקול (ובזבז מכסה). נשאר כמו שהוא.
+		return st.podActive || st.podMenuText == ""
+	}
+	st.podActive = len(opts) > 0
 	text := "שלוחה זו אינה פעילה כרגע."
 	if len(opts) > 0 {
 		text = "פודקאסטים. " + strings.Join(opts, " ")
