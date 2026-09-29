@@ -971,7 +971,10 @@ func retireExt(cfg *config, st *state, ext string) {
 // isSystemFile: קבצים שימות המשיח עצמם כותבים לשלוחה (יומנים, כמו
 // record_log.ymgr) — לא תוכן של המשתמש, ולא הופכים שלוחה ל"לא של הגשר".
 func isSystemFile(name string) bool {
-	return strings.HasSuffix(strings.ToLower(name), ".ymgr")
+	n := strings.ToLower(name)
+	// rating.ini — דירוגים שמאזינים נותנים לקבצים (ימות המשיח כותבים אותו לבד).
+	// בעבר הוא נחשב "לא של הגשר", ושלוחת הפודקאסט נחסמה — והתפריט אמר "אינה פעילה".
+	return strings.HasSuffix(n, ".ymgr") || n == "rating.ini"
 }
 
 // isBridgeFile: קבצים שהגשר עצמו יוצר בשלוחה — ext.ini, NNN.tts (המבנה הקודם),

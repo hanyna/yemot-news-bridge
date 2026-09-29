@@ -1716,3 +1716,30 @@ func TestPodcastMenuSurvivesLoadFailure(t *testing.T) {
 		t.Fatalf("menu downgraded: %q | welcome %q", f.files["ivr2:/3/M1000.tts"], f.files["ivr2:/M1000.tts"])
 	}
 }
+
+// קובץ הדירוגים שימות המשיח יוצרים לבד (rating.ini) — לא חוסם את שלוחת הפודקאסט.
+func TestPodcastWithRatingFile(t *testing.T) {
+	withFakeTranscode(t)
+	defer func(d time.Duration) { podcastEvery = d }(podcastEvery)
+	podcastEvery = 0
+	day, now := int64(24*3600), time.Now().Unix()
+	f := archiveServer(nil, `{"channels":[]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	f.rss = podcastRSS(srv.URL, now-3*day, now-2*day, now-day)
+	cfg := newTestCfg(srv)
+	cfg.podcasts = parsePodcasts("חושבים בקול של הקול היהודי | " + srv.URL + "/rss/pod")
+	cfg.podcastExt, cfg.podcastKeep = "3", 2
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	f.files["ivr2:/3/1/rating.ini"] = "10001=5"
+	f.addName("ivr2:/3/1", "rating.ini")
+	f.files["ivr2:/3/M1000.tts"] = "שלוחה זו אינה פעילה כרגע."
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.files["ivr2:/3/M1000.tts"]; got != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1." {
+		t.Fatalf("menu: %q", got)
+	}
+}
