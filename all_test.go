@@ -1540,7 +1540,7 @@ func TestPodcasts(t *testing.T) {
 	if fl["ivr2:/3/ext.ini"] != "type=menu\ndigits=1" || fl["ivr2:/3/M1000.tts"] != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1." {
 		t.Fatalf("ext 3: %q | %q", fl["ivr2:/3/ext.ini"], fl["ivr2:/3/M1000.tts"])
 	}
-	if fl["ivr2:/3/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/3/1/99999.tts"] != "חושבים בקול של הקול היהודי." {
+	if fl["ivr2:/3/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/3/1/99999.tts"] != "חושבים בקול של הקול היהודי. "+podcastNavHint {
 		t.Fatalf("3/1: %q | %q", fl["ivr2:/3/1/ext.ini"], fl["ivr2:/3/1/99999.tts"])
 	}
 	// שני הפרקים האחרונים (2 ו-3), הישן לפני החדש; הראשון — לא.

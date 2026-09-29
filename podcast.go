@@ -36,6 +36,9 @@ const (
 // podcastEvery: כל כמה זמן בודקים אם יצא פרק חדש. (משתנה — לבדיקות.)
 var podcastEvery = 30 * time.Minute
 
+// podcastNavHint: הודעה קבועה בכניסה לפודקאסט, לפני שהפרק מתחיל להתנגן.
+const podcastNavHint = "למעבר לפרק הבא, הקישו 8."
+
 // מצב של פרק.
 const (
 	podQueued = 1 // הקול ממתין (הורדה והעלאה ברקע)
@@ -540,7 +543,7 @@ func (st *state) finishPodcasts(cfg *config) bool {
 		if p.ready() == 0 {
 			continue // עוד אין מה לשמוע
 		}
-		st.ensureTitle(cfg, p.ext, p.name()+".")
+		st.ensureTitle(cfg, p.ext, p.name()+". "+podcastNavHint)
 		opts = append(opts, fmt.Sprintf("ל%s הקישו %d.", p.name(), i+1))
 	}
 	text := "שלוחה זו אינה פעילה כרגע."
