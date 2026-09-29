@@ -3,8 +3,8 @@ package main
 // קול של סרטונים והודעות קוליות: מורידים, מחלצים את הקול (ffmpeg), ומעלים
 // לשלוחה מיד אחרי ההקראה של ההודעה (קובץ b.wav — נשמע אחרי b+1.tts).
 //
-//   - סרטון (רגיל או עגול): דרך השרת של ערוץ חי (/api/media) — הוא יודע לחדש
-//     את הכתובות של טלגרם שפגות אחרי זמן קצר.
+//   - סרטון (רגיל או עגול): ישירות מטלגרם (telegram.go — כתובת שפגה מתחדשת
+//     מהדף של הפוסט), ואם לא הצליח — דרך השרת של ערוץ חי (/api/media).
 //   - הודעה קולית: ישירות מהכתובת שבהודעה.
 //   - נשארים עם התיאור בלבד: סרטון ארוך שטלגרם לא נותנים בלי חשבון (בשרת הוא
 //     מוצג כתמונה עם כפתור הפעלה), GIF (בלי קול), סרטון ארוך מ-AUDIO_MAX_MINUTES,
@@ -490,6 +490,13 @@ var mediaClient = &http.Client{}
 // downloadMedia מוריד את הסרטון (דרך השרת של ערוץ חי), את ההודעה הקולית, או
 // פרק של פודקאסט.
 func downloadMedia(cfg *config, j *audioJob, path string) error {
+	if j.kind == "v" && cfg.tg != nil {
+		err := downloadVideoTg(cfg, j, path)
+		if err == nil || cfg.feedKey == "" {
+			return err
+		}
+		log.Printf("סרטון %s: לא הורד ישירות מטלגרם (%v) — מנסה דרך השרת של ערוץ חי.", j.key, err)
+	}
 	if j.kind == "v" {
 		err := downloadMediaVia(cfg, j, path, true)
 		if !errors.Is(err, errDirectFailed) {
@@ -498,6 +505,64 @@ func downloadMedia(cfg *config, j *audioJob, path string) error {
 		log.Printf("סרטון %s: הורדה ישירה מטלגרם נכשלה — מוריד דרך השרת של ערוץ חי.", j.key)
 	}
 	return downloadMediaVia(cfg, j, path, false)
+}
+
+// downloadVideoTg: סרטון ישירות מטלגרם — קודם הכתובת שנמצאה בדף הערוץ, ואם
+// היא כבר פגה — כתובת חדשה מהדפים של הפוסט.
+func downloadVideoTg(cfg *config, j *audioJob, path string) error {
+	var last error
+	for _, fresh := range []bool{false, true} {
+		src, err := cfg.tg.videoURL(j.channel, j.id, fresh)
+		if err != nil {
+			last = &retryLaterError{err}
+			continue
+		}
+		if last = fetchToFile(src, path, mediaMaxBytes, mediaTimeout); last == nil {
+			return nil
+		}
+		var perm *permanentError
+		if errors.As(last, &perm) {
+			return last
+		}
+	}
+	return last
+}
+
+// fetchToFile מוריד כתובת לקובץ. 403/404/410 — הכתובת של טלגרם פגה (ננסה כתובת חדשה).
+func fetchToFile(src, path string, maxBytes int64, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", tgUA)
+	resp, err := mediaClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode >= 300:
+		return &retryLaterError{fmt.Errorf("טלגרם לא נתנו את הקובץ (סטטוס %d)", resp.StatusCode)}
+	case resp.ContentLength > maxBytes:
+		return &permanentError{fmt.Errorf("הקובץ גדול מדי (%d MB)", resp.ContentLength>>20)}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxBytes+1))
+	switch {
+	case err != nil:
+		return fmt.Errorf("הורדה נקטעה: %v", err)
+	case n > maxBytes:
+		return &permanentError{fmt.Errorf("הקובץ גדול מדי")}
+	case n == 0:
+		return fmt.Errorf("הורד קובץ ריק")
+	}
+	return nil
 }
 
 // errDirectFailed: ההורדה הישירה מטלגרם (אחרי הפניה מהשרת) נכשלה — מנסים דרך השרת.

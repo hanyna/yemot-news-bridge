@@ -41,7 +41,11 @@ jobs:
 
       - name: Run bridge (loop)
         env:
-          TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}
+          # מקור ההודעות: הגשר קורא בעצמו את הערוצים ישירות מטלגרם (t.me/s/...).
+          # ערוצים לפי הסדר — זה גם סדר הכתבים בשלוחה 2. ערוץ חדש = להוסיף כאן.
+          CHANNELS: "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,SamariaUpdates,nilchamim,hatzhalhyosh"
+          SOURCE: "telegram"       # telegram = ישירות מטלגרם. server = כמו פעם, דרך השרת של ערוץ חי
+          TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}   # גיבוי: אם טלגרם חוסמים יותר מ-10 דקות — ההודעות משרת ערוץ חי
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # ניתוח תמונות (Google AI Studio). בלי המפתח — "פורסמה תמונה" כמו קודם
           # מפתחות נוספים לקול המוכן — כל אחד מפרויקט נפרד ב-Google AI Studio = עוד 40 הודעות ביום בחינם.
@@ -52,10 +56,10 @@ jobs:
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           GITHUB_TOKEN: ${{ github.token }}   # לבדיקה אם יש גרסה חדשה יותר (אז ההפעלה הישנה נעצרת)
           RUN_MINUTES: "330"       # כמה זמן ההפעלה נשארת פתוחה (GitHub מגביל ל-6 שעות)
-          INTERVAL_SECONDS: "20"   # כל כמה שניות לבדוק הודעות חדשות (השרת של ערוץ חי עצמו סורק את טלגרם בערך פעם בדקה)
+          INTERVAL_SECONDS: "20"   # כל כמה שניות סבב. כל ערוץ בטלגרם נבדק בערך פעם ב-(ערוצים × 6) שניות — 7 ערוצים = כל 42 שניות
           # כל הודעה נשמרת בשלוחה 1 ובשלוחת הכתב שלה, כל עוד יש מקום (ימות מרשים עד 3,000 קבצים בשלוחה — ראו archive.go).
           CHANNEL_EXTS: "on"       # off = בלי שלוחה לכל ערוץ
-          # ערוצים שלא נכנסים לקו (בערוץ חי הם נשארים), מופרדים בפסיק. מה שכבר עלה מהם — נמחק מהקו.
+          # ערוצים שלא נכנסים לקו, מופרדים בפסיק. מה שכבר עלה מהם — נמחק מהקו.
           EXCLUDE_CHANNELS: "SamariaUpdates"
           AUDIO: "on"              # הקול של סרטונים והודעות קוליות מושמע אחרי ההקראה. off = רק תיאור ("פורסם סרטון באורך...")
           SPEECH: "on"             # כל הודעה עולה גם כקובץ שמע מוכן (Gemini) — בלי המתנה וגמגום בהאזנה. off = רק טקסט

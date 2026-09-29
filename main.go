@@ -12,6 +12,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -95,6 +96,7 @@ type config struct {
 	podcastKeep      int // כמה פרקים אחרונים נשמרים מכל פודקאסט
 	loc              *time.Location
 	y                *yemot
+	tg               *tgSource     // קריאה ישירה מטלגרם (nil = דרך שרת ערוץ חי) — telegram.go
 	vision           *visionClient // ניתוח תמונות עם Gemini (nil = כבוי) — vision.go
 	speech           *speaker      // קול מוכן מראש להודעות (nil = כבוי) — voice.go
 	music            *menuMusic    // שיר ברקע של התפריט הראשי (nil = בלי) — music.go
@@ -161,8 +163,16 @@ func main() {
 		feedClient:    &http.Client{Timeout: 90 * time.Second},
 	}
 	apiKey := cleanKey(os.Getenv("YEMOT_API_KEY"))
-	if cfg.feedKey == "" {
-		log.Fatal("חסר משתנה סביבה TGPOPUP_KEY")
+	cfg.tg = newTgSource(envOr("CHANNELS", defaultChannels), os.Getenv("SOURCE"))
+	switch {
+	case cfg.tg != nil && cfg.feedKey != "":
+		log.Printf("מקור ההודעות: ישירות מטלגרם (%d ערוצים, כל ערוץ נבדק בערך כל %v). גיבוי: שרת ערוץ חי, אם טלגרם חוסמים.", len(cfg.tg.chans), cfg.tg.every())
+	case cfg.tg != nil:
+		log.Printf("מקור ההודעות: ישירות מטלגרם (%d ערוצים). אין TGPOPUP_KEY — בלי גיבוי של שרת ערוץ חי.", len(cfg.tg.chans))
+	case cfg.feedKey == "":
+		log.Fatal("חסר משתנה סביבה TGPOPUP_KEY (SOURCE=server — ההודעות נלקחות משרת ערוץ חי)")
+	default:
+		log.Println("מקור ההודעות: שרת ערוץ חי (SOURCE=server).")
 	}
 	if apiKey == "" {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
@@ -324,19 +334,12 @@ var nowFunc = time.Now
 // syncOnce: סבב אחד — שליפה, בנייה, והעלאת מה שהשתנה בלבד.
 func syncOnce(cfg *config, st *state) error {
 	st.ensureMaps()
-	var items []FeedItem
-	var err error
-	for attempt := 1; attempt <= 3; attempt++ {
-		if items, err = fetchFeed(cfg.feedClient, cfg.feedURL, cfg.feedKey); err == nil {
-			break
-		}
-		log.Printf("ניסיון %d לשליפה מה-feed נכשל: %v", attempt, err)
-		if attempt < 3 {
-			time.Sleep(time.Duration(attempt) * 10 * time.Second)
-		}
+	items, tgChans, fromServer, err := fetchItems(cfg)
+	if errors.Is(err, errTgNotYet) {
+		return nil // טלגרם עוד לא ענו בהפעלה הזו — ממתינים לסבב הבא
 	}
 	if err != nil {
-		return fmt.Errorf("שגיאה בשליפת ההודעות: %w", err)
+		return err
 	}
 	if len(cfg.exclude) > 0 { // ערוצים שהוצאו מהקו (EXCLUDE_CHANNELS) — כאילו אינם
 		kept := make([]FeedItem, 0, len(items))
@@ -347,7 +350,11 @@ func syncOnce(cfg *config, st *state) error {
 		}
 		items = kept
 	}
-	if chs, err := fetchChannels(cfg.client, cfg.feedURL, cfg.feedKey); err == nil {
+	chs, err := tgChans, error(nil)
+	if fromServer {
+		chs, err = fetchChannels(cfg.client, cfg.feedURL, cfg.feedKey)
+	}
+	if err == nil {
 		st.channels = chs[:0:0]
 		for _, c := range chs {
 			if !cfg.excluded(c.Name) {
@@ -365,7 +372,7 @@ func syncOnce(cfg *config, st *state) error {
 	}
 
 	now := nowFunc().In(cfg.loc)
-	logFreshness(cfg, st, items, now)
+	logFreshness(cfg, st, items, now, fromServer)
 	// ניקוי להקראה, מהישנה לחדשה. כפילויות (אותה הודעה בכמה ערוצים) מסוננות
 	// בארכיון עצמו, מול מה שכבר נשמר.
 	clean := prepareClean(items)
@@ -608,7 +615,10 @@ func syncOnce(cfg *config, st *state) error {
 // logFreshness רושם בלוג (פעם ב-10 דקות, ובכל פעם שהחדשה ביותר משתנה) כמה
 // טריות ההודעות שמגיעות משרת ערוץ חי, ומצב כל ערוץ בשרת (/api/status) —
 // כדי לדעת אם עיכוב נובע מהשרת/טלגרם או מהגשר.
-func logFreshness(cfg *config, st *state, items []FeedItem, now time.Time) {
+func logFreshness(cfg *config, st *state, items []FeedItem, now time.Time, fromServer bool) {
+	if !fromServer && cfg.tg != nil {
+		cfg.tg.logStatus(now)
+	}
 	var newest FeedItem
 	for _, it := range items {
 		if it.TS > newest.TS {
@@ -621,7 +631,10 @@ func logFreshness(cfg *config, st *state, items []FeedItem, now time.Time) {
 	st.lastNewest, st.lastStatus = newest.TS, now
 	if newest.TS > 0 {
 		age := now.Sub(time.Unix(newest.TS, 0)).Round(time.Minute)
-		log.Printf("טריות: ההודעה החדשה ביותר בשרת ערוץ חי — %s, %s (לפני %v).", newest.Channel, time.Unix(newest.TS, 0).In(cfg.loc).Format("15:04"), age)
+		log.Printf("טריות: ההודעה החדשה ביותר — %s, %s (לפני %v).", newest.Channel, time.Unix(newest.TS, 0).In(cfg.loc).Format("15:04"), age)
+	}
+	if !fromServer {
+		return // מצב השרת של ערוץ חי לא רלוונטי כשקוראים ישירות מטלגרם
 	}
 	u, err := url.Parse(cfg.feedURL)
 	if err != nil {
@@ -1125,6 +1138,48 @@ func cutAtWord(r []rune) string {
 	}
 	return strings.TrimSpace(s)
 }
+
+// defaultChannels: הערוצים כשאין CHANNELS ב-bridge.yml (אותם ערוצים ובאותו סדר כמו בערוץ חי).
+const defaultChannels = "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,SamariaUpdates,nilchamim,hatzhalhyosh"
+
+// fetchItems: ההודעות לסבב הזה — ישירות מטלגרם, או משרת ערוץ חי (SOURCE=server,
+// או כשטלגרם חוסמים את כל הערוצים יותר מ-tgFallback). fromServer=true: מהשרת,
+// ואז רשימת הערוצים נלקחת גם היא מהשרת. errTgNotYet: טלגרם עוד לא ענו בהפעלה
+// הזו — מדלגים על הסבב (בלי הודעות אין מה לעדכן).
+func fetchItems(cfg *config) (items []FeedItem, chans []Channel, fromServer bool, err error) {
+	if cfg.tg != nil {
+		items, chans, blocked := cfg.tg.poll(time.Now())
+		if !blocked {
+			if cfg.tg.usingSrv {
+				cfg.tg.usingSrv = false
+				log.Println("טלגרם עונים שוב — חוזר לקרוא ישירות מטלגרם.")
+			}
+			if !cfg.tg.anyOK() {
+				return nil, nil, false, errTgNotYet
+			}
+			return items, chans, false, nil
+		}
+		if cfg.feedKey == "" {
+			return nil, nil, false, fmt.Errorf("טלגרם חוסמים את כל הערוצים כבר יותר מ-%v, ואין TGPOPUP_KEY לגיבוי דרך שרת ערוץ חי", tgFallback)
+		}
+		if !cfg.tg.usingSrv {
+			cfg.tg.usingSrv = true
+			log.Printf("טלגרם חוסמים את כל הערוצים כבר יותר מ-%v — לוקח את ההודעות משרת ערוץ חי עד שטלגרם יחזרו.", tgFallback)
+		}
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		if items, err = fetchFeed(cfg.feedClient, cfg.feedURL, cfg.feedKey); err == nil {
+			return items, nil, true, nil
+		}
+		log.Printf("ניסיון %d לשליפה מה-feed נכשל: %v", attempt, err)
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 10 * time.Second)
+		}
+	}
+	return nil, nil, true, fmt.Errorf("שגיאה בשליפת ההודעות: %w", err)
+}
+
+var errTgNotYet = errors.New("טלגרם עוד לא ענו")
 
 // fetchFeed שולף את רשימת ההודעות מה-API של Telegram Popup.
 func fetchFeed(client *http.Client, feedURL, key string) ([]FeedItem, error) {
