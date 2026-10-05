@@ -45,6 +45,10 @@ jobs:
           # מקור ההודעות: הגשר קורא בעצמו את הערוצים ישירות מטלגרם (t.me/s/...).
           # ערוצים לפי הסדר — זה גם סדר הכתבים בשלוחה 2. ערוץ חדש = להוסיף כאן.
           CHANNELS: "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,SamariaUpdates,nilchamim,hatzhalhyosh"
+          # חשבונות טוויטר — בלי חשבון ובלי מפתח (דרך השירות הציבורי FxTwitter, ראו x.go).
+          # כל חשבון מקבל שלוחת כתב בשלוחה 2, אחרי ערוצי הטלגרם. ריטוויטים ותגובות לאחרים לא נכנסים.
+          # חשבון חדש = להוסיף כאן (שם משתמש או קישור לפרופיל), מופרדים בפסיק. ריק = בלי טוויטר.
+          X_ACCOUNTS: "ariel__danino,meiretingr"
           SOURCE: "telegram"       # telegram = ישירות מטלגרם. server = כמו פעם, דרך השרת של ערוץ חי
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}   # גיבוי: אם טלגרם חוסמים יותר מ-10 דקות — ההודעות משרת ערוץ חי
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
