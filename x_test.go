@@ -43,6 +43,7 @@ type fakeX struct {
 	mu       sync.Mutex
 	statuses map[string]string // handle → JSON של /2/profile/<h>/statuses
 	profiles map[string]string // handle → JSON של /<h>
+	media    map[string]string // handle → JSON של /2/profile/<h>/media
 	status   int               // != 0 — כל בקשה מחזירה את הקוד הזה
 	calls    int
 }
@@ -56,6 +57,14 @@ func (f *fakeX) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := strings.Trim(r.URL.Path, "/")
+	if strings.HasPrefix(p, "2/profile/") && strings.HasSuffix(p, "/media") {
+		if b, ok := f.media[strings.TrimSuffix(strings.TrimPrefix(p, "2/profile/"), "/media")]; ok {
+			w.Write([]byte(b))
+			return
+		}
+		w.WriteHeader(404)
+		return
+	}
 	if strings.HasPrefix(p, "2/profile/") && strings.HasSuffix(p, "/statuses") {
 		h := strings.TrimSuffix(strings.TrimPrefix(p, "2/profile/"), "/statuses")
 		if b, ok := f.statuses[h]; ok {
@@ -412,5 +421,27 @@ func TestFixXOrder(t *testing.T) {
 	ar2 := &archive{ext: "2/8", channel: "x-meiretingr", entries: map[string]*archEntry{}}
 	if parseArchive(ar2.encode(time.Now())).layout != archLayout {
 		t.Fatal("layout not written")
+	}
+}
+
+// TestXMediaTab: ציוץ שמופיע רק בלשונית המדיה (השירות השמיט אותו מהרשימה הראשית) — נכנס.
+func TestXMediaTab(t *testing.T) {
+	a := `"author":{"screen_name":"ariel__danino","name":"אריאל דנינו"}`
+	f := &fakeX{
+		statuses: map[string]string{"ariel__danino": `{"code":200,"results":[
+		 {"type":"status","id":"100","text":"ציוץ רגיל","created_timestamp":` + xTS(2*time.Hour) + `,` + a + `,"reposted_by":null,"replying_to":null}]}`},
+		media: map[string]string{"ariel__danino": `{"code":200,"results":[
+		 {"type":"status","id":"100","text":"ציוץ רגיל","created_timestamp":` + xTS(2*time.Hour) + `,` + a + `,"reposted_by":null,"replying_to":null},
+		 {"type":"status","id":"200","text":"סרטון שחסר ברשימה","created_timestamp":` + xTS(time.Hour) + `,` + a + `,"reposted_by":null,"replying_to":null,
+		  "media":{"videos":[{"url":"https://video.twimg.com/v.mp4","duration":30,"type":"video"}]}}]}`},
+	}
+	withFakeX(t, f)
+	s := newXSource("ariel__danino", "")
+	items, _ := s.poll(time.Now())
+	if len(items) != 2 {
+		t.Fatalf("want 2, got %d: %+v", len(items), items)
+	}
+	if s.videoURL("x-ariel__danino", 200) != "https://video.twimg.com/v.mp4" {
+		t.Fatal("media-only tweet missing")
 	}
 }

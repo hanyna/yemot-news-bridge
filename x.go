@@ -309,6 +309,25 @@ func (s *xSource) fetch(a *xAcct) error {
 	case jerr != nil:
 		return fmt.Errorf("תשובה לא תקינה: %v", jerr)
 	}
+	// גם לשונית המדיה: השירות משמיט לפעמים מהרשימה הראשית ציוץ עם סרטון או תמונה
+	// (כך קרה עם ציוץ של אריאל דנינו מ-25.09). תקלה בה — לא עוצרת כלום.
+	if mb, mc, merr := s.get("/2/profile/" + url.PathEscape(a.handle) + "/media"); merr == nil && mc == http.StatusOK {
+		var m struct {
+			Results []xStatus `json:"results"`
+		}
+		if json.Unmarshal(mb, &m) == nil {
+			have := map[string]bool{}
+			for _, t := range r.Results {
+				have[t.ID] = true
+			}
+			for _, t := range m.Results {
+				if !have[t.ID] {
+					have[t.ID] = true
+					r.Results = append(r.Results, t)
+				}
+			}
+		}
+	}
 	for i := range r.Results {
 		t := &r.Results[i]
 		if a.title == "" && strings.EqualFold(t.Author.ScreenName, a.handle) && t.Author.Name != "" {
