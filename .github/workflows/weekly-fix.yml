@@ -1,0 +1,149 @@
+name: Weekly check and fix (Claude)
+
+# פעם בשבוע Claude בודק את הקו ומתקן מה שצריך — כאן ב-GitHub, בלי אישורים.
+# Claude רק עורך קבצים. הוא לא דוחף בעצמו: אחריו השלב "Test and apply" מריץ את כל
+# הבדיקות, ורק אם הכול עובר — התיקון נכנס ל-main והגשר מופעל מחדש. אם בדיקה נכשלת
+# — התיקון נזרק והקו ממשיך עם הקוד הקודם. שינוי בתיקייה .github/ לעולם לא נכנס.
+# בסוף נפתח Issue "דוח שבועי" — GitHub שולח עליו מייל.
+#
+# צריך Secret אחד (Settings → Secrets and variables → Actions):
+#   CLAUDE_CODE_OAUTH_TOKEN — מהפקודה `claude setup-token` (מנוי Claude Pro/Max), או
+#   ANTHROPIC_API_KEY — מפתח API מ-console.anthropic.com (תשלום לפי שימוש).
+#
+# השעה: 22:00 UTC במוצאי שבת = 00:00 בחורף, 01:00 בקיץ (GitHub עובד לפי UTC).
+on:
+  schedule:
+    - cron: "0 22 * * 6"
+  workflow_dispatch: {}   # הרצה ידנית: Actions → Weekly check and fix → Run workflow
+
+permissions:
+  contents: write   # לדחוף תיקון שעבר את הבדיקות
+  issues: write     # לקרוא את דוח המצב ולפתוח דוח שבועי
+  actions: write    # לקרוא לוגים ולהפעיל את הגשר מחדש אחרי תיקון
+  id-token: write
+
+concurrency:
+  group: weekly-fix
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPORT: /tmp/weekly-report.md
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Check secret
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::חסר Secret: CLAUDE_CODE_OAUTH_TOKEN או ANTHROPIC_API_KEY — Claude לא יכול לרוץ."
+            exit 1
+          fi
+
+      - name: Claude checks and fixes
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --max-turns 80
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(go build:*),Bash(go vet:*),Bash(go test:*),Bash(gofmt:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git status:*),Bash(cat:*),Bash(ls:*),Bash(grep:*),Bash(date:*)"
+          prompt: |
+            אתה הבודק והמתקן השבועי של הגשר לקו ימות המשיח "קו עדכוני ארץ ישראל" (המאגר הזה, ${{ github.repository }}).
+            אין אף אחד שצופה — לא לשאול שאלות. לעבוד לבד עד הסוף.
+
+            מקורות מידע (עם gh):
+            - ה-Issue "מצב הקו — דוח אוטומטי": הגוף והתגובות של 7 הימים האחרונים (כל תגובה = סיכום הפעלה).
+              בכל אחד יש בשורה הראשונה <!-- line-status {...} --> עם quality, latency, failed_cycles, fail_streak, וטבלת בעיות.
+            - ה-Issues "דוח יומי: ..." (גם סגורים) מהשבוע.
+            - הרצות של bridge.yml שנכשלו (gh run list --workflow bridge.yml --status failure), והלוגים שלהן (gh run view <id> --log-failed).
+            - הקוד עצמו. README.md מסביר את המבנה.
+
+            המשימה:
+            1. למצוא בעיות שחוזרות — גם כאלה שמשביתות את הקו וגם כאלה שפוגעות באיכות (קול ממוחשב במקום קול מוכן,
+               תמונות בלי תיאור, סרטונים בלי קול, הודעות שדולגו, עיכובים, שגיאות שחוזרות בטבלה).
+            2. אם יש באג בקוד שגורם לבעיה — לתקן אותו: תיקון מינימלי וזהיר, ולהוסיף/לעדכן בדיקה ב-*_test.go שתופסת אותו.
+               להריץ go build ./... && go vet ./... && go test -race -count=1 ./... ולוודא שהכול עובר.
+               אם לא הצלחת להעביר את כל הבדיקות — להחזיר את השינוי (לא להשאיר קוד שבור).
+            3. בעיה חיצונית (מכסה של Google, מפתח שגוי, טלגרם חוסם, ימות המשיח לא עונה) — לא לשנות קוד, רק לדווח ולהסביר מה לעשות.
+            4. לא לגעת בתיקייה .github/, לא ב-Secrets, לא למחוק קבצים, ולא לעשות git commit / push — השלב הבא בודק ומכניס את התיקון.
+            5. אם אין באג ברור — לא לשנות כלום. עדיף לא לתקן מאשר לתקן בניחוש.
+
+            בסוף — לכתוב דוח לקובץ /tmp/weekly-report.md (Write), בעברית פשוטה וקצרה
+            (הקורא לא יודע אנגלית — להסביר כל שגיאה באנגלית במילים פשוטות):
+            - שורה ראשונה בדיוק אחת מאלה: "✅ הקו תקין" / "🟡 הקו עובד, יש פגיעה באיכות" / "⚠️ תקלות בקו" / "🔧 תוקנה בעיה"
+            - מה מצאת השבוע (עם מספרים).
+            - מה תיקנת ולמה (אם תיקנת), או למה לא.
+            - מה הוא צריך לעשות בעצמו, אם בכלל (צעד פשוט).
+
+      - name: Test and apply the fix
+        id: apply
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name "claude-weekly-fix[bot]"
+          git config user.email "claude-weekly-fix@users.noreply.github.com"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Claude לא שינה קוד."
+            echo "applied=none" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git status --porcelain | grep -q ' \.github/'; then
+            echo "::warning::התיקון שינה קבצים בתיקייה .github/ — נזרק."
+            git checkout -- . && git clean -fdq
+            echo "applied=rejected" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git status --short
+          if go build -o /dev/null . && go vet ./... && go test -race -count=1 ./...; then
+            git add -A
+            git commit -q -m "תיקון שבועי אוטומטי (Claude)" -m "$(head -c 3000 "$REPORT" 2>/dev/null)"
+            git push origin HEAD:main
+            # דחיפה עם GITHUB_TOKEN לא מפעילה את הגשר לבד — מפעילים אותו (הישן מסיים לבד תוך 2 דקות).
+            gh workflow run bridge.yml --ref main --repo "$GITHUB_REPOSITORY"
+            echo "applied=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::הבדיקות נכשלו — התיקון לא נכנס, הקו ממשיך עם הקוד הקודם."
+            git checkout -- . && git clean -fdq
+            echo "applied=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Weekly report issue
+        if: ${{ always() }}
+        env:
+          APPLIED: ${{ steps.apply.outputs.applied }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, urllib.request, datetime
+          repo, tok = os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"]
+          def api(m, p, b=None):
+              r = urllib.request.Request("https://api.github.com" + p, method=m,
+                  data=json.dumps(b).encode() if b is not None else None,
+                  headers={"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(r, timeout=30) as f:
+                  raw = f.read(); return json.loads(raw) if raw else None
+          try:
+              report = open(os.environ["REPORT"], encoding="utf-8").read().strip()
+          except OSError:
+              report = "❓ לא הצלחתי לבדוק את הקו\n\nClaude לא סיים את הבדיקה (אולי חסר Secret, או שהמנוי/המפתח לא בתוקף). פרטים בקישור למטה."
+          first = report.splitlines()[0].strip("# ").strip() if report else "❓ לא הצלחתי לבדוק את הקו"
+          applied = {"yes": "✅ התיקון עבר את כל הבדיקות, נכנס, והגשר הופעל מחדש.",
+                     "failed": "❌ Claude הציע תיקון, אבל הבדיקות נכשלו — התיקון לא נכנס. הקו ממשיך כרגיל.",
+                     "rejected": "❌ התיקון שינה קבצים שאסור לשנות — לא נכנס."}.get(os.environ.get("APPLIED", ""), "")
+          body = report + ("\n\n" + applied if applied else "") + f"\n\nההרצה: {os.environ['RUN_URL']}\n\n@{repo.split('/')[0]}"
+          today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3))).strftime("%d.%m.%Y")
+          for i in api("GET", f"/repos/{repo}/issues?state=open&per_page=100"):
+              if i["title"].startswith("דוח שבועי"):
+                  api("PATCH", f"/repos/{repo}/issues/{i['number']}", {"state": "closed"})
+          api("POST", f"/repos/{repo}/issues", {"title": f"דוח שבועי: {first[:80]} — {today}", "body": body})
+          EOF

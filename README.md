@@ -170,6 +170,10 @@
   הדוח של אתמול נסגר. בתקלה חמורה הריצה גם נכשלת (עוד מייל). הרצה ידנית: Actions → Daily line check → Run workflow.
 - תיקון אוטומטי: תיקון נפתח כ-Pull Request מענף `autofix/...`. ‏`autofix.yml` מריץ את כל
   הבדיקות; רק אם עברו — התיקון נכנס והגשר מופעל מחדש. תיקון שמשנה קבצי Workflow לא נכנס לבד.
+- בדיקה ותיקון שבועיים (`weekly-fix.yml`): כל מוצאי שבת (00:00 בחורף, 01:00 בקיץ) Claude רץ כאן ב-GitHub,
+  בלי אישורים: קורא את הדוחות של השבוע, ומתקן באג בקוד אם יש. התיקון נכנס רק אם כל הבדיקות עוברות; שינוי ב-.github/
+  לא נכנס. בסוף נפתח Issue "דוח שבועי" (מייל). צריך Secret ‏`CLAUDE_CODE_OAUTH_TOKEN` (מ-`claude setup-token`)
+  או ‏`ANTHROPIC_API_KEY`. הרצה ידנית: Actions → Weekly check and fix → Run workflow.
 - `STATUS: "off"` ב-bridge.yml מכבה את הדוח.
 
 ## הרשאות מפתח ה-API בימות המשיח
