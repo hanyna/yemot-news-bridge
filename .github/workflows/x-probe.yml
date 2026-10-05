@@ -12,23 +12,13 @@ jobs:
         run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
           {
-          echo "## חיפוש חשבון"
-          for H in meir_ettinger meirettinger MeirEttinger1 ettinger_meir meir_etinger meiretinger EttingerMeir meir_ettinger1 ariel__danino; do
-            r=$(curl -s -A "$UA" --max-time 20 "https://api.fxtwitter.com/$H")
-            echo "$H: $(echo "$r" | jq -c '{c:.code,n:.user.name,d:(.user.description//""|.[0:80]),t:.user.tweets,f:.user.followers,j:.user.joined}' 2>/dev/null)"
-            sleep 2
-          done
-          for round in 1 2 3; do
-            echo "## סבב $round $(date -u +%H:%M:%S)"
-            for H in ariel__danino amit_segal yinonmagal kann_news; do
-              code=$(curl -s -A "$UA" -o b.json -w '%{http_code}' --max-time 25 "https://api.fxtwitter.com/2/profile/$H/statuses")
-              echo "$H statuses: $code $(jq -c '[.results[]? | {id, created_at, rt:(.reposted_by!=null), t:(.text|.[0:40])}] | .[0:4]' b.json 2>/dev/null) cursor=$(jq -c .cursor b.json 2>/dev/null)"
-              jq -r '.results[0] | keys | join(",")' b.json 2>/dev/null | head -1
-              sleep 3
-            done
-            code=$(curl -s -A "$UA" -H "Referer: https://platform.twitter.com/" -o s.html -w '%{http_code}' --max-time 25 "https://syndication.twitter.com/srv/timeline-profile/screen-name/ariel__danino")
-            echo "syndication: $code $(grep -o '"created_at":"[^"]*"' s.html | head -2 | tr '\n' ' ')"
-            [ $round -lt 3 ] && sleep 90
+          for H in kann_news yinonmagal ariel__danino; do
+            curl -s -A "$UA" --max-time 25 "https://api.fxtwitter.com/2/profile/$H/statuses" > b.json
+            echo "## $H"
+            echo '```json'
+            jq -c '[.results[] | select(.media != null or .quote != null or .replying_to != null)] | .[0:3] | map(del(.author.banner_url,.author.avatar_url, .author.description, .raw_text.facets))' b.json | head -c 9000
+            echo; echo '```'
+            sleep 3
           done
           } > out.txt 2>&1
       - name: Report
