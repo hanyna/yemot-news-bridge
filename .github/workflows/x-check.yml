@@ -17,9 +17,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           X_LIVE: "ariel__danino,meiretingr"
+          X_WHY: "meiretingr"
         run: |
           set +e
-          go test -count=1 -run TestXLive -v . > out.txt 2>&1
+          go test -count=1 -run "TestXLive|TestXLiveWhy" -v . > out.txt 2>&1
           rc=$?
           { echo "# בדיקה חיה של הקוד האמיתי — $(date -u) — תוצאה: $rc"; echo '```'; tail -c 6000 out.txt; echo '```'; } > report.md
           num=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=50" --jq '.[] | select(.title=="בדיקת טוויטר") | .number' | head -1)

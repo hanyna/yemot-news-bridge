@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -45,5 +46,27 @@ func TestXLive(t *testing.T) {
 		if a.lastErr != "" || len(a.items) == 0 {
 			t.Errorf("%s: %q, %d ציוצים", a.handle, a.lastErr, len(a.items))
 		}
+	}
+}
+
+// TestXLiveWhy: למה ציוצים סוננו (ריטוויט / תגובה / כותב אחר).
+func TestXLiveWhy(t *testing.T) {
+	h := os.Getenv("X_WHY")
+	if h == "" {
+		t.Skip()
+	}
+	s := newXSource(h, "")
+	body, code, err := s.get("/2/profile/" + h + "/statuses")
+	var r struct {
+		Results []xStatus `json:"results"`
+	}
+	jerr := json.Unmarshal(body, &r)
+	fmt.Printf("code %d err %v json %v results %d\n", code, err, jerr, len(r.Results))
+	for _, x := range r.Results {
+		txt := []rune(strings.ReplaceAll(x.Text, "\n", " "))
+		if len(txt) > 60 {
+			txt = txt[:60]
+		}
+		fmt.Printf("- author=%s reposted_by=%.60s replying_to=%.60s | %s | %s\n", x.Author.ScreenName, string(x.RepostedBy), string(x.ReplyingTo), x.CreatedAt, string(txt))
 	}
 }
