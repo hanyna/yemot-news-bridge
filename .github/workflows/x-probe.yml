@@ -1,0 +1,31 @@
+name: X probe (temporary)
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe public routes
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
+          for H in ariel__danino amit_segal; do
+          for U in \
+            "https://syndication.twitter.com/srv/timeline-profile/screen-name/$H" \
+            "https://cdn.syndication.twimg.com/timeline-profile/screen-name/$H" \
+            "https://api.fxtwitter.com/2/profile/$H/statuses" \
+            "https://api.fxtwitter.com/$H" \
+            "https://xcancel.com/$H/rss" \
+            "https://nitter.net/$H/rss" \
+            "https://nitter.poast.org/$H/rss" \
+            "https://nitter.privacydev.net/$H/rss" \
+            "https://rsshub.app/twitter/user/$H" ; do
+            echo "=================== $U"
+            code=$(curl -sL -A "$UA" -o body -w '%{http_code} %{size_download}' --max-time 25 "$U")
+            echo "status/size: $code"
+            grep -o '"created_at":"[^"]*"' body | head -3
+            grep -o '<pubDate>[^<]*' body | head -3
+            grep -o '"full_text":"[^"]\{0,80\}' body | head -2
+            grep -o '"text":"[^"]\{0,80\}' body | head -2
+            head -c 300 body | tr '\n' ' '; echo
+          done; done
