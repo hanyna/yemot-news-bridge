@@ -57,6 +57,9 @@ const (
 // ומשם כל הודעה חדשה מוציאה את הישנה ביותר. (משתנה — לבדיקות.)
 var maxArchiveFiles = 2980
 
+// mainLateMax: בשלוחה 1 נכנסות רק הודעות שהגיעו עד כמה שעות אחרי שפורסמו (משתנה — לבדיקות).
+var mainLateMax = 6 * time.Hour
+
 // בייבוא הראשון: לפחות כמה הודעות אחרונות, גם אם הן ישנות מ-48 שעות (ערוץ שקט).
 var firstImportMin = map[bool]int{true: 20, false: 10} // withName (שלוחה 1) / שלוחת כתב
 
@@ -90,6 +93,7 @@ type archive struct {
 	last     int64 // ה-ts של ההודעה החדשה ביותר שנכנסה
 	cutoff   int64 // הודעות ישנות מזה — מלפני הארכיון, לא נכנסות
 	fresh    bool  // אין עדיין אינדקס: הייבוא הראשון
+	initial  bool  // באמצע הייבוא הראשון (הודעות ישנות נכנסות לפי cutoff)
 	entries  map[string]*archEntry
 	dirty    bool
 	requeued bool
@@ -364,6 +368,12 @@ func (a *archive) has(it FeedItem, now time.Time) bool {
 	if _, ok := a.entries[itemKey(it)]; ok {
 		return true
 	}
+	if a.withName && mainLateMax > 0 && !a.initial && it.TS < now.Add(-mainLateMax).Unix() {
+		// שלוחה 1 (כל הכתבים): הודעה ישנה שמגיעה רק עכשיו — כתב חדש שנוסף עם
+		// ההיסטוריה שלו, ריטוויט של ציוץ ישן — לא נכנסת, אחרת היא נשמעת ראשונה
+		// כאילו היא חדשה. בשלוחת הכתב שלה היא כן נכנסת.
+		return true
+	}
 	return it.TS < a.cutoff || (it.TS <= a.last-lateWindow && it.TS < now.Add(-keepIndexDays*24*time.Hour).Unix())
 }
 
@@ -380,6 +390,8 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 		a.fresh = false
 		a.cutoff = firstImportFrom(items, now, firstImportMin[a.withName])
 		a.dirty = true
+		a.initial = true
+		defer func() { a.initial = false }()
 	}
 	if !a.requeued {
 		a.requeued = true

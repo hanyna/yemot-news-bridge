@@ -8,6 +8,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 )
 
 // channelOfKey: "SamariaUpdates/340" → "SamariaUpdates".
@@ -16,6 +17,30 @@ func channelOfKey(key string) string {
 		return key[:i]
 	}
 	return key
+}
+
+// xLineStart: לפני שטוויטר נכנס לקו (05.10.2026, 13:23) פחות 6 שעות. בהפעלה
+// הראשונה נכנסו לשלוחה 1 גם ציוצים מהשבועות האחרונים, והם נשמעו ראשונים —
+// fixXBacklog מוחק אותם משלוחה 1 (בשלוחות הכתבים הם נשארים).
+var xLineStart = time.Date(2026, 10, 5, 4, 23, 0, 0, time.UTC).Unix()
+
+// fixXBacklog: פעם אחת בכל הפעלה, אחרי שהארכיון של שלוחה 1 נטען.
+func (st *state) fixXBacklog(cfg *config) {
+	if st.xFixed {
+		return
+	}
+	a := st.arch[cfg.ext]
+	if a == nil {
+		return
+	}
+	err := a.purgeWhere(cfg, func(e *archEntry) bool {
+		return isXChannel(channelOfKey(e.key)) && e.ts < xLineStart
+	}, "ישנות מטוויטר שנכנסו בהפעלה הראשונה של טוויטר")
+	if err != nil {
+		log.Printf("הערה: מחיקת הציוצים הישנים משלוחה %s נכשלה — ננסה שוב: %v", cfg.ext, err)
+		return
+	}
+	st.xFixed = true
 }
 
 // purgeExcluded: פעם אחת בכל הפעלה (אחרי שהכול נמחק — אין מה למחוק).
@@ -57,9 +82,15 @@ func (st *state) purgeExcluded(cfg *config) {
 // purge מוחק מהשלוחה את ההודעות (ההקראה והקול) של ערוצים שהוצאו מהקו. ההודעות
 // נשארות באינדקס כמדולגות, כך שלא ייכנסו שוב.
 func (a *archive) purge(cfg *config, gone func(channel string) bool) error {
+	return a.purgeWhere(cfg, func(e *archEntry) bool { return gone(channelOfKey(e.key)) }, "של ערוצים שהוצאו מהקו")
+}
+
+// purgeWhere מוחק מהשלוחה הודעות (ההקראה והקול) לפי תנאי. הן נשארות באינדקס
+// כמדולגות, כך שלא ייכנסו שוב.
+func (a *archive) purgeWhere(cfg *config, match func(e *archEntry) bool, what string) error {
 	var victims []*archEntry
 	for _, e := range a.entries {
-		if e.base >= 0 && gone(channelOfKey(e.key)) {
+		if e.base >= 0 && match(e) {
 			victims = append(victims, e)
 		}
 	}
@@ -99,7 +130,7 @@ func (a *archive) purge(cfg *config, gone func(channel string) bool) error {
 		}
 	}
 	a.files, a.dirty = kept, true
-	log.Printf("שלוחה %s: נמחקו %d הודעות של ערוצים שהוצאו מהקו (%d קבצים).", a.ext, len(victims), len(paths))
+	log.Printf("שלוחה %s: נמחקו %d הודעות %s (%d קבצים).", a.ext, len(victims), what, len(paths))
 	return nil
 }
 

@@ -125,11 +125,11 @@ func TestXFetchFilters(t *testing.T) {
 	for _, it := range items {
 		got[it.ID] = it
 	}
-	if len(got) != 5 {
-		t.Fatalf("want 5 (no retweet, no reply to others), got %d: %+v", len(got), items)
+	if len(got) != 6 {
+		t.Fatalf("want 6 (retweet in, no reply to others), got %d: %+v", len(got), items)
 	}
-	if _, ok := got[2103195622446690800]; ok {
-		t.Fatal("retweet kept")
+	if rt := got[2103195622446690800]; rt.Text != "שיתף ציוץ של מישהו: ריטוויט של מישהו אחר" {
+		t.Fatalf("retweet: %q", rt.Text)
 	}
 	if _, ok := got[2103195622446690900]; ok {
 		t.Fatal("reply to other kept")
@@ -167,7 +167,7 @@ func TestXFailureAndBackoff(t *testing.T) {
 	}
 	f.status = 0
 	f.statuses = map[string]string{"ariel__danino": danioStatuses("https://x/p.jpg")}
-	if items, _ := s.poll(now.Add(2 * time.Minute)); len(items) != 5 || s.accts[0].fails != 0 {
+	if items, _ := s.poll(now.Add(2 * time.Minute)); len(items) != 6 || s.accts[0].fails != 0 {
 		t.Fatalf("recovery: %d items, fails %d", len(items), s.accts[0].fails)
 	}
 }
@@ -215,10 +215,10 @@ func TestXInLine(t *testing.T) {
 			t.Errorf("ext 1 missing %q:\n%s", want, all)
 		}
 	}
-	if strings.Contains(all, "ריטוויט של מישהו") || strings.Contains(all, "Ariel Danino") {
+	if !strings.Contains(all, "שיתף ציוץ של מישהו") || strings.Contains(all, "תגובה למישהו") || strings.Contains(all, "Ariel Danino") {
 		t.Errorf("unexpected:\n%s", all)
 	}
-	if len(rep) != 5 {
+	if len(rep) != 6 {
 		t.Errorf("reporter ext 2/2: %d files: %v", len(rep), rep)
 	}
 }
@@ -253,5 +253,77 @@ func TestXVideoAudio(t *testing.T) {
 	var rl *retryLaterError
 	if err := downloadMedia(&cfg, j2, path); !errors.As(err, &rl) {
 		t.Fatalf("no src after restart: %v", err)
+	}
+}
+
+// TestMainNoLateMessages: כתב שנוסף עם ההיסטוריה שלו — בשלוחה 1 נכנסים רק
+// הציוצים החדשים (הישנים לא נשמעים ראשונים); בשלוחת הכתב — גם הישנים.
+func TestMainNoLateMessages(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 7200, Text: "הודעה מטלגרם"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil { // שלוחה 1 קיימת, בלי טוויטר
+		t.Fatal(err)
+	}
+	a := `"author":{"screen_name":"meiretingr","name":"מאיר אטינגר"}`
+	fx := &fakeX{statuses: map[string]string{"meiretingr": `{"code":200,"results":[
+	 {"type":"status","id":"500","text":"ציוץ משבוע שעבר","created_timestamp":` + xTS(5*24*time.Hour) + `,` + a + `,"reposted_by":null,"replying_to":null},
+	 {"type":"status","id":"600","text":"ציוץ חדש עכשיו","created_timestamp":` + xTS(3*time.Minute) + `,` + a + `,"reposted_by":null,"replying_to":null}]}`}}
+	withFakeX(t, fx)
+	cfg.x = newXSource("meiretingr", "")
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	var main, rep []string
+	for p, c := range f.files {
+		switch {
+		case strings.HasPrefix(p, "ivr2:/1/1") && strings.HasSuffix(p, ".tts"):
+			main = append(main, c)
+		case strings.HasPrefix(p, "ivr2:/2/2/1") && strings.HasSuffix(p, ".tts"):
+			rep = append(rep, c)
+		}
+	}
+	m, r := strings.Join(main, "\n"), strings.Join(rep, "\n")
+	if !strings.Contains(m, "ציוץ חדש עכשיו") || strings.Contains(m, "ציוץ משבוע שעבר") {
+		t.Errorf("ext 1:\n%s", m)
+	}
+	if !strings.Contains(r, "ציוץ חדש עכשיו") || !strings.Contains(r, "ציוץ משבוע שעבר") {
+		t.Errorf("reporter ext:\n%s", r)
+	}
+}
+
+// TestFixXBacklog: הציוצים הישנים שנכנסו לשלוחה 1 בהפעלה הראשונה של טוויטר — נמחקים
+// משם (ולא נכנסים שוב); הודעות טלגרם וציוצים חדשים נשארים.
+func TestFixXBacklog(t *testing.T) {
+	f := archiveServer(nil, `{"channels":[]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	old := xLineStart - 86400
+	ar := &archive{ext: "1", withName: true, entries: map[string]*archEntry{
+		"x-meiretingr/500": {key: "x-meiretingr/500", base: 10000, ts: old},
+		"a/7":              {key: "a/7", base: 10002, ts: old},
+		"x-meiretingr/600": {key: "x-meiretingr/600", base: 10004, ts: xLineStart + 3600},
+	}}
+	for _, n := range []string{"10001.tts", "10003.tts", "10005.tts"} {
+		f.files["ivr2:/1/"+n] = "x"
+		f.dirs["ivr2:/1"] = append(f.dirs["ivr2:/1"], n)
+		ar.addFile(n)
+	}
+	st := &state{arch: map[string]*archive{"1": ar}}
+	st.fixXBacklog(&cfg)
+	if !st.xFixed || ar.entries["x-meiretingr/500"].base != -1 || ar.entries["a/7"].base != 10002 || ar.entries["x-meiretingr/600"].base != 10004 {
+		t.Fatalf("%+v %+v %+v", ar.entries["x-meiretingr/500"], ar.entries["a/7"], ar.entries["x-meiretingr/600"])
+	}
+	if _, ok := f.files["ivr2:/1/10001.tts"]; ok {
+		t.Fatal("old tweet file still there")
+	}
+	if _, ok := f.files["ivr2:/1/10003.tts"]; !ok {
+		t.Fatal("telegram message deleted")
 	}
 }

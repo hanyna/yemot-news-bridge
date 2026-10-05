@@ -7,8 +7,8 @@ package main
 // כלל להצגת ציוצים יפה בצ'אטים. הוא מחזיר לכל חשבון את הציוצים האחרונים שלו.
 //
 // כל ציוץ נכנס לקו כמו הודעה מטלגרם: שלוחה 1 ושלוחת כתב משלו, עם תיאור תמונות
-// והקול של סרטונים. ציוץ מחדש (ריטוויט) ותגובה לאחרים — לא נכנסים (כמו הודעה
-// שהועברה מערוץ אחר בטלגרם). שרשור של הכותב עצמו — כן.
+// והקול של סרטונים. ציוץ מחדש (ריטוויט) נכנס כ"שיתף ציוץ של ...", וציוץ שמצטט
+// ציוץ אחר — עם הציטוט. תגובה לאחרים — לא נכנסת. שרשור של הכותב עצמו — כן.
 //
 // השירות לא שלנו ויכול ליפול: תקלה בו לא עוצרת כלום — הטלגרם ממשיך, והחשבון
 // נבדק שוב אחרי הפסקה שהולכת וגדלה. הכתובת ניתנת לשינוי ב-X_API (שירות תואם).
@@ -314,8 +314,18 @@ func (s *xSource) fetch(a *xAcct) error {
 		if a.title == "" && strings.EqualFold(t.Author.ScreenName, a.handle) && t.Author.Name != "" {
 			a.title = hebrewTitle(t.Author.Name)
 		}
-		if !isNullJSON(t.RepostedBy) || !strings.EqualFold(t.Author.ScreenName, a.handle) || t.replyToOther(a.handle) {
-			continue // ריטוויט / תגובה לאחרים
+		shared := !isNullJSON(t.RepostedBy) || !strings.EqualFold(t.Author.ScreenName, a.handle)
+		if !shared && t.replyToOther(a.handle) {
+			continue // תגובה לאחרים — לא נכנסת
+		}
+		if shared { // ריטוויט: "שיתף ציוץ של ..." ואחריו הציוץ
+			who := hebrewTitle(strings.TrimSpace(t.Author.Name))
+			if who == "" {
+				who = t.Author.ScreenName
+			}
+			c := *t
+			c.Text = "שיתף ציוץ של " + who + ": " + strings.TrimSpace(t.Text)
+			t = &c
 		}
 		if it, ok := xItem(t, a.channel()); ok {
 			a.items[it.ID] = it
