@@ -192,6 +192,9 @@ def main():
         lines += ["### מה לעשות", *[f"- {s}" for s in todo], ""]
     if status:
         lines.append(f"דוח המצב המלא: {status['html_url']}")
+    # אזכור של בעל המאגר — GitHub שולח עליו מייל בכל מקרה (גם בלי "מעקב" אחרי המאגר)
+    owner = os.environ.get("NOTIFY_USER") or REPO.split("/")[0]
+    lines += ["", f"@{owner}"]
     body = "\n".join(lines)
     print(title)
     print(body)
