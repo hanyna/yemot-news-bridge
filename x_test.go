@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -325,5 +326,91 @@ func TestFixXBacklog(t *testing.T) {
 	}
 	if _, ok := f.files["ivr2:/1/10003.tts"]; !ok {
 		t.Fatal("telegram message deleted")
+	}
+}
+
+// TestLateInTimeOrder: עם המספור עם הרווחים — הודעה שמגיעה באיחור נכנסת לשלוחה 1
+// במקום שלה לפי השעה (לא בראש), גם כשהיא ישנה מכמה ימים.
+func TestLateInTimeOrder(t *testing.T) {
+	archStride = 10
+	defer func() { archStride = 2 }()
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 4*86400, Text: "לפני ארבעה ימים מטלגרם"},
+		{ID: 2, Channel: "a", TS: now - 2*86400, Text: "לפני יומיים מטלגרם"},
+		{ID: 3, Channel: "a", TS: now - 600, Text: "לפני עשר דקות מטלגרם"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	a := `"author":{"screen_name":"meiretingr","name":"מאיר אטינגר"}`
+	fx := &fakeX{statuses: map[string]string{"meiretingr": `{"code":200,"results":[
+	 {"type":"status","id":"500","text":"ציוץ משלשום","created_timestamp":` + xTS(3*24*time.Hour) + `,` + a + `,"reposted_by":null,"replying_to":null},
+	 {"type":"status","id":"510","text":"ציוץ מאתמול","created_timestamp":` + xTS(30*time.Hour) + `,` + a + `,"reposted_by":null,"replying_to":null},
+	 {"type":"status","id":"520","text":"ציוץ מלפני שעה","created_timestamp":` + xTS(time.Hour) + `,` + a + `,"reposted_by":null,"replying_to":null},
+	 {"type":"status","id":"600","text":"ציוץ חדש עכשיו","created_timestamp":` + xTS(time.Minute) + `,` + a + `,"reposted_by":null,"replying_to":null}]}`}}
+	withFakeX(t, fx)
+	cfg.x = newXSource("meiretingr", "")
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	type file struct {
+		n    int
+		text string
+	}
+	var main []file
+	for p, c := range f.files {
+		if strings.HasPrefix(p, "ivr2:/1/1") && strings.HasSuffix(p, ".tts") {
+			main = append(main, file{fileNum(strings.TrimPrefix(p, "ivr2:/1/")), c})
+		}
+	}
+	sort.Slice(main, func(i, j int) bool { return main[i].n > main[j].n }) // כמו בהשמעה: הגבוה ראשון
+	want := []string{"ציוץ חדש עכשיו", "לפני עשר דקות מטלגרם", "ציוץ מלפני שעה", "ציוץ מאתמול", "לפני יומיים מטלגרם", "ציוץ משלשום", "לפני ארבעה ימים מטלגרם"}
+	if len(main) != len(want) {
+		t.Fatalf("got %d files: %+v", len(main), main)
+	}
+	for i, w := range want {
+		if !strings.Contains(main[i].text, w) {
+			t.Errorf("place %d: want %q, got %d %q", i+1, w, main[i].n, main[i].text)
+		}
+	}
+}
+
+// TestFixXOrder: שלוחת כתב של טוויטר מהמבנה הקודם — מתרוקנת פעם אחת ונבנית מחדש
+// לפי השעה, באותה שלוחה.
+func TestFixXOrder(t *testing.T) {
+	f := archiveServer(nil, `{"channels":[]}`)
+	f.dirs["ivr2:/2/8"] = []string{"ext.ini", "99999.tts", "10001.tts", "10003.tts"}
+	f.files["ivr2:/2/8/10001.tts"], f.files["ivr2:/2/8/10003.tts"] = "x", "y"
+	f.files["ivr2:/2/8/archive.txt"] = "next=10004\nchannel=x-meiretingr\n"
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{}
+	st.ensureMaps()
+	st.mapped = true
+	st.chMap["x-meiretingr"] = "2/8"
+	ar, err := loadArchive(&cfg, "2/8", "x-meiretingr", false, time.Now())
+	if err != nil || !ar.oldLayout {
+		t.Fatal(err, ar.oldLayout)
+	}
+	st.arch["2/8"] = ar
+	st.fixXOrder(&cfg)
+	if !st.xOrdered || st.chMap["x-meiretingr"] != "2/8" || st.arch["2/8"] != nil {
+		t.Fatalf("ordered %v map %q arch %v", st.xOrdered, st.chMap["x-meiretingr"], st.arch["2/8"])
+	}
+	for _, n := range []string{"10001.tts", "10003.tts", "archive.txt"} {
+		if _, ok := f.files["ivr2:/2/8/"+n]; ok {
+			t.Errorf("%s still there", n)
+		}
+	}
+	// אחרי הבנייה מחדש — המבנה החדש, לא מתרוקנת שוב
+	ar2 := &archive{ext: "2/8", channel: "x-meiretingr", entries: map[string]*archEntry{}}
+	if parseArchive(ar2.encode(time.Now())).layout != archLayout {
+		t.Fatal("layout not written")
 	}
 }

@@ -124,6 +124,7 @@ type state struct {
 	pods      map[string]*podcast // שלוחה → הפודקאסט שבה (נטען פעם אחת בכל הפעלה)
 	purged    bool                // הודעות של ערוצים שהוצאו מהקו נמחקו (פעם אחת בכל הפעלה)
 	xFixed    bool                // הציוצים הישנים נמחקו משלוחה 1 (פעם אחת בכל הפעלה)
+	xOrdered  bool                // שלוחות הכתבים של טוויטר סודרו לפי השעה (fixXOrder)
 
 	podMenuText string // תפריט הפודקאסטים שהועלה
 	podActive   bool   // בפעם האחרונה שכל הפודקאסטים נטענו — היה מה לשמוע
@@ -482,6 +483,7 @@ func syncOnce(cfg *config, st *state) error {
 	// ערוצים שהוצאו מהקו: מה שכבר עלה מהם — נמחק.
 	st.purgeExcluded(cfg)
 	st.fixXBacklog(cfg)
+	st.fixXOrder(cfg)
 
 	// שלוחה 3: פודקאסטים — פרקים חדשים לתור (podcast.go).
 	st.syncPodcasts(cfg, now)

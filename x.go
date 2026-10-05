@@ -357,7 +357,11 @@ func (s *xSource) poll(now time.Time) (items []FeedItem, chans []Channel) {
 			}
 			wait := xBackoff[a.fails-1]
 			if errors.Is(err, errXNotFound) {
-				wait = xBackoff[len(xBackoff)-1]
+				if a.ok {
+					wait = time.Minute // השירות עונה לפעמים "לא נמצא" בטעות על חשבון שכבר נקרא
+				} else {
+					wait = xBackoff[len(xBackoff)-1] // כנראה שם שגוי
+				}
 			}
 			a.nextTry = now.Add(wait)
 			if a.lastErr != err.Error() || a.fails == 1 {

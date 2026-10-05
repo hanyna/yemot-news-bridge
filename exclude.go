@@ -43,6 +43,38 @@ func (st *state) fixXBacklog(cfg *config) {
 	st.xFixed = true
 }
 
+// fixXOrder: שלוחות הכתבים של טוויטר נבנו לפני המספור עם הרווחים, והריטוויטים
+// נכנסו בהן אחרי הציוצים, לא לפי השעה. פעם אחת: מרוקנים אותן (השלוחה נשארת של
+// אותו כתב), והן נבנות מחדש בייבוא ראשון — מהישן לחדש, לפי השעה.
+func (st *state) fixXOrder(cfg *config) {
+	if st.xOrdered || !st.mapped {
+		return
+	}
+	done := true
+	for ch, ext := range st.chMap {
+		if !isXChannel(ch) {
+			continue
+		}
+		a := st.arch[ext]
+		if a == nil {
+			done = false // עוד לא נטען
+			continue
+		}
+		if !a.oldLayout {
+			continue
+		}
+		st.aw.drop(func(key string) bool { return channelOfKey(key) == ch })
+		if err := st.clearReporter(cfg, ch, ext); err != nil {
+			log.Printf("הערה: סידור מחדש של שלוחת הכתב %s (%s) נכשל — ננסה שוב: %v", ext, ch, err)
+			done = false
+			continue
+		}
+		st.chMap[ch] = ext // אותה שלוחה — נבנית מחדש לפי השעה
+		log.Printf("שלוחה %s (%s): נבנית מחדש לפי השעה.", ext, ch)
+	}
+	st.xOrdered = done
+}
+
 // purgeExcluded: פעם אחת בכל הפעלה (אחרי שהכול נמחק — אין מה למחוק).
 func (st *state) purgeExcluded(cfg *config) {
 	if len(cfg.exclude) == 0 || st.purged {

@@ -57,7 +57,18 @@ const (
 // ומשם כל הודעה חדשה מוציאה את הישנה ביותר. (משתנה — לבדיקות.)
 var maxArchiveFiles = 2980
 
-// mainLateMax: בשלוחה 1 נכנסות רק הודעות שהגיעו עד כמה שעות אחרי שפורסמו (משתנה — לבדיקות).
+// archStride: כל הודעה חדשה מקבלת מספר שגבוה ב-10 מהקודמת, אף שהיא צריכה רק
+// שניים (ההקראה והקול). ברווח שנשאר נכנסת הודעה שמגיעה באיחור — כתב חדש עם
+// ההיסטוריה שלו, ריטוויט, ערוץ שטלגרם חסמו לכמה שעות — במקום שלה לפי השעה,
+// במקום להישמע ראשונה כאילו היא חדשה. (עד 4 הודעות מאוחרות בין כל שתיים.)
+var archStride = 10 // (משתנה — בבדיקות הישנות 2)
+
+// archLayout: גרסת המספור באינדקס (2 = עם רווחים).
+const archLayout = 2
+
+// mainLateMax: הודעה ישנה מזה שמגיעה באיחור ואין לה מקום לפי השעה (בחלק של
+// השלוחה שמלפני המספור עם הרווחים) — לא נכנסת לשלוחה 1, כדי שלא תישמע ראשונה.
+// בשלוחת הכתב שלה היא נכנסת. (משתנה — לבדיקות.)
 var mainLateMax = 6 * time.Hour
 
 // בייבוא הראשון: לפחות כמה הודעות אחרונות, גם אם הן ישנות מ-48 שעות (ערוץ שקט).
@@ -86,23 +97,24 @@ type archEntry struct {
 }
 
 type archive struct {
-	ext      string
-	channel  string // שלוחת כתב: הערוץ שלה. שלוחה 1: ריק
-	withName bool   // שלוחה 1: כל הודעה פותחת בשם הערוץ
-	next     int
-	last     int64 // ה-ts של ההודעה החדשה ביותר שנכנסה
-	cutoff   int64 // הודעות ישנות מזה — מלפני הארכיון, לא נכנסות
-	fresh    bool  // אין עדיין אינדקס: הייבוא הראשון
-	initial  bool  // באמצע הייבוא הראשון (הודעות ישנות נכנסות לפי cutoff)
-	entries  map[string]*archEntry
-	dirty    bool
-	requeued bool
-	spoken   bool           // requeueSpeech כבר רץ בהפעלה הזו
-	adds     int            // הודעות שנוספו מאז השמירה האחרונה
-	addFails map[string]int // ניסיונות העלאה שנכשלו, לכל הודעה
-	rrFails  map[string]int // ניסיונות עדכון זמן שנכשלו, לכל הודעה
-	files    []string       // קבצי ההודעות בשלוחה, מהמספר הנמוך לגבוה (הרשימה בטעינה, ומה שנוסף מאז)
-	trimWait time.Time      // מחיקה נכשלה — לא מנסים שוב לפני כן
+	ext       string
+	channel   string // שלוחת כתב: הערוץ שלה. שלוחה 1: ריק
+	withName  bool   // שלוחה 1: כל הודעה פותחת בשם הערוץ
+	next      int
+	last      int64 // ה-ts של ההודעה החדשה ביותר שנכנסה
+	cutoff    int64 // הודעות ישנות מזה — מלפני הארכיון, לא נכנסות
+	fresh     bool  // אין עדיין אינדקס: הייבוא הראשון
+	initial   bool  // באמצע הייבוא הראשון (הודעות ישנות נכנסות לפי cutoff)
+	oldLayout bool  // האינדקס נכתב לפני המספור עם הרווחים (fixXOrder)
+	entries   map[string]*archEntry
+	dirty     bool
+	requeued  bool
+	spoken    bool           // requeueSpeech כבר רץ בהפעלה הזו
+	adds      int            // הודעות שנוספו מאז השמירה האחרונה
+	addFails  map[string]int // ניסיונות העלאה שנכשלו, לכל הודעה
+	rrFails   map[string]int // ניסיונות עדכון זמן שנכשלו, לכל הודעה
+	files     []string       // קבצי ההודעות בשלוחה, מהמספר הנמוך לגבוה (הרשימה בטעינה, ומה שנוסף מאז)
+	trimWait  time.Time      // מחיקה נכשלה — לא מנסים שוב לפני כן
 }
 
 func introFile(base int) string { return fmt.Sprintf("%05d.tts", base+1) }
@@ -186,6 +198,7 @@ func isOldTTS(name string) bool {
 type archiveFile struct {
 	next         int
 	last, cutoff int64
+	layout       int // 2: מספור עם רווחים — הודעה שמגיעה באיחור נכנסת במקום שלה לפי השעה
 	channel      string
 	entries      map[string]*archEntry
 }
@@ -201,6 +214,8 @@ func parseArchive(txt string) archiveFile {
 			f.last, _ = strconv.ParseInt(strings.TrimPrefix(l, "last="), 10, 64)
 		case strings.HasPrefix(l, "cutoff="):
 			f.cutoff, _ = strconv.ParseInt(strings.TrimPrefix(l, "cutoff="), 10, 64)
+		case strings.HasPrefix(l, "layout="):
+			f.layout, _ = strconv.Atoi(strings.TrimPrefix(l, "layout="))
 		case strings.HasPrefix(l, "channel="):
 			f.channel = strings.TrimSpace(strings.TrimPrefix(l, "channel="))
 		case strings.HasPrefix(l, "e ") || strings.HasPrefix(l, "e\t"):
@@ -252,7 +267,7 @@ func (a *archive) encode(now time.Time) string {
 	})
 	var b strings.Builder
 	b.WriteString("# yemot-news-bridge: מה כבר נשמר בשלוחה. לא למחוק — בלי הקובץ הזה הגשר לא יודע אילו הודעות כבר כאן.\n")
-	fmt.Fprintf(&b, "next=%d\nlast=%d\ncutoff=%d\n", a.next, a.last, a.cutoff)
+	fmt.Fprintf(&b, "next=%d\nlast=%d\ncutoff=%d\nlayout=%d\n", a.next, a.last, a.cutoff, archLayout)
 	if a.channel != "" {
 		fmt.Fprintf(&b, "channel=%s\n", a.channel)
 	}
@@ -327,6 +342,7 @@ func loadArchive(cfg *config, ext, channel string, withName bool, now time.Time)
 			a.next = f.next
 		}
 		a.last, a.cutoff, a.entries = f.last, f.cutoff, f.entries
+		a.oldLayout = f.layout < archLayout
 		if a.channel == "" {
 			a.channel = f.channel
 		}
@@ -366,12 +382,6 @@ func loadArchive(cfg *config, ext, channel string, withName bool, now time.Time)
 // נכנסת, כל עוד היא מ-9 הימים האחרונים.
 func (a *archive) has(it FeedItem, now time.Time) bool {
 	if _, ok := a.entries[itemKey(it)]; ok {
-		return true
-	}
-	if a.withName && mainLateMax > 0 && !a.initial && it.TS < now.Add(-mainLateMax).Unix() {
-		// שלוחה 1 (כל הכתבים): הודעה ישנה שמגיעה רק עכשיו — כתב חדש שנוסף עם
-		// ההיסטוריה שלו, ריטוויט של ציוץ ישן — לא נכנסת, אחרת היא נשמעת ראשונה
-		// כאילו היא חדשה. בשלוחת הכתב שלה היא כן נכנסת.
 		return true
 	}
 	return it.TS < a.cutoff || (it.TS <= a.last-lateWindow && it.TS < now.Add(-keepIndexDays*24*time.Hour).Unix())
@@ -436,6 +446,9 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 				a.dirty = true
 				continue
 			}
+		}
+		if _, ok := a.slotFor(it.TS); !ok && a.withName && mainLateMax > 0 && !a.initial && it.TS < now.Add(-mainLateMax).Unix() {
+			continue // ישנה, ואין לה מקום לפי השעה — רק בשלוחת הכתב (mainLateMax)
 		}
 		if a.next > sixLast {
 			return fmt.Errorf("המספור בשלוחה %s הגיע לסוף (%d), והודעות חדשות לא נוספות. כדי להתחיל מחדש: למחוק בשלוחה את קבצי ההודעות ואת %s", a.ext, a.next, archiveIndex)
@@ -584,7 +597,10 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 		log.Printf("שלוחה %s: המספור עובר ל-6 ספרות (%d).", a.ext, sixFirst)
 		a.next = sixFirst
 	}
-	b := a.next
+	b, inserted := a.slotFor(it.TS)
+	if !inserted {
+		b = a.next
+	}
 	p, photoLater := st.describePhotoRetry(cfg, it, now)
 	if p != "" {
 		it.Text = withPhoto(it.Text, p) // "... פורסמה תמונה. בתמונה: ... כתוב בתמונה: ..."
@@ -601,14 +617,20 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 		e.media, e.audio = st.queueAudio(cfg, it, a.ext, b, now)
 	}
 	a.entries[e.key] = e
-	a.next = b + 2
+	if !inserted {
+		a.next = b + archStride
+	}
 	if it.TS > a.last {
 		a.last = it.TS
 	}
 	a.dirty = true
 	a.adds++
 	a.addFile(introFile(b))
-	log.Printf("שלוחה %s / %s (%d תווים): %.80s", a.ext, introFile(b), len([]rune(text)), text)
+	where := ""
+	if inserted {
+		where = " [במקום לפי השעה]"
+	}
+	log.Printf("שלוחה %s / %s%s (%d תווים): %.80s", a.ext, introFile(b), where, len([]rune(text)), text)
 	if a.ext == cfg.ext {
 		lineStatus.latency(now.Sub(time.Unix(it.TS, 0))) // דוח מצב: עיכוב עד שעלה לקו (status.go)
 	}
@@ -845,4 +867,52 @@ func (st *state) ensureDigits(cfg *config, ext string) error {
 	}
 	st.digitsSet[ext] = true
 	return nil
+}
+
+// slotFor: מספר להודעה שמגיעה אחרי הודעות חדשות ממנה — ברווח שמתחת להודעה
+// החדשה ממנה הכי ישנה, מעל כל מה שכבר תפוס שם. false: היא החדשה ביותר (נכנסת
+// בראש, כרגיל), או שאין רווח (החלק שמלפני המספור עם הרווחים).
+func (a *archive) slotFor(ts int64) (int, bool) {
+	if ts <= 0 || ts >= a.last {
+		return 0, false
+	}
+	upper := -1 // ההודעה הכי ישנה מבין החדשות ממנה
+	for _, e := range a.entries {
+		if e.base >= 0 && e.ts > ts && (upper < 0 || e.base < upper) {
+			upper = e.base
+		}
+	}
+	if upper < 0 {
+		return 0, false
+	}
+	lower := -1 // המספר הכי גבוה שתפוס מתחת
+	for _, n := range a.files {
+		if v := fileNum(n); v < upper && v > lower {
+			lower = v
+		}
+	}
+	for _, e := range a.entries {
+		if e.base >= 0 && e.base < upper && e.base+1 > lower {
+			lower = e.base + 1
+		}
+	}
+	lo := lower + 1 // המספר הזוגי הראשון הפנוי
+	if lo%2 != 0 {
+		lo++
+	}
+	if lo < archiveFirst {
+		lo = archiveFirst
+	}
+	hi := upper - 2 // האחרון שעוד מתחת לחדשה ממנה
+	if hi%2 != 0 {
+		hi--
+	}
+	if lo > hi {
+		return 0, false
+	}
+	b := lo + (hi-lo)/4*2 // באמצע — שיישאר מקום גם להודעה ישנה ממנה וגם לחדשה ממנה
+	if !isArchiveNum(b) || !isArchiveNum(b+1) {
+		return 0, false
+	}
+	return b, true
 }
