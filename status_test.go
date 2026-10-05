@@ -211,3 +211,22 @@ func TestStatusQuality(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusNoFalseAlarms(t *testing.T) {
+	ok := []string{
+		"שלוחה 4 הוגדרה: type=playfile | password=password_admin | password_error_goto=/ | voice=Elik_2100",
+		"מקור ההודעות: ישירות מטלגרם (7 ערוצים, כל ערוץ נבדק בערך כל 42s). גיבוי: שרת ערוץ חי, אם טלגרם חוסמים.",
+		"קול מוכן: a/1 → 2 שלוחות (gemini-3.8-flash-tts, Charon, 0s).",
+	}
+	for _, l := range ok {
+		if reProblem.MatchString(l) {
+			t.Errorf("false alarm: %s", l)
+		}
+	}
+	bad := []string{"שגיאה בסבב (1 ברצף): x", "upload failed: HTTP 500", "panic: runtime error", "קריאה מטלגרם נחסמה"}
+	for _, l := range bad {
+		if !reProblem.MatchString(l) {
+			t.Errorf("missed: %s", l)
+		}
+	}
+}
