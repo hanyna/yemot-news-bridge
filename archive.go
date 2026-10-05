@@ -79,6 +79,7 @@ type archEntry struct {
 	audio  int    // audioNone / audioPending / audioDone / audioNo
 	media  string // "v" סרטון, "o" הודעה קולית, "" אין
 	voiced bool   // יש לה קול מוכן בניסוח "ביום שישי..." (voice.go) — לא מתיישן בחצות
+	photo  bool   // יש בה תמונה שעוד לא קיבלה תיאור (תקלה זמנית ב-Gemini) — retryPhotos
 }
 
 type archive struct {
@@ -216,7 +217,10 @@ func parseArchive(txt string) archiveFile {
 			if len(p) > 6 && p[6] != "-" {
 				e.media = p[6]
 			}
-			e.voiced = len(p) > 7 && p[7] == "w"
+			if len(p) > 7 { // דגלים: w — קול מוכן ביום בשבוע, p — תמונה שמחכה לתיאור
+				e.voiced = strings.Contains(p[7], "w")
+				e.photo = strings.Contains(p[7], "p")
+			}
 			f.entries[e.key] = e
 		}
 	}
@@ -256,7 +260,13 @@ func (a *archive) encode(now time.Time) string {
 		// שורה לכל הודעה: e <ערוץ/מזהה> <מספר> <זמן> <ניסוח הזמן> <מצב הקול> <סוג המדיה>
 		voice := ""
 		if e.voiced {
-			voice = " w" // קול מוכן בניסוח יום בשבוע (voice.go)
+			voice = "w" // קול מוכן בניסוח יום בשבוע (voice.go)
+		}
+		if e.photo {
+			voice += "p" // תמונה שמחכה לתיאור (vision.go)
+		}
+		if voice != "" {
+			voice = " " + voice
 		}
 		fmt.Fprintf(&b, "e %s %d %d %d %d %s%s\n", e.key, e.base, e.ts, e.class, e.audio, media, voice)
 	}
@@ -441,8 +451,57 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 			time.Sleep(importPace)
 		}
 	}
+	a.retryPhotos(cfg, st, items, titles, now)
 	a.trim(cfg)
 	return nil
+}
+
+// retryPhotos: הודעות עם תמונה שעלו בלי תיאור, כי Gemini לא ענו באותו רגע
+// (מכסה, עומס, רשת) — מנסים שוב. כשהתיאור מגיע, ההקראה מתעדכנת, הקול הישן
+// (בלי התיאור) נמחק, ונוצר קול חדש עם התיאור.
+func (a *archive) retryPhotos(cfg *config, st *state, items []FeedItem, titles map[string]string, now time.Time) {
+	if cfg.vision == nil {
+		return
+	}
+	byKey := map[string]FeedItem{}
+	for _, it := range items {
+		byKey[itemKey(it)] = it
+	}
+	for _, e := range a.entries {
+		if !e.photo || e.base < 0 {
+			continue
+		}
+		it, ok := byKey[e.key]
+		if !ok || now.Sub(time.Unix(e.ts, 0)) > visionMaxAge || !a.hasFile(introFile(e.base)) {
+			e.photo, a.dirty = false, true // ההודעה כבר לא בטלגרם / ישנה — נשארת בלי תיאור
+			continue
+		}
+		if cfg.speech.busy(e.key) {
+			continue // הקול שלה נוצר ממש עכשיו — בסבב הבא
+		}
+		p, retry := st.describePhotoRetry(cfg, it, now)
+		if p == "" {
+			if !retry {
+				e.photo, a.dirty = false, true
+			}
+			continue
+		}
+		it.Text = withPhoto(it.Text, p)
+		text := spokenItem(it, titles, cfg.loc, now, a.withName, maxPerFile)
+		if err := cfg.y.upload(a.ext, introFile(e.base), text); err != nil {
+			log.Printf("הערה: הוספת תיאור התמונה ל-%s בשלוחה %s נכשלה — ננסה שוב: %v", introFile(e.base), a.ext, err)
+			continue
+		}
+		e.class = whenClass(time.Unix(e.ts, 0).In(cfg.loc), now)
+		if a.hasFile(speechFile(e.base)) {
+			if err := a.dropFile(cfg, speechFile(e.base)); err == nil {
+				e.voiced = false
+			}
+		}
+		cfg.speech.retext(e.key, e.ts, a.ext, e.base, audioItem(it, titles, cfg.loc, a.withName), a.withName)
+		e.photo, a.dirty = false, true
+		log.Printf("שלוחה %s / %s: נוסף תיאור התמונה — %.100s", a.ext, introFile(e.base), p)
+	}
 }
 
 // trimRetry: אחרי מחיקה שנכשלה — מתי לנסות שוב (עם רשימת קבצים מעודכנת מהשרת).
@@ -514,7 +573,8 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 		a.next = sixFirst
 	}
 	b := a.next
-	if p := st.describePhoto(cfg, it, now); p != "" {
+	p, photoLater := st.describePhotoRetry(cfg, it, now)
+	if p != "" {
 		it.Text = withPhoto(it.Text, p) // "... פורסמה תמונה. בתמונה: ... כתוב בתמונה: ..."
 	}
 	text := spokenItem(it, titles, cfg.loc, now, a.withName, maxPerFile)
@@ -524,7 +584,7 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 	// קול מוכן מראש (voice.go) — ברקע. קובץ אחד להודעה, לכל השלוחות שלה; הודעה
 	// ארוכה — במלואה.
 	cfg.speech.add(itemKey(it), it.TS, a.ext, b, audioItem(it, titles, cfg.loc, a.withName), a.withName)
-	e := &archEntry{key: itemKey(it), base: b, ts: it.TS, class: whenClass(time.Unix(it.TS, 0).In(cfg.loc), now)}
+	e := &archEntry{key: itemKey(it), base: b, ts: it.TS, class: whenClass(time.Unix(it.TS, 0).In(cfg.loc), now), photo: photoLater}
 	if cfg.audio {
 		e.media, e.audio = st.queueAudio(cfg, it, a.ext, b, now)
 	}

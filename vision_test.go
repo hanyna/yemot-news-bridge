@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,7 @@ type fakeGemini struct {
 	paths    []string
 	images   int
 	status   map[string]int // path substring → status
+	keys     map[string]int // מפתח נוסף → הסטטוס שהוא מקבל (200 = עובד)
 	reply    string
 	lastBody string
 }
@@ -39,7 +41,11 @@ func (g *fakeGemini) handler(w http.ResponseWriter, r *http.Request) {
 	defer g.mu.Unlock()
 	g.calls++
 	g.paths = append(g.paths, r.URL.Path)
-	if r.Header.Get("x-goog-api-key") != "GKEY" {
+	if st, ok := g.keys[r.Header.Get("x-goog-api-key")]; ok && st != 200 {
+		w.WriteHeader(st)
+		io.WriteString(w, `{"error":{"message":"quota"}}`)
+		return
+	} else if !ok && r.Header.Get("x-goog-api-key") != "GKEY" {
 		w.WriteHeader(403)
 		io.WriteString(w, `{"error":{"message":"bad key"}}`)
 		return
@@ -187,7 +193,8 @@ func TestVisionFailureDoesNotBlock(t *testing.T) {
 	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "פורסמה תמונה") || !strings.HasSuffix(f.files["ivr2:/1/10003.tts"], "פורסמה תמונה") {
 		t.Fatalf("%q | %q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10003.tts"])
 	}
-	if g.calls != 1 {
+	// לכל מודל מכסה נפרדת — כל אחד נוסה פעם אחת, ואז הפסקה (ההודעה השנייה לא שולחת כלום)
+	if g.calls != len(visionModels) {
 		t.Fatalf("after quota error should pause, calls=%d", g.calls)
 	}
 }
@@ -196,7 +203,7 @@ func TestVisionOff(t *testing.T) {
 	if newVisionClient("", "", "on") != nil || newVisionClient("k", "", "off") != nil {
 		t.Fatal("should be off")
 	}
-	if v := newVisionClient(" k\n", "my-model", ""); v == nil || v.key != "k" || v.models[0] != "my-model" {
+	if v := newVisionClient(" k\n", "my-model", ""); v == nil || v.key != "k" || len(v.keys) != 1 || v.models[0] != "my-model" {
 		t.Fatalf("%+v", v)
 	}
 }
@@ -238,5 +245,83 @@ func TestVisionOverloadFallsBack(t *testing.T) {
 	var pe *visionPauseErr
 	if err == nil || errors.As(err, &pe) {
 		t.Fatalf("all busy: %v", err)
+	}
+}
+
+// המפתח הראשי במכסה בכל המודלים → מפתח נוסף (GEMINI_API_KEY_2) נותן את התיאור.
+func TestVisionUsesOtherKeys(t *testing.T) {
+	g := &fakeGemini{reply: `{"description": "שלט בכניסה ליישוב", "text": ""}`, keys: map[string]int{"FULL": 429, "GKEY": 200}}
+	withFakeGemini(t, g)
+	pic := testPNG()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(pic) }))
+	defer srv.Close()
+	v := newVisionClient("FULL", "", "on", "", "GKEY", "FULL")
+	if len(v.keys) != 2 {
+		t.Fatalf("keys %d", len(v.keys))
+	}
+	desc, _, err := v.analyze([]string{srv.URL + "/a.jpg"}, "")
+	if err != nil || desc != "שלט בכניסה ליישוב" || v.cur != 1 {
+		t.Fatalf("%q %v cur=%d", desc, err, v.cur)
+	}
+	// בפעם הבאה ישר למפתח שעובד
+	g.mu.Lock()
+	g.calls = 0
+	g.mu.Unlock()
+	if _, _, err := v.analyze([]string{srv.URL + "/b.jpg"}, ""); err != nil || g.calls != 1 {
+		t.Fatalf("second: %v calls=%d", err, g.calls)
+	}
+}
+
+// Gemini לא ענו כשההודעה נכנסה (מכסה) — ההודעה עולה בלי תיאור, וכשהם חוזרים
+// התיאור מתווסף להקראה (בשלוחה 1 ובשלוחת הכתב), גם אחרי הפעלה מחדש.
+func TestVisionRetriesMissingDescription(t *testing.T) {
+	g := &fakeGemini{reply: `{"description": "רכבי צבא בכניסה ליישוב", "text": ""}`, status: map[string]int{"/": 429}}
+	withFakeGemini(t, g)
+	pic := testPNG()
+	now := time.Now().Unix()
+	var f *fakeYemotServer
+	mux := http.NewServeMux()
+	mux.HandleFunc("/img/", func(w http.ResponseWriter, r *http.Request) { w.Write(pic) })
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { f.handler(w, r) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	f = archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 300, Text: "תיעוד מהשטח", HTML: `<div class="photo"><img src="/img/1.jpg"></div><div class="msgtext">תיעוד מהשטח</div>`},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	cfg := newTestCfg(srv)
+	cfg.vision = newVisionClient("GKEY", "", "on")
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.files["ivr2:/1/10001.tts"]; strings.Contains(got, "בתמונה") || !strings.Contains(got, "תיעוד מהשטח") {
+		t.Fatalf("first: %q", got)
+	}
+	if !regexp.MustCompile(`(?m)^e a/1 10000 \d+ \d+ \d+ - p$`).MatchString(f.files["ivr2:/1/archive.txt"]) {
+		t.Fatalf("pending flag not saved:\n%s", f.files["ivr2:/1/archive.txt"])
+	}
+	// Gemini חזרו. הפעלה חדשה של הגשר (state חדש) — הדגל נקרא מהאינדקס.
+	g.mu.Lock()
+	g.status = nil
+	g.mu.Unlock()
+	cfg.vision = newVisionClient("GKEY", "", "on")
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"ivr2:/1/10001.tts", "ivr2:/2/1/10001.tts"} {
+		if got := f.files[p]; !strings.HasSuffix(got, "תיעוד מהשטח. מצורף להודעה: תמונה. בתמונה: רכבי צבא בכניסה ליישוב.") {
+			t.Fatalf("%s: %q", p, got)
+		}
+	}
+	if strings.Contains(f.files["ivr2:/1/archive.txt"], " p\n") {
+		t.Fatalf("flag not cleared:\n%s", f.files["ivr2:/1/archive.txt"])
+	}
+	g.mu.Lock()
+	calls := g.calls
+	g.mu.Unlock()
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if g.calls != calls {
+		t.Fatal("described again")
 	}
 }

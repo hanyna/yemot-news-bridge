@@ -326,6 +326,17 @@ func audioSource(h string) (kind, src string, secs int, ok bool) {
 	return "", "", 0, false
 }
 
+// thumbVideo: סרטון שמוצג רק כתמונה ("vidwrap embedwrap"), ואורכו (אם ידוע).
+func thumbVideo(h string) (secs int, ok bool) {
+	if !strings.Contains(h, `class="vidwrap embedwrap"`) {
+		return 0, false
+	}
+	if m := reDurBadge.FindStringSubmatch(h); m != nil {
+		secs = durationSecs(html.UnescapeString(m[1]))
+	}
+	return secs, true
+}
+
 // durationSecs: "1:05" → 65, "1:02:03" → 3723.
 func durationSecs(d string) int {
 	secs := 0
@@ -343,6 +354,13 @@ func durationSecs(d string) int {
 // ההתחלתי לאינדקס.
 func (st *state) queueAudio(cfg *config, it FeedItem, ext string, base int, now time.Time) (media string, audio int) {
 	kind, src, secs, ok := audioSource(it.HTML)
+	if !ok && cfg.tg != nil {
+		// סרטון שבדף של הערוץ מופיע רק כתמונה עם כפתור הפעלה: לפעמים זה סרטון
+		// קצר רגיל, שהקובץ שלו נמצא בדף של הפוסט (telegram.go — videoURL). רק
+		// סרטון ארוך באמת ("Media is too big") טלגרם לא נותנים בלי חשבון.
+		secs, ok = thumbVideo(it.HTML)
+		kind = "v"
+	}
 	if !ok {
 		return "", audioNone
 	}
@@ -492,7 +510,8 @@ var mediaClient = &http.Client{}
 func downloadMedia(cfg *config, j *audioJob, path string) error {
 	if j.kind == "v" && cfg.tg != nil {
 		err := downloadVideoTg(cfg, j, path)
-		if err == nil || cfg.feedKey == "" {
+		var perm *permanentError
+		if err == nil || cfg.feedKey == "" || errors.As(err, &perm) {
 			return err
 		}
 		log.Printf("סרטון %s: לא הורד ישירות מטלגרם (%v) — מנסה דרך השרת של ערוץ חי.", j.key, err)
@@ -513,6 +532,9 @@ func downloadVideoTg(cfg *config, j *audioJob, path string) error {
 	var last error
 	for _, fresh := range []bool{false, true} {
 		src, err := cfg.tg.videoURL(j.channel, j.id, fresh)
+		if errors.Is(err, errTgTooBig) {
+			return &permanentError{err} // ארוך מדי — טלגרם לא נותנים בלי חשבון, נשאר רק התיאור
+		}
 		if err != nil {
 			last = &retryLaterError{err}
 			continue

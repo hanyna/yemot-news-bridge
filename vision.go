@@ -35,7 +35,8 @@ const (
 	visionImageMax  = 8 << 20          // תמונה גדולה מזה — לא שולחים
 	visionMaxAge    = 6 * time.Hour    // הודעה ישנה מזה (ייבוא ראשון) — בלי ניתוח
 	visionPause     = 10 * time.Minute // אחרי "חרגת מהמכסה" / מפתח לא תקין — הפסקה
-	visionTries     = 2                // ניסיונות לכל הודעה
+	visionTries     = 5                // ניסיונות לכל הודעה (תקלה שאינה מכסה)
+	visionRetry     = 2 * time.Minute  // אחרי תקלה זמנית — מתי לנסות שוב את אותה הודעה
 	visionTextMax   = 400              // אורך מקסימלי לטקסט שבתמונה (תווים)
 )
 
@@ -64,25 +65,38 @@ var (
 )
 
 type visionClient struct {
-	key      string
+	key      string   // המפתח הראשי (keys[0])
+	keys     []string // GEMINI_API_KEY ועוד מפתחות (_2..._9) — לכל מפתח ולכל מודל מכסה נפרדת
 	client   *http.Client
 	models   []string
 	model    int // המודל שעובד (אינדקס ב-models)
+	cur      int // המפתח שעובד (אינדקס ב-keys)
 	endpoint int // הכתובת שעובדת (אינדקס ב-visionEndpoints)
 	found    bool
+	eps      map[int]int          // לכל מפתח: הכתובת שעובדת איתו (מפתח AI Studio / Vertex)
+	quota    map[[2]int]time.Time // [מפתח, מודל] → עד מתי במכסה / לא זמין
 
 	mu        sync.Mutex
 	cache     map[string]string // itemKey → התוספת להקראה ("" = אין / נכשל סופית)
 	tries     map[string]int
+	retryAt   map[string]time.Time // תקלה זמנית — מתי לנסות שוב את ההודעה
 	pausedTil time.Time
 	last      time.Time
 	warned    map[string]bool
 }
 
-// newVisionClient: nil כשאין מפתח או ש-VISION=off.
-func newVisionClient(key, model, mode string) *visionClient {
-	key = cleanKey(key)
-	if key == "" || strings.EqualFold(strings.TrimSpace(mode), "off") {
+// newVisionClient: nil כשאין מפתח או ש-VISION=off. more — מפתחות נוספים
+// (כשמפתח אחד במכסה — הבא, כמו בקול המוכן).
+func newVisionClient(key, model, mode string, more ...string) *visionClient {
+	var keys []string
+	seen := map[string]bool{}
+	for _, k := range append([]string{key}, more...) {
+		if k = cleanKey(k); k != "" && !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 || strings.EqualFold(strings.TrimSpace(mode), "off") {
 		return nil
 	}
 	models := append([]string(nil), visionModels...)
@@ -90,12 +104,16 @@ func newVisionClient(key, model, mode string) *visionClient {
 		models = append([]string{m}, models...)
 	}
 	return &visionClient{
-		key:    key,
-		client: &http.Client{Timeout: 60 * time.Second},
-		models: models,
-		cache:  map[string]string{},
-		tries:  map[string]int{},
-		warned: map[string]bool{},
+		key:     keys[0],
+		keys:    keys,
+		client:  &http.Client{Timeout: 60 * time.Second},
+		models:  models,
+		eps:     map[int]int{},
+		quota:   map[[2]int]time.Time{},
+		cache:   map[string]string{},
+		tries:   map[string]int{},
+		retryAt: map[string]time.Time{},
+		warned:  map[string]bool{},
 	}
 }
 
@@ -155,22 +173,33 @@ func absURL(src, base string) string {
 // describePhoto: התוספת להקראה של הודעה עם תמונה ("בתמונה: ... כתוב בתמונה: ..."),
 // או "" (אין תמונה / אין מפתח / תקלה). כל הודעה מנותחת פעם אחת.
 func (st *state) describePhoto(cfg *config, it FeedItem, now time.Time) string {
+	out, _ := st.describePhotoRetry(cfg, it, now)
+	return out
+}
+
+// describePhotoRetry: כמו describePhoto. retry=true — יש תמונה, אבל התיאור לא
+// התקבל בגלל תקלה זמנית (מכסה, עומס, רשת): ההודעה עולה בלי תיאור, והגשר
+// ינסה שוב ויוסיף אותו (archive.retryPhotos).
+func (st *state) describePhotoRetry(cfg *config, it FeedItem, now time.Time) (string, bool) {
 	v := cfg.vision
 	if v == nil || it.HTML == "" {
-		return ""
+		return "", false
 	}
 	key := itemKey(it)
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if d, ok := v.cache[key]; ok {
-		return d
+		return d, false
 	}
 	urls := photoURLs(it.HTML, cfg.feedURL)
 	if len(urls) == 0 {
-		return ""
+		return "", false
 	}
-	if now.Sub(time.Unix(it.TS, 0)) > visionMaxAge || now.Before(v.pausedTil) {
-		return "" // לא נשמר במטמון — בשלוחה אחרת אולי כבר יהיה אפשר
+	if now.Sub(time.Unix(it.TS, 0)) > visionMaxAge {
+		return "", false
+	}
+	if time.Now().Before(v.pausedTil) || time.Now().Before(v.retryAt[key]) {
+		return "", true // לא נשמר במטמון — ננסה שוב אחר כך
 	}
 	if wait := visionGap - time.Since(v.last); wait > 0 {
 		time.Sleep(wait)
@@ -182,21 +211,23 @@ func (st *state) describePhoto(cfg *config, it FeedItem, now time.Time) string {
 		var pe *visionPauseErr
 		if errors.As(err, &pe) {
 			v.pausedTil = time.Now().Add(visionPause)
-			v.warnOnce("pause:"+pe.why, "ניתוח תמונות: "+pe.why+" — ממשיך בלי תיאור, ומנסה שוב בעוד "+visionPause.String()+".")
-			return ""
+			v.warnOnce("pause:"+pe.why, "ניתוח תמונות: "+pe.why+" — ממשיך בלי תיאור, ומנסה שוב בעוד "+visionPause.String()+" (התיאור יתווסף להודעות שחיכו).")
+			return "", true
 		}
 		log.Printf("ניתוח תמונה %s נכשל (%d/%d): %v", key, v.tries[key], visionTries, err)
 		if v.tries[key] >= visionTries {
 			v.cache[key] = ""
+			return "", false
 		}
-		return ""
+		v.retryAt[key] = time.Now().Add(visionRetry)
+		return "", true
 	}
 	out := spokenPhoto(desc, text, len(urls) > 1)
 	v.cache[key] = out
 	if out != "" {
 		log.Printf("ניתוח תמונה %s: %.120s", key, out)
 	}
-	return out
+	return out, false
 }
 
 // spokenPhoto: "בתמונה: <תיאור>. כתוב בתמונה: <טקסט>." (אלבום: "בתמונות").
@@ -284,58 +315,69 @@ func (v *visionClient) analyze(urls []string, msgText string) (desc, text string
 	return parseVisionJSON(out)
 }
 
-// generate: מוצא בפעם הראשונה כתובת ומודל שעובדים עם המפתח, ונשאר איתם.
+// generate: עובר על המפתחות ועל המודלים — מתחיל במה שעבד בפעם הקודמת. לכל
+// מפתח ולכל מודל יש מכסה חינמית נפרדת, אז "חריגה מהמכסה" (429) במודל אחד לא
+// סוף הסיפור: מנסים מודל אחר, ואז מפתח אחר. הפסקה רק כשכולם במכסה.
 func (v *visionClient) generate(body []byte) (string, error) {
-	if v.found {
-		out, status, err := v.call(v.endpoint, v.model, body)
-		if err == nil || !overloaded(status) {
-			return out, err
-		}
-		// "עומס גבוה על המודל" (503) — קורה לא מעט. במקום לוותר על התיאור,
-		// מנסים את שאר המודלים ברשימה (לבקשה הזו בלבד).
-		for m := range v.models {
-			if m == v.model {
-				continue
-			}
-			o, s, e := v.call(v.endpoint, m, body)
-			if e == nil {
-				log.Printf("ניתוח תמונות: %s עמוס — נעזר ב-%s.", v.models[v.model], v.models[m])
-				return o, nil
-			}
-			if !overloaded(s) && s != http.StatusNotFound && s != http.StatusBadRequest {
-				break
-			}
-		}
-		return out, err
-	}
+	now := time.Now()
 	var lastErr, busyErr error
-endpoints:
-	for e := range visionEndpoints {
-		for m := range v.models {
-			out, status, err := v.call(e, m, body)
-			if err == nil {
-				v.endpoint, v.model, v.found = e, m, true
-				log.Printf("ניתוח תמונות: עובד עם %s (%s).", v.models[m], hostOf(visionEndpoints[e]))
-				return out, nil
+	quota, tried := false, false
+	for i := range v.keys {
+		k := (v.cur + i) % len(v.keys)
+		eps := []int{}
+		if e, ok := v.eps[k]; ok {
+			eps = append(eps, e)
+		} else {
+			for e := range visionEndpoints {
+				eps = append(eps, e)
 			}
-			lastErr = err
-			switch {
-			case status == http.StatusNotFound, status == http.StatusBadRequest:
-				continue // המודל לא קיים / לא זמין למפתח הזה — המודל הבא
-			case status == http.StatusUnauthorized, status == http.StatusForbidden:
-				continue endpoints // המפתח לא מתאים לכתובת הזו — הכתובת הבאה
-			case overloaded(status):
-				busyErr = err
-				continue // המודל עמוס — המודל הבא
-			case status == http.StatusTooManyRequests:
-				return "", &visionPauseErr{"חריגה מהמכסה של Gemini"}
-			default:
-				return "", err // תקלה זמנית (רשת / שרת) — ננסה שוב בהודעה הבאה
+		}
+	endpoints:
+		for _, e := range eps {
+			for j := range v.models {
+				m := (v.model + j) % len(v.models)
+				if until, ok := v.quota[[2]int{k, m}]; ok && now.Before(until) {
+					quota = true
+					continue
+				}
+				tried = true
+				out, status, err := v.callKey(k, e, m, body)
+				if err == nil {
+					switch {
+					case v.found && busyErr != nil && k == v.cur:
+						// עומס זמני על המודל הראשי — נעזרים באחר לבקשה הזו בלבד
+						log.Printf("ניתוח תמונות: %s עמוס — נעזר ב-%s.", v.models[v.model], v.models[m])
+					case !v.found || k != v.cur || m != v.model:
+						log.Printf("ניתוח תמונות: עובד עם %s (%s, מפתח %d).", v.models[m], hostOf(visionEndpoints[e]), k+1)
+						v.cur, v.model = k, m
+					}
+					v.eps[k], v.endpoint, v.found = e, e, true
+					return out, nil
+				}
+				lastErr = err
+				switch {
+				case status == http.StatusNotFound, status == http.StatusBadRequest:
+					v.quota[[2]int{k, m}] = now.Add(6 * time.Hour) // המודל לא זמין למפתח הזה
+				case status == http.StatusUnauthorized, status == http.StatusForbidden:
+					continue endpoints // המפתח לא מתאים לכתובת הזו — הכתובת הבאה
+				case overloaded(status):
+					busyErr = err
+				case status == http.StatusTooManyRequests:
+					quota = true
+					v.quota[[2]int{k, m}] = now.Add(visionPause)
+				default:
+					return "", err // תקלה זמנית (רשת / שרת) — ננסה שוב
+				}
 			}
 		}
 	}
-	if busyErr != nil {
-		return "", busyErr // עומס זמני — ננסה שוב בהודעה הבאה, בלי הפסקה
+	switch {
+	case busyErr != nil:
+		return "", busyErr // עומס זמני — ננסה שוב, בלי הפסקה
+	case quota:
+		return "", &visionPauseErr{"חריגה מהמכסה של Gemini בכל המפתחות והמודלים"}
+	case !tried:
+		return "", &visionPauseErr{"אין מודל זמין"}
 	}
 	return "", &visionPauseErr{fmt.Sprintf("המפתח GEMINI_API_KEY לא התקבל (בדקו שהוא הועתק נכון ל-Secrets): %v", lastErr)}
 }
@@ -346,18 +388,24 @@ func overloaded(status int) bool {
 		status == http.StatusGatewayTimeout || status == http.StatusBadGateway
 }
 
-// call: בקשה אחת ל-Gemini. מחזיר את הטקסט שבתשובה, או את קוד השגיאה.
+// call: בקשה אחת ל-Gemini עם המפתח הנוכחי.
 func (v *visionClient) call(endpoint, model int, body []byte) (string, int, error) {
+	return v.callKey(v.cur, endpoint, model, body)
+}
+
+// callKey: בקשה אחת ל-Gemini. מחזיר את הטקסט שבתשובה, או את קוד השגיאה.
+func (v *visionClient) callKey(k, endpoint, model int, body []byte) (string, int, error) {
+	key := v.keys[k]
 	u := fmt.Sprintf(visionEndpoints[endpoint], url.PathEscape(v.models[model]))
 	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", v.key)
+	req.Header.Set("x-goog-api-key", key)
 	resp, err := v.client.Do(req)
 	if err != nil {
-		return "", 0, errors.New(strings.ReplaceAll(err.Error(), v.key, "***"))
+		return "", 0, errors.New(strings.ReplaceAll(err.Error(), key, "***"))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -374,7 +422,7 @@ func (v *visionClient) call(endpoint, model int, body []byte) (string, int, erro
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
-		return "", resp.StatusCode, fmt.Errorf("%s: HTTP %d: %s", v.models[model], resp.StatusCode, strings.ReplaceAll(msg, v.key, "***"))
+		return "", resp.StatusCode, fmt.Errorf("%s: HTTP %d: %s", v.models[model], resp.StatusCode, strings.ReplaceAll(msg, key, "***"))
 	}
 	var r struct {
 		Candidates []struct {

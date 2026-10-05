@@ -192,6 +192,45 @@ func (s *speaker) add(key string, ts int64, ext string, base int, text string, w
 		voice: s.voice, text: text, ts: ts, held: true}
 }
 
+// busy: הקול של ההודעה נוצר ממש עכשיו.
+func (s *speaker) busy(key string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs["m|"+key]
+	return ok && j.running
+}
+
+// retext: הטקסט של ההודעה השתנה (נוסף תיאור תמונה) — הקול נוצר מחדש לכל
+// השלוחות שלה. קול שכבר נוצר בנוסח הישן לא עולה.
+func (s *speaker) retext(key string, ts int64, ext string, base int, text string, withName bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := speechTarget{ext, speechFile(base), base}
+	j, ok := s.jobs["m|"+key]
+	if !ok {
+		s.jobs["m|"+key] = &speechJob{key: key, targets: []speechTarget{t}, done: map[speechTarget]bool{}, named: withName,
+			voice: s.voice, text: text, ts: ts, held: true}
+		return
+	}
+	if !j.has(t) {
+		j.targets = append(j.targets, t)
+	}
+	delete(j.done, t)
+	if withName || !j.named {
+		if j.text != text {
+			j.data, j.done = nil, map[speechTarget]bool{}
+		}
+		j.text, j.named = text, withName
+	}
+	j.tries, j.notBefore = 0, time.Time{}
+}
+
 // addMenu: קול לתפריט / כותרת (M1000.wav, 99999.wav) — בעדיפות ראשונה, בקול התפריטים.
 // טקסט חדש לאותו קובץ מחליף את הישן.
 func (s *speaker) addMenu(ext, file, text string) {
@@ -677,7 +716,17 @@ func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string
 			a.hasFile(speechFile(e.base)) || !a.hasFile(introFile(e.base)) {
 			continue
 		}
-		cfg.speech.add(e.key, e.ts, a.ext, e.base, audioItem(it, titles, cfg.loc, a.withName), a.withName)
+		text := audioItem(it, titles, cfg.loc, a.withName)
+		if photoURLs(it.HTML, cfg.feedURL) != nil {
+			// ההקראה בשלוחה כוללת את תיאור התמונה (Gemini), וההודעה מהטלגרם לא —
+			// הקול נבנה מההקראה, כדי שהתיאור לא ייעלם אחרי הפעלה מחדש.
+			if old, exists, err := cfg.y.read(a.ext, introFile(e.base)); err == nil && exists && strings.Contains(old, "בתמונ") {
+				if t, ok := replaceWhen(old, time.Unix(e.ts, 0).In(cfg.loc), e.class, whenThisWeek); ok {
+					text = t
+				}
+			}
+		}
+		cfg.speech.add(e.key, e.ts, a.ext, e.base, text, a.withName)
 		n++
 	}
 	if n > 0 {

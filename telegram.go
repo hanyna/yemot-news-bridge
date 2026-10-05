@@ -345,6 +345,9 @@ func (e *tgStatusError) Error() string {
 	return "טלגרם החזירו סטטוס " + strconv.Itoa(e.code)
 }
 
+// errTgTooBig: סרטון גדול שטלגרם מציגים בלי חשבון רק כתמונה ("Media is too big").
+var errTgTooBig = errors.New("הסרטון גדול מדי — טלגרם לא נותנים אותו בלי חשבון")
+
 var errTgEmpty = errors.New("הדף נטען בלי הודעות (כנראה הגבלת קצב זמנית של טלגרם)")
 
 type tgChan struct {
@@ -602,6 +605,9 @@ func (s *tgSource) videoURL(channel string, id int, fresh bool) (string, error) 
 		if err == nil {
 			if src := tgVideoSrc(page); src != "" {
 				return src, nil
+			}
+			if i == 0 && strings.Contains(page, "Media is too big") {
+				return "", errTgTooBig
 			}
 		}
 		if i == 0 { // הדף של הערוץ, ממוקד בפוסט — לפעמים הסרטון רק שם

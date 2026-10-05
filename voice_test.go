@@ -345,3 +345,77 @@ func TestBeepRestored(t *testing.T) {
 		t.Fatal("old ini still ours")
 	}
 }
+
+// הקול המוכן כולל את תיאור התמונה: גם כשהתיאור הגיע באיחור (הקול הישן, בלי
+// התיאור, מוחלף), וגם כשהקול נוצר רק אחרי הפעלה מחדש של הגשר.
+func TestSpeechKeepsPhotoDescription(t *testing.T) {
+	tts := &fakeTTS{}
+	withFakeTTS(t, tts)
+	g := &fakeGemini{reply: `{"description": "רכבי צבא בכניסה ליישוב", "text": ""}`, status: map[string]int{"/": 429}}
+	withFakeGemini(t, g)
+	pic := testPNG()
+	now := time.Now().Unix()
+	var f *fakeYemotServer
+	mux := http.NewServeMux()
+	mux.HandleFunc("/img/", func(w http.ResponseWriter, r *http.Request) { w.Write(pic) })
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { f.handler(w, r) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	f = archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 300, Text: "תיעוד מהשטח", HTML: `<div class="photo"><img src="/img/1.jpg"></div><div class="msgtext">תיעוד מהשטח</div>`},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	cfg := newTestCfg(srv)
+	cfg.vision = newVisionClient("GKEY", "", "on")
+	cfg.speech = newSpeaker("GKEY", "", "on")
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	st.speechTick(&cfg)
+	if got := f.files["ivr2:/1/10001.wav"]; got == "" || strings.Contains(got, "בתמונה") {
+		t.Fatalf("first wav: %q", got)
+	}
+	// התיאור מגיע — ההקראה והקול מתעדכנים בשתי השלוחות
+	g.mu.Lock()
+	g.status = nil
+	g.mu.Unlock()
+	cfg.vision.pausedTil, cfg.vision.quota = time.Time{}, map[[2]int]time.Time{} // עברו 10 דקות
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	st.speechTick(&cfg)
+	for _, p := range []string{"ivr2:/1/10001.wav", "ivr2:/2/1/10001.wav"} {
+		if got := f.files[p]; !strings.Contains(got, "בתמונה: רכבי צבא בכניסה ליישוב") {
+			t.Fatalf("%s after description: %q", p, got)
+		}
+	}
+	if !strings.Contains(f.files["ivr2:/1/10001.wav"], "אלישע ירד, ") {
+		t.Fatalf("ext 1 wav lost the reporter name: %q", f.files["ivr2:/1/10001.wav"])
+	}
+
+	// הודעה שנייה: התיאור נכנס מיד, אבל הקול לא נוצר (מכסה) עד הפעלה מחדש
+	f.items = append(f.items, FeedItem{ID: 2, Channel: "a", TS: now - 100, HTML: `<div class="photo"><img src="/img/2.jpg"></div>`})
+	tts.mu.Lock()
+	tts.quota = map[string]bool{"GKEY": true}
+	tts.mu.Unlock()
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	st.speechTick(&cfg)
+	if f.files["ivr2:/1/10003.wav"] != "" || !strings.Contains(f.files["ivr2:/1/10003.tts"], "בתמונה") {
+		t.Fatalf("second: wav=%q tts=%q", f.files["ivr2:/1/10003.wav"], f.files["ivr2:/1/10003.tts"])
+	}
+	tts.mu.Lock()
+	tts.quota = nil
+	tts.mu.Unlock()
+	cfg.speech = newSpeaker("GKEY", "", "on")
+	cfg.vision = newVisionClient("GKEY", "", "on") // מטמון ריק, כמו בהפעלה חדשה
+	st2 := &state{}
+	if err := syncOnce(&cfg, st2); err != nil {
+		t.Fatal(err)
+	}
+	st2.speechTick(&cfg)
+	if got := f.files["ivr2:/1/10003.wav"]; !strings.Contains(got, "בתמונה: רכבי צבא בכניסה ליישוב") || !strings.Contains(got, "ביום") {
+		t.Fatalf("after restart: %q", got)
+	}
+}

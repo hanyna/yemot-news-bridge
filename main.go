@@ -178,7 +178,11 @@ func main() {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
 	cfg.y = &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: apiKey}
-	cfg.vision = newVisionClient(os.Getenv("GEMINI_API_KEY"), os.Getenv("GEMINI_MODEL"), os.Getenv("VISION"))
+	vkeys := speechKeys(os.Getenv) // אותם מפתחות כמו הקול המוכן — כשאחד במכסה, הבא
+	if len(vkeys) == 0 {
+		vkeys = []string{""}
+	}
+	cfg.vision = newVisionClient(vkeys[0], os.Getenv("GEMINI_MODEL"), os.Getenv("VISION"), vkeys[1:]...)
 	if cfg.vision != nil {
 		log.Println("ניתוח תמונות (Gemini): פעיל — הודעות עם תמונה יקבלו תיאור בהקראה.")
 	} else {

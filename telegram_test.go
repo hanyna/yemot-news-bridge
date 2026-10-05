@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,7 +140,8 @@ type fakeTelegram struct {
 	posts  map[string][]int // ערוץ → מספרי הודעות קיימות
 	status int              // ≠0: כל בקשה מקבלת את הסטטוס הזה
 	hits   []string
-	embed  map[int]string // פוסט → כתובת mp4 בדף ה-embed
+	embed  map[int]string    // פוסט → כתובת mp4 בדף ה-embed
+	raw    map[string]string // ערוץ → הדף כמו שהוא (במקום הדף שנבנה מ-posts)
 }
 
 func (g *fakeTelegram) page(ch string, ids []int, now int64) string {
@@ -163,6 +165,12 @@ func (g *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	if strings.HasPrefix(r.URL.Path, "/s/") {
 		ch := strings.TrimPrefix(r.URL.Path, "/s/")
+		if page, ok := g.raw[ch]; ok {
+			if r.URL.Query().Get("before") == "" {
+				w.Write([]byte(page))
+			}
+			return
+		}
 		ids := g.posts[ch]
 		if b := r.URL.Query().Get("before"); b != "" {
 			n, _ := strconv.Atoi(b)
@@ -344,4 +352,66 @@ func TestTgSourceConfig(t *testing.T) {
 	if d := newTgSource(defaultChannels, "").every(); d != 42*time.Second {
 		t.Fatalf("7 channels: %v", d)
 	}
+}
+
+// סרטון קצר שבדף של הערוץ מופיע רק כתמונה: הקול שלו יורד מהדף של הפוסט.
+// סרטון ש"גדול מדי" (טלגרם לא נותנים בלי חשבון) — מוותרים מיד, בלי ניסיונות חוזרים.
+func TestTgThumbOnlyShortVideo(t *testing.T) {
+	withFakeTranscode(t)
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("CLIP")) }))
+	defer cdn.Close()
+	now := time.Now()
+	post := func(id int, dur string) string {
+		return fmt.Sprintf(`<div class="tgme_widget_message" data-post="a/%d"><div class="tgme_widget_message_video_player">`+
+			`<i class="tgme_widget_message_video_thumb" style="background-image:url('https://cdn.example/th.jpg')"></i>`+
+			`<time class="message_video_duration js-message_video_duration">%s</time></div>`+
+			`<time datetime="%s"></time></div>`, id, dur, now.Add(-time.Duration(100-id)*time.Second).UTC().Format(time.RFC3339))
+	}
+	g := &fakeTelegram{embed: map[int]string{7: cdn.URL + "/clip.mp4"},
+		raw: map[string]string{"a": `<meta property="og:title" content="אלישע ירד">` + post(7, "0:40") + post(8, "12:00")}}
+	withFakeTelegram(t, g)
+	f := archiveServer(nil, `{"channels":[]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.audio, cfg.audioMax = true, 20*60
+	cfg.tg = newTgSource("a", "")
+	cfg.tg.client = &http.Client{Transport: tooBigTransport{base: http.DefaultTransport, id: 8}}
+	defer func(b []time.Duration) { retryBackoff = b }(retryBackoff)
+	retryBackoff = []time.Duration{0, 0, 0}
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10001.tts"], "פורסם סרטון באורך 40 שניות") {
+		t.Fatalf("intro: %q", f.files["ivr2:/1/10001.tts"])
+	}
+	if f.files["ivr2:/1/10000.wav"] != "AUDIO:MP3:CLIP;convert=1" {
+		t.Fatalf("short thumb video: %q", f.files["ivr2:/1/10000.wav"])
+	}
+	if f.has("ivr2:/1", "10002.wav") {
+		t.Fatal("too big video got audio")
+	}
+	if !regexp.MustCompile(`(?m)^e a/8 10002 \d+ 0 3 v$`).MatchString(f.files["ivr2:/1/archive.txt"]) {
+		t.Fatalf("index:\n%s", f.files["ivr2:/1/archive.txt"])
+	}
+	for _, h := range g.hits {
+		if strings.HasPrefix(h, "/a/8") { // "Media is too big" — אף בקשה נוספת לפוסט
+			t.Fatalf("too-big retried: %v", g.hits)
+		}
+	}
+}
+
+// tooBigTransport: דף ה-embed של הפוסט id עונה "Media is too big".
+type tooBigTransport struct {
+	base http.RoundTripper
+	id   int
+}
+
+func (tr tooBigTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Path == "/a/"+strconv.Itoa(tr.id) && r.URL.Query().Get("embed") == "1" {
+		rec := httptest.NewRecorder()
+		rec.WriteString(`<div class="message_media_not_supported_label">Media is too big</div>`)
+		return rec.Result(), nil
+	}
+	return tr.base.RoundTrip(r)
 }
