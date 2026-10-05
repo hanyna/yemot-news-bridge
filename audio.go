@@ -354,7 +354,12 @@ func durationSecs(d string) int {
 // ההתחלתי לאינדקס.
 func (st *state) queueAudio(cfg *config, it FeedItem, ext string, base int, now time.Time) (media string, audio int) {
 	kind, src, secs, ok := audioSource(it.HTML)
-	if !ok && cfg.tg != nil {
+	if ok && kind == "v" && isXChannel(it.Channel) {
+		if m := tgReVideo.FindStringSubmatch(it.HTML); m != nil {
+			src = html.UnescapeString(m[1]) // טוויטר: כתובת ישירה לקובץ
+		}
+	}
+	if !ok && cfg.tg != nil && !isXChannel(it.Channel) {
 		// סרטון שבדף של הערוץ מופיע רק כתמונה עם כפתור הפעלה: לפעמים זה סרטון
 		// קצר רגיל, שהקובץ שלו נמצא בדף של הפוסט (telegram.go — videoURL). רק
 		// סרטון ארוך באמת ("Media is too big") טלגרם לא נותנים בלי חשבון.
@@ -508,6 +513,16 @@ var mediaClient = &http.Client{}
 // downloadMedia מוריד את הסרטון (דרך השרת של ערוץ חי), את ההודעה הקולית, או
 // פרק של פודקאסט.
 func downloadMedia(cfg *config, j *audioJob, path string) error {
+	if j.kind == "v" && isXChannel(j.channel) {
+		src := j.src
+		if src == "" && cfg.x != nil { // אחרי הפעלה מחדש — מהציוצים שבזיכרון
+			src = cfg.x.videoURL(j.channel, j.id)
+		}
+		if src == "" {
+			return &retryLaterError{fmt.Errorf("טוויטר: אין עדיין כתובת לסרטון")}
+		}
+		return fetchToFile(src, path, mediaMaxBytes, mediaTimeout)
+	}
 	if j.kind == "v" && cfg.tg != nil {
 		err := downloadVideoTg(cfg, j, path)
 		var perm *permanentError

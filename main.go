@@ -97,6 +97,7 @@ type config struct {
 	loc              *time.Location
 	y                *yemot
 	tg               *tgSource     // קריאה ישירה מטלגרם (nil = דרך שרת ערוץ חי) — telegram.go
+	x                *xSource      // חשבונות טוויטר (X_ACCOUNTS; nil = בלי) — x.go
 	vision           *visionClient // ניתוח תמונות עם Gemini (nil = כבוי) — vision.go
 	speech           *speaker      // קול מוכן מראש להודעות (nil = כבוי) — voice.go
 	music            *menuMusic    // שיר ברקע של התפריט הראשי (nil = בלי) — music.go
@@ -185,6 +186,10 @@ func main() {
 		log.Fatal("חסר משתנה סביבה TGPOPUP_KEY (SOURCE=server — ההודעות נלקחות משרת ערוץ חי)")
 	default:
 		log.Println("מקור ההודעות: שרת ערוץ חי (SOURCE=server).")
+	}
+	cfg.x = newXSource(os.Getenv("X_ACCOUNTS"), os.Getenv("X_API"))
+	if cfg.x != nil {
+		log.Printf("טוויטר: %d חשבונות, כל חשבון נבדק בערך כל %v (דרך %s, בלי חשבון).", len(cfg.x.accts), cfg.x.every, xBase)
 	}
 	if apiKey == "" {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
@@ -361,6 +366,15 @@ func syncOnce(cfg *config, st *state) error {
 	if err != nil {
 		return err
 	}
+	var xChans []Channel
+	if cfg.x != nil { // ציוצים מטוויטר — לצד ההודעות מטלגרם (תקלה בטוויטר לא עוצרת כלום)
+		var xItems []FeedItem
+		xItems, xChans = cfg.x.poll(time.Now())
+		items = append(items, xItems...)
+		if !fromServer {
+			tgChans = append(tgChans, xChans...)
+		}
+	}
 	if len(cfg.exclude) > 0 { // ערוצים שהוצאו מהקו (EXCLUDE_CHANNELS) — כאילו אינם
 		kept := make([]FeedItem, 0, len(items))
 		for _, it := range items {
@@ -373,6 +387,9 @@ func syncOnce(cfg *config, st *state) error {
 	chs, err := tgChans, error(nil)
 	if fromServer {
 		chs, err = fetchChannels(cfg.client, cfg.feedURL, cfg.feedKey)
+		if err == nil {
+			chs = append(chs, xChans...)
+		}
 	}
 	if err == nil {
 		st.channels = chs[:0:0]
@@ -638,6 +655,9 @@ func syncOnce(cfg *config, st *state) error {
 func logFreshness(cfg *config, st *state, items []FeedItem, now time.Time, fromServer bool) {
 	if !fromServer && cfg.tg != nil {
 		cfg.tg.logStatus(now)
+	}
+	if cfg.x != nil {
+		cfg.x.logStatus(now)
 	}
 	var newest FeedItem
 	for _, it := range items {

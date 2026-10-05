@@ -7,23 +7,20 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: FxTwitter public API
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+      - name: Live test (real code)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          X_LIVE: "ariel__danino,meiretingr"
         run: |
           set +e
-          out=report.md; echo "# בדיקת טוויטר דרך FxTwitter $(date -u)" > $out
-          for H in ariel__danino meiretingr; do
-            code=$(curl -s -o body -w '%{http_code}' --max-time 25 -A "yemot-news-bridge" "https://api.fxtwitter.com/2/profile/$H/statuses")
-            n=$(grep -o '"created_at":"[^"]*"' body | wc -l)
-            echo "## $H → $code, ציוצים: $n" >> $out
-            echo '```' >> $out
-            grep -o '"created_at":"[^"]*"' body | head -5 >> $out
-            grep -o '"text":"[^"]\{0,70\}' body | head -5 >> $out
-            head -c 200 body | tr '\n`' '  ' >> $out; echo >> $out
-            echo '```' >> $out
-          done
+          go test -count=1 -run TestXLive -v . > out.txt 2>&1
+          rc=$?
+          { echo "# בדיקה חיה של הקוד האמיתי — $(date -u) — תוצאה: $rc"; echo '```'; tail -c 6000 out.txt; echo '```'; } > report.md
           num=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=50" --jq '.[] | select(.title=="בדיקת טוויטר") | .number' | head -1)
-          [ -z "$num" ] && num=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="בדיקת טוויטר" -f body="תוצאות בדיקה" --jq .number)
-          gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" -F body=@$out --jq .html_url
+          gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" -F body=@report.md --jq .html_url
