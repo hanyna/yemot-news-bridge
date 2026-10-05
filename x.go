@@ -355,14 +355,9 @@ func (s *xSource) poll(now time.Time) (items []FeedItem, chans []Channel) {
 			if a.fails < len(xBackoff) {
 				a.fails++
 			}
+			// גם "לא נמצא" — המתנה רגילה שהולכת וגדלה (דקה, 3, 10, 30): השירות עונה
+			// כך לפעמים בטעות על חשבון קיים. שם שגוי באמת — מגיע ל-30 דקות לבד.
 			wait := xBackoff[a.fails-1]
-			if errors.Is(err, errXNotFound) {
-				if a.ok {
-					wait = time.Minute // השירות עונה לפעמים "לא נמצא" בטעות על חשבון שכבר נקרא
-				} else {
-					wait = xBackoff[len(xBackoff)-1] // כנראה שם שגוי
-				}
-			}
 			a.nextTry = now.Add(wait)
 			if a.lastErr != err.Error() || a.fails == 1 {
 				log.Printf("טוויטר: %s — %v. מנסה שוב בעוד %v.", a.handle, err, wait)

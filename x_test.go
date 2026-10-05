@@ -178,7 +178,7 @@ func TestXUnknownAndEmpty(t *testing.T) {
 	withFakeX(t, f)
 	s := newXSource("nosuchuser_x, quiet_one", "")
 	_, chans := s.poll(time.Now())
-	if s.accts[0].lastErr != errXNotFound.Error() || s.accts[0].nextTry.Sub(time.Now()) < 20*time.Minute {
+	if s.accts[0].lastErr != errXNotFound.Error() || s.accts[0].nextTry.Sub(time.Now()) > 2*time.Minute {
 		t.Fatalf("unknown: %+v", s.accts[0])
 	}
 	if s.accts[1].fails != 0 || chans[1].Title != "שקט" {
