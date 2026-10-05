@@ -22,11 +22,11 @@ jobs:
           set +e
           UA="yemot-news-bridge (phone news line; https://github.com/hanyna/yemot-news-bridge)"
           { echo "# בדיקת החשבונות — $(date -u)"; echo '```'
-          for H in ariel__danino meiretingr; do
-            curl -s -A "$UA" --max-time 25 "https://api.fxtwitter.com/$H" -o p.json
-            echo "== $H פרופיל: $(grep -o '"tweets":[0-9]*' p.json) $(grep -o '"name":"[^"]*"' p.json | head -1)"
+          for P in statuses replies media likes; do
+            code=$(curl -s -A "$UA" --max-time 25 -o b.json -w '%{http_code}' "https://api.fxtwitter.com/2/profile/ariel__danino/$P")
+            echo "== $P: $code, $(grep -o '"created_at"' b.json | wc -l) ציוצים"
+            grep -o '"created_at":"[^"]*"' b.json | head -4
           done
-          go test -count=1 -run TestLineDiag -v . 2>&1 | grep -v "^=== RUN\|^--- \|^PASS\|^ok " | sed -n '/### שלוחה 2/,$p'
           echo '```'; } > report.md
           num=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=50" --jq '.[] | select(.title=="בדיקת טוויטר") | .number' | head -1)
           gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" -F body=@report.md --jq .html_url
