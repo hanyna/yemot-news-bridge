@@ -219,13 +219,32 @@ func tgCleanText(s string) string {
 func tgTitle(page string) string {
 	if m := tgReOgTitle.FindStringSubmatch(page); m != nil {
 		if t := strings.TrimSpace(html.UnescapeString(m[1])); t != "" {
-			return t
+			return hebrewTitle(t)
 		}
 	}
 	if m := tgReHeadTitle.FindStringSubmatch(page); m != nil {
-		return strings.TrimSpace(html.UnescapeString(m[1]))
+		return hebrewTitle(strings.TrimSpace(html.UnescapeString(m[1])))
 	}
 	return ""
+}
+
+var tgReLatinWords = regexp.MustCompile(`[A-Za-z][A-Za-z.'_-]*`)
+
+// hebrewTitle: שם שכתוב גם בעברית וגם באנגלית ("אריאל דנינו Ariel Danino") —
+// רק החלק העברי, כדי שההקראה לא תקרא את השם פעמיים. שם בלי עברית — כמו שהוא.
+func hebrewTitle(t string) string {
+	if !regexp.MustCompile(`\p{Hebrew}`).MatchString(t) {
+		return t
+	}
+	if len(strings.Join(tgReLatinWords.FindAllString(t, -1), "")) < 3 {
+		return t // אות או שתיים ("הערוץ a") — חלק מהשם
+	}
+	h := strings.Join(strings.Fields(tgReLatinWords.ReplaceAllString(t, " ")), " ")
+	h = strings.Trim(h, " -|·,")
+	if !regexp.MustCompile(`\p{Hebrew}`).MatchString(h) {
+		return t
+	}
+	return h
 }
 
 // tgVideoSrc: כתובת ה-mp4 הישירה שבדף של פוסט.

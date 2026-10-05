@@ -44,7 +44,7 @@ jobs:
         env:
           # מקור ההודעות: הגשר קורא בעצמו את הערוצים ישירות מטלגרם (t.me/s/...).
           # ערוצים לפי הסדר — זה גם סדר הכתבים בשלוחה 2. ערוץ חדש = להוסיף כאן.
-          CHANNELS: "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,SamariaUpdates,nilchamim,hatzhalhyosh"
+          CHANNELS: "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,SamariaUpdates,nilchamim,hatzhalhyosh,ariel_danino"
           SOURCE: "telegram"       # telegram = ישירות מטלגרם. server = כמו פעם, דרך השרת של ערוץ חי
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}   # גיבוי: אם טלגרם חוסמים יותר מ-10 דקות — ההודעות משרת ערוץ חי
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}

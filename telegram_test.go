@@ -415,3 +415,18 @@ func (tr tooBigTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	return tr.base.RoundTrip(r)
 }
+
+func TestHebrewTitle(t *testing.T) {
+	cases := map[string]string{
+		"אריאל דנינו Ariel Danino": "אריאל דנינו",
+		"אלישע ירד":                "אלישע ירד",
+		"Samaria Updates":          "Samaria Updates",
+		"חדשות 24 - News":          "חדשות 24",
+		"הערוץ a":                  "הערוץ a",
+	}
+	for in, want := range cases {
+		if got := hebrewTitle(in); got != want {
+			t.Errorf("%q → %q (want %q)", in, got, want)
+		}
+	}
+}
