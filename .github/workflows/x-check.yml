@@ -12,24 +12,16 @@ jobs:
         with:
           go-version: "1.22"
           cache: false
-      - name: Reliability over time
+      - name: Live test (real code)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          X_LIVE: "ariel__danino,meiretingr"
+          X_WHY: "meiretingr"
         run: |
           set +e
-          echo "# יציבות לאורך זמן — $(date -u)" > report.md
-          echo '```' >> report.md
-          for r in $(seq 1 10); do
-            line="סבב $r $(date -u +%H:%M):"
-            for H in ariel__danino meiretingr; do
-              code=$(curl -s -o b -w '%{http_code}' --max-time 25 -A "yemot-news-bridge (phone news line; https://github.com/hanyna/yemot-news-bridge)" "https://api.fxtwitter.com/2/profile/$H/statuses")
-              n=$(grep -o '"created_at"' b | wc -l)
-              line="$line  $H=$code/$n"
-            done
-            echo "$line" >> report.md
-            [ $r -lt 10 ] && sleep 120
-          done
-          echo '```' >> report.md
+          go test -count=1 -run "TestXLive|TestXLiveWhy" -v . > out.txt 2>&1
+          rc=$?
+          { echo "# בדיקה חיה של הקוד האמיתי — $(date -u) — תוצאה: $rc"; echo '```'; tail -c 6000 out.txt; echo '```'; } > report.md
           num=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=50" --jq '.[] | select(.title=="בדיקת טוויטר") | .number' | head -1)
           gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" -F body=@report.md --jq .html_url
