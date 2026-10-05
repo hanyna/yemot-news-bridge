@@ -44,7 +44,7 @@ jobs:
         env:
           # מקור ההודעות: הגשר קורא בעצמו את הערוצים ישירות מטלגרם (t.me/s/...).
           # ערוצים לפי הסדר — זה גם סדר הכתבים בשלוחה 2. ערוץ חדש = להוסיף כאן.
-          CHANNELS: "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,SamariaUpdates,nilchamim,hatzhalhyosh,ariel_danino"
+          CHANNELS: "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,SamariaUpdates,nilchamim,hatzhalhyosh"
           SOURCE: "telegram"       # telegram = ישירות מטלגרם. server = כמו פעם, דרך השרת של ערוץ חי
           TGPOPUP_KEY: ${{ secrets.TGPOPUP_KEY }}   # גיבוי: אם טלגרם חוסמים יותר מ-10 דקות — ההודעות משרת ערוץ חי
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
@@ -61,7 +61,7 @@ jobs:
           # כל הודעה נשמרת בשלוחה 1 ובשלוחת הכתב שלה, כל עוד יש מקום (ימות מרשים עד 3,000 קבצים בשלוחה — ראו archive.go).
           CHANNEL_EXTS: "on"       # off = בלי שלוחה לכל ערוץ
           # ערוצים שלא נכנסים לקו, מופרדים בפסיק. מה שכבר עלה מהם — נמחק מהקו.
-          EXCLUDE_CHANNELS: "SamariaUpdates"
+          EXCLUDE_CHANNELS: "SamariaUpdates,ariel_danino"
           AUDIO: "on"              # הקול של סרטונים והודעות קוליות מושמע אחרי ההקראה. off = רק תיאור ("פורסם סרטון באורך...")
           SPEECH: "on"             # כל הודעה עולה גם כקובץ שמע מוכן (Gemini) — בלי המתנה וגמגום בהאזנה. off = רק טקסט
           SPEECH_VOICE: "Charon"   # קול ההודעות: Charon (גבר), Kore (אישה) ועוד — ראו voice.go
