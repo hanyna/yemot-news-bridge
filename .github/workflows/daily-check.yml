@@ -1,0 +1,25 @@
+name: Daily line check
+
+# בדיקה יומית של הקו — כאן ב-GitHub, בלי Claude ובלי אישורים.
+# קוראת את "מצב הקו — דוח אוטומטי" ופותחת Issue "דוח יומי: ✅/🟡/⚠️ ..." —
+# GitHub שולח עליו מייל לבעל המאגר. בתקלה חמורה הריצה גם נכשלת (עוד מייל).
+# השעה: 5:45 UTC = 8:45 בקיץ, 7:45 בחורף (GitHub עובד לפי UTC, ולפעמים מאחר בכמה דקות).
+on:
+  schedule:
+    - cron: "45 5 * * *"
+  workflow_dispatch: {}   # הרצה ידנית מהטאב Actions
+
+permissions:
+  issues: write    # לפתוח את הדוח היומי ולסגור את של אתמול
+  actions: read    # לבדוק אם הרצות של הגשר נכשלו
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the line
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/daily_check.py
