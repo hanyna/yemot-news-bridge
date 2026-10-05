@@ -1,0 +1,62 @@
+name: Auto-fix check
+
+# תיקון אוטומטי: הבדיקה היומית (Claude) פותחת תיקון כ-Pull Request מענף שמתחיל
+# ב-autofix/. כאן מריצים את כל הבדיקות של הגשר. רק אם הכול עובר — התיקון נכנס
+# לבד ל-main והגשר מופעל מחדש עם הקוד המתוקן. אם בדיקה נכשלת — התיקון לא נכנס
+# (הקו ממשיך עם הקוד הקודם), ונכתבת הערה ב-PR.
+# גם PR רגיל (לא autofix/) עובר כאן בדיקות — אבל לא נכנס לבד.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write        # למזג את התיקון
+  pull-requests: write   # להערה ב-PR
+  actions: write         # להפעיל את הגשר מחדש אחרי המיזוג
+
+concurrency:
+  group: autofix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Build, vet and test
+        run: |
+          go build -o bridge .
+          go vet ./...
+          go test -race -count=1 ./...
+
+      # רק תיקון אוטומטי מהמאגר הזה עצמו (לא מ-fork), ובלי שינוי בקבצי ה-Workflow.
+      - name: Merge auto-fix and restart the bridge
+        if: ${{ success() && startsWith(github.head_ref, 'autofix/') && github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename' | grep -q '^\.github/'; then
+            gh pr comment "$PR" --repo "$REPO" --body "⚠️ התיקון משנה קבצי Workflow — לא נכנס אוטומטית. צריך לבדוק ולמזג ידנית."
+            exit 0
+          fi
+          gh api -X PUT "repos/$REPO/pulls/$PR/merge" -f merge_method=squash
+          gh api -X DELETE "repos/$REPO/git/refs/heads/$GITHUB_HEAD_REF" || true
+          # מיזוג ע"י GITHUB_TOKEN לא מפעיל את הגשר לבד — מפעילים ידנית.
+          # ההפעלה הישנה רואה קוד חדש ומסיימת תוך 2 דקות; החדשה מחכה לה בתור.
+          gh workflow run bridge.yml --ref main --repo "$REPO"
+          gh pr comment "$PR" --repo "$REPO" --body "✅ כל הבדיקות עברו — התיקון נכנס, והגשר הופעל מחדש עם הקוד המתוקן."
+
+      - name: Comment on failure
+        if: ${{ failure() && startsWith(github.head_ref, 'autofix/') && github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body "❌ בדיקה נכשלה — התיקון לא נכנס. הקו ממשיך לעבוד עם הקוד הקודם."

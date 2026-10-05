@@ -139,6 +139,17 @@ type state struct {
 }
 
 func main() {
+	statusLoc, err := time.LoadLocation("Asia/Jerusalem")
+	if err != nil {
+		statusLoc = time.FixedZone("IL", 3*3600)
+	}
+	var rep *statusReport
+	if envInt("RUN_MINUTES", 0) > 0 {
+		// דוח מצב ב-GitHub Issue (status.go): כל שורת לוג נבדקת אם היא בעיה.
+		if rep = newStatusReport(statusLoc); rep != nil {
+			log.SetOutput(rep)
+		}
+	}
 	cfg := config{
 		feedURL:       envOr("TGPOPUP_URL", "https://telegram-popup.onrender.com/api/messages"),
 		feedKey:       strings.TrimSpace(os.Getenv("TGPOPUP_KEY")),
@@ -200,10 +211,7 @@ func main() {
 	case cfg.music != nil:
 		log.Printf("מוזיקה בתפריט הראשי: %s — %g שניות שיר, ואז התפריט עם השיר ב-%g%% עוצמה.", cfg.music.name, cfg.music.intro, cfg.music.level*100)
 	}
-	var err error
-	if cfg.loc, err = time.LoadLocation("Asia/Jerusalem"); err != nil {
-		cfg.loc = time.FixedZone("IL", 3*3600)
-	}
+	cfg.loc = statusLoc
 
 	diagnoseRoot(cfg.y)
 
@@ -241,22 +249,29 @@ func main() {
 				// סימון לשלב השרשרת ב-Workflow: לא להפעיל עוד הפעלה (החדשה כבר בתור).
 				_ = os.WriteFile(".no-chain", []byte(latest), 0o644)
 				st.flush(&cfg)
+				rep.finish("הוחלפה בגרסה חדשה של הגשר")
 				return
 			}
 		}
-		if err := syncOnce(&cfg, st); err != nil {
+		err := syncOnce(&cfg, st)
+		if err != nil {
 			st.failures++
 			log.Printf("שגיאה בסבב (%d ברצף): %v", st.failures, err)
+		} else {
+			st.failures = 0
+		}
+		rep.cycle(err, st.failures)
+		if err != nil {
 			if st.failures >= failLimit {
+				rep.finish(fmt.Sprintf("נעצרה בתקלה — %d סבבים כושלים ברצף", st.failures))
 				// הכשלת הריצה → GitHub שולח מייל על ריצה שנכשלה.
 				log.Fatalf("הגשר נכשל %d פעמים ברצף — עוצר כדי שתישלח התראה. שגיאה אחרונה: %v", st.failures, err)
 			}
-		} else {
-			st.failures = 0
 		}
 		if time.Now().Add(interval).After(deadline) {
 			log.Println("זמן הריצה הסתיים — ההפעלה הבאה של ה-Workflow תמשיך מכאן.")
 			st.flush(&cfg)
+			rep.finish("הסתיימה כרגיל (סוף זמן ההפעלה)")
 			return
 		}
 		time.Sleep(interval)
