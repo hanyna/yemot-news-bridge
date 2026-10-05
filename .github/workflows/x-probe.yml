@@ -2,12 +2,17 @@ name: X probe (temporary)
 on: workflow_dispatch
 permissions:
   contents: read
+  issues: write
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
       - name: Probe public routes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set +e
+          exec > >(tee out.txt) 2>&1
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
           for H in ariel__danino amit_segal; do
           for U in \
@@ -29,3 +34,6 @@ jobs:
             grep -o '"text":"[^"]\{0,80\}' body | head -2
             head -c 300 body | tr '\n' ' '; echo
           done; done
+          sleep 1
+          head -c 60000 out.txt > res.txt
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "בדיקת טוויטר (זמני)" --body-file res.txt
