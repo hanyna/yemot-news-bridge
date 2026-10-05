@@ -38,6 +38,54 @@ var reProblem = regexp.MustCompile(`(?i)נכשל|שגיאה|חריגה|לא הת
 // reNum: מספרים בשורה — כדי ששורות שונות רק במספר ייספרו כאותה בעיה.
 var reNum = regexp.MustCompile(`\d+`)
 
+// מדדי איכות: דברים שלא משביתים את הקו, אבל פוגעים במה שהמאזין שומע.
+// כל מדד נספר לפי שורת הלוג שהגשר כבר כותב. הסדר כאן = הסדר בדוח.
+type qualityRule struct {
+	key, label string
+	bad        bool // true = פגיעה באיכות (false = ספירה רגילה, להשוואה)
+	re         *regexp.Regexp
+}
+
+var qualityRules = []qualityRule{
+	{"voiced", "הודעות שעלו בקול המוכן (Gemini)", false, regexp.MustCompile(`^קול מוכן: [^f][^|]`)},
+	{"voice_paused", "הקול המוכן הושהה (מכסה/עומס) — הודעות הושמעו בקול הממוחשב", true, regexp.MustCompile(`יצירת קול מושהית`)},
+	{"voice_failed", "הודעות שנשארו בקול הממוחשב (הקול המוכן נכשל)", true, regexp.MustCompile(`הקול של .* לא עלה \(נשאר טקסט\)`)},
+	{"photo_ok", "תמונות שקיבלו תיאור", false, regexp.MustCompile(`^ניתוח תמונה \S+: `)},
+	{"photo_failed", "ניתוח תמונה נכשל — תמונה בלי תיאור", true, regexp.MustCompile(`^ניתוח תמונה .*נכשל`)},
+	{"media_ok", "קול של סרטונים/קוליות שהועלה", false, regexp.MustCompile(`^קול הועלה: `)},
+	{"media_retry", "קול של סרטון/קולית נכשל (ינסה שוב)", true, regexp.MustCompile(`^הערה: הקול של .* נכשל \(ניסיון`)},
+	{"media_failed", "סרטונים/קוליות שהקול שלהם לא יעלה בכלל", true, regexp.MustCompile(`הקול של .* לא יועלה`)},
+	{"tg_blocked", "טלגרם חסם/נכשל בקריאת ערוץ (עיכוב בהודעות)", true, regexp.MustCompile(`^טלגרם: ערוץ \S+ — .*מנסה שוב`)},
+	{"skipped", "הודעות שדולגו ולא עלו לקו בכלל!", true, regexp.MustCompile(`מדלג על הודעה`)},
+	{"trimmed", "הודעות ישנות שנמחקו (שלוחה הגיעה ל-3,000 קבצים)", false, regexp.MustCompile(`הגיעה לגבול`)},
+}
+
+// עיכוב: מהפרסום בטלגרם עד שההודעה עלתה לקו (שלוחה ראשית בלבד, בלי ייבוא ישן).
+const (
+	latencySlow = 5 * time.Minute
+	latencyMax  = 6 * time.Hour
+)
+
+// lineStatus: הדוח של ההפעלה הזו (nil = כבוי), כדי ש-archive.add ידווח עיכוב.
+var lineStatus *statusReport
+
+// latency: ההודעה עלתה לשלוחה הראשית אחרי age מהפרסום.
+func (r *statusReport) latency(age time.Duration) {
+	if r == nil || age < 0 || age > latencyMax {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.latN++
+	r.latSum += age
+	if age > r.latMax {
+		r.latMax = age
+	}
+	if age > latencySlow {
+		r.latSlow++
+	}
+}
+
 type problem struct {
 	Example string
 	Count   int
@@ -62,6 +110,9 @@ type statusReport struct {
 	lastOK                 time.Time
 	problems               map[string]*problem
 	total                  int
+	quality                map[string]int
+	latN, latSlow          int
+	latSum, latMax         time.Duration
 	lastPush               time.Time
 	out                    io.Writer
 }
@@ -81,6 +132,7 @@ func newStatusReport(loc *time.Location) *statusReport {
 		loc:      loc,
 		started:  time.Now(),
 		problems: map[string]*problem{},
+		quality:  map[string]int{},
 		out:      os.Stderr,
 	}
 	if r.runID != "" {
@@ -93,18 +145,40 @@ func newStatusReport(loc *time.Location) *statusReport {
 func (r *statusReport) Write(p []byte) (int, error) {
 	n, err := r.out.Write(p)
 	for _, line := range strings.Split(strings.TrimSpace(string(p)), "\n") {
-		if line = strings.TrimSpace(line); line != "" && reProblem.MatchString(line) {
+		line = stripLogDate(strings.TrimSpace(line))
+		if line == "" {
+			continue
+		}
+		r.measure(line)
+		if reProblem.MatchString(line) {
 			r.note(line)
 		}
 	}
 	return n, err
 }
 
-func (r *statusReport) note(line string) {
-	// בלי התאריך שהלוג מוסיף בהתחלה
-	if len(line) > 20 && line[4] == '/' && line[7] == '/' {
-		line = strings.TrimSpace(line[20:])
+// stripLogDate: בלי התאריך שהלוג מוסיף בהתחלה ("2026/10/05 03:00:00 ").
+func stripLogDate(line string) string {
+	if len(line) > 20 && line[4] == '/' && line[7] == '/' && line[19] == ' ' {
+		return strings.TrimSpace(line[20:])
 	}
+	return line
+}
+
+// measure: סופר את מדדי האיכות לפי שורת הלוג.
+func (r *statusReport) measure(line string) {
+	for _, q := range qualityRules {
+		if q.re.MatchString(line) {
+			r.mu.Lock()
+			r.quality[q.key]++
+			r.mu.Unlock()
+			return
+		}
+	}
+}
+
+func (r *statusReport) note(line string) {
+	line = stripLogDate(line)
 	line = strings.ReplaceAll(line, r.token, "***")
 	if len([]rune(line)) > 300 {
 		line = string([]rune(line)[:300]) + "…"
@@ -290,7 +364,8 @@ func (r *statusReport) render(final string) string {
 			}
 			return r.lastOK.UTC().Format(time.RFC3339)
 		}(),
-		"final": final,
+		"final": final, "quality": r.quality,
+		"latency": map[string]any{"messages": r.latN, "avg_sec": r.latAvg().Seconds(), "max_sec": r.latMax.Seconds(), "over_5min": r.latSlow},
 	})
 	var b strings.Builder
 	fmt.Fprintf(&b, "<!-- line-status %s -->\n", meta)
@@ -307,6 +382,7 @@ func (r *statusReport) render(final string) string {
 	fmt.Fprintf(&b, "- הפעלה: %s, התחילה %s\n", run, t(r.started))
 	fmt.Fprintf(&b, "- סבבים: %d, מהם נכשלו %d (כרגע %d ברצף). סבב מוצלח אחרון: %s\n", r.cycles, r.failed, r.streak, t(r.lastOK))
 	fmt.Fprintf(&b, "- שורות בעיה בלוג: %d\n\n", r.total)
+	r.renderQuality(&b)
 	if len(r.problems) == 0 {
 		b.WriteString("אין בעיות בהפעלה הזו.\n")
 		return b.String()
@@ -322,4 +398,40 @@ func (r *statusReport) render(final string) string {
 		fmt.Fprintf(&b, "| %d | %s | %s | %s |\n", p.Count, t(p.First), t(p.Last), ex)
 	}
 	return b.String()
+}
+
+func (r *statusReport) latAvg() time.Duration {
+	if r.latN == 0 {
+		return 0
+	}
+	return r.latSum / time.Duration(r.latN)
+}
+
+// renderQuality: טבלת האיכות — מה המאזין שמע בפועל.
+func (r *statusReport) renderQuality(b *strings.Builder) {
+	b.WriteString("### איכות הקו בהפעלה הזו\n\n| | מה | כמה |\n|---|---|---|\n")
+	for _, q := range qualityRules {
+		n := r.quality[q.key]
+		mark := ""
+		if q.bad && n > 0 {
+			mark = "⚠️"
+		}
+		fmt.Fprintf(b, "| %s | %s | %d |\n", mark, q.label, n)
+	}
+	if r.latN > 0 {
+		mark := ""
+		if r.latSlow > 0 {
+			mark = "⚠️"
+		}
+		fmt.Fprintf(b, "| %s | עיכוב מהפרסום בטלגרם עד שעלה לקו: ממוצע %s, הכי איטי %s | %d הודעות, מהן %d אחרי יותר מ-5 דקות |\n",
+			mark, shortDur(r.latAvg()), shortDur(r.latMax), r.latN, r.latSlow)
+	}
+	b.WriteString("\n")
+}
+
+func shortDur(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d שניות", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%.1f דקות", d.Minutes())
 }

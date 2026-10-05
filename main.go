@@ -148,6 +148,7 @@ func main() {
 		// דוח מצב ב-GitHub Issue (status.go): כל שורת לוג נבדקת אם היא בעיה.
 		if rep = newStatusReport(statusLoc); rep != nil {
 			log.SetOutput(rep)
+			lineStatus = rep
 		}
 	}
 	cfg := config{

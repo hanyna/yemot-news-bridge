@@ -597,6 +597,9 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 	a.adds++
 	a.addFile(introFile(b))
 	log.Printf("שלוחה %s / %s (%d תווים): %.80s", a.ext, introFile(b), len([]rune(text)), text)
+	if a.ext == cfg.ext {
+		lineStatus.latency(now.Sub(time.Unix(it.TS, 0))) // דוח מצב: עיכוב עד שעלה לקו (status.go)
+	}
 	a.trim(cfg) // בשלוחה מלאה — ההודעה החדשה מוציאה את הישנה ביותר
 	return nil
 }

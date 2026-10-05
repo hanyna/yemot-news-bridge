@@ -164,3 +164,50 @@ func TestStatusKindsCapped(t *testing.T) {
 		t.Fatalf("kinds %d total %d", len(r.problems), r.total)
 	}
 }
+
+func TestStatusQuality(t *testing.T) {
+	g := &fakeGitHub{bodies: map[int]string{}, comments: map[int][]string{}}
+	r, _ := testStatus(t, g)
+	lines := []string{
+		"קול מוכן: a/1 → 2 שלוחות (gemini-3.8-flash-tts, Charon, 0s).",
+		"קול מוכן: a/2 → 2 שלוחות (gemini-3.8-flash-tts, Charon, 1s).",
+		"קול מוכן: f|2|M1000.wav → 1 שלוחות (gemini-3.8-flash-tts, Puck, 0s).",
+		"הערה: יצירת קול מושהית ל-10m0s (quota). בינתיים ההודעות מושמעות כטקסט.",
+		"הערה: הקול של a/3 לא עלה (נשאר טקסט): boom",
+		"ניתוח תמונה a/4: בתמונה: רכבים.",
+		"ניתוח תמונה a/5 נכשל (1/2): boom",
+		"ניתוח תמונה: הורדת c/x.jpg נכשלה: HTTP 404",
+		"קול הועלה: a/6 (סרטון) ← 1, 2/1",
+		"הערה: הקול של a/7 (סרטון) נכשל (ניסיון 1) — ננסה שוב בעוד 3m0s: boom",
+		"הערה: הקול של a/8 (סרטון) לא יועלה — 3 ניסיונות נכשלו: boom",
+		"טלגרם: ערוץ elisha_yered — HTTP 429. מנסה שוב בעוד 1m0s.",
+		"אזהרה: מדלג על הודעה a/9 בשלוחה 1 אחרי 3 ניסיונות: boom",
+		"שלוחה 1: הגיעה לגבול (ימות המשיח מרשים עד 3,000 קבצים) — נמחקו 2 הקבצים הישנים ביותר (a עד b).",
+	}
+	for _, l := range lines {
+		r.Write([]byte("2026/10/05 03:00:00 " + l + "\n"))
+	}
+	want := map[string]int{"voiced": 2, "voice_paused": 1, "voice_failed": 1, "photo_ok": 1, "photo_failed": 1,
+		"media_ok": 1, "media_retry": 1, "media_failed": 1, "tg_blocked": 1, "skipped": 1, "trimmed": 1}
+	for k, n := range want {
+		if r.quality[k] != n {
+			t.Errorf("%s = %d, want %d", k, r.quality[k], n)
+		}
+	}
+	if len(r.quality) != len(want) {
+		t.Errorf("extra counts: %v", r.quality)
+	}
+	r.latency(30 * time.Second)
+	r.latency(7 * time.Minute)
+	r.latency(10 * time.Hour) // ייבוא ישן — לא נספר
+	var nilRep *statusReport
+	nilRep.latency(time.Second)
+	r.cycle(nil, 0)
+	b := g.bodies[101]
+	for _, s := range []string{"### איכות הקו", "| ⚠️ | הודעות שדולגו ולא עלו לקו בכלל! | 1 |", "|  | הודעות שעלו בקול המוכן (Gemini) | 2 |",
+		"2 הודעות, מהן 1 אחרי יותר מ-5 דקות", `"over_5min":1`, `"voice_paused":1`} {
+		if !strings.Contains(b, s) {
+			t.Errorf("body missing %q:\n%s", s, b)
+		}
+	}
+}
