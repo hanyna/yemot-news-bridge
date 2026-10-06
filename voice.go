@@ -43,6 +43,9 @@ import (
 // speechModels: לפי הסדר. לכל מודל מכסה חינמית משלו — כשאחד מגיע למכסה, עוברים לבא.
 var speechModels = []string{"gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"}
 
+// speechLanguage: שפת ההקראה (BCP 47).
+var speechLanguage = "he-IL"
+
 var speechEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 
 const (
@@ -117,6 +120,7 @@ type speaker struct {
 	jobs       map[string]*speechJob
 	results    []speechResult
 	modelPause map[[2]int]time.Time // [מפתח, מודל] → עד מתי במכסה
+	noLang     map[string]bool      // מודלים שלא מקבלים languageCode
 	pausedTil  time.Time
 	bg         bool
 	warned     map[string]bool
@@ -167,7 +171,7 @@ func newSpeakerKeys(keys []string, voice, menuVoice, mode string) *speaker {
 		menuVoice = "Puck"
 	}
 	return &speaker{keys: ks, voice: voice, menuVoice: menuVoice, client: &http.Client{Timeout: speechTimeout},
-		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, warned: map[string]bool{}}
+		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, noLang: map[string]bool{}, warned: map[string]bool{}}
 }
 
 // add: קול להודעה בשלוחה. אותה הודעה בכמה שלוחות (1 ושלוחת הכתב) — קובץ קול
@@ -431,14 +435,24 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 	if voice == "" {
 		voice = s.voice
 	}
-	body, _ := json.Marshal(map[string]any{
-		// בלי הוראות לפני הטקסט — המודל מקריא אותן בקול.
-		"contents": []any{map[string]any{"parts": []any{map[string]any{"text": text}}}},
-		"generationConfig": map[string]any{
-			"responseModalities": []string{"AUDIO"},
-			"speechConfig":       map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": voice}}},
-		},
-	})
+	mk := func(lang bool) []byte {
+		sc := map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": voice}}}
+		if lang {
+			// בלי שפה מוגדרת, המודל מנחש לפי הטקסט — ובטקסט קצר (כותרת, תפריט)
+			// הוא טועה ומקריא עברית במבטא זר.
+			sc["languageCode"] = speechLanguage
+		}
+		b, _ := json.Marshal(map[string]any{
+			// בלי הוראות לפני הטקסט — המודל מקריא אותן בקול.
+			"contents": []any{map[string]any{"parts": []any{map[string]any{"text": text}}}},
+			"generationConfig": map[string]any{
+				"responseModalities": []string{"AUDIO"},
+				"speechConfig":       sc,
+			},
+		})
+		return b
+	}
+	withLang, noLang := mk(true), mk(false)
 	var lastErr error
 	var soonest time.Time // מתי המודל הראשון שבמכסה משתחרר
 	allQuota := true
@@ -455,7 +469,22 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 				}
 				continue
 			}
+			s.mu.Lock()
+			langOK := !s.noLang[model]
+			s.mu.Unlock()
+			body := noLang
+			if langOK {
+				body = withLang
+			}
 			data, status, err := s.callKey(key, model, body)
+			if langOK && status == http.StatusBadRequest {
+				// המודל לא מקבל הגדרת שפה — בלעדיה (ונזכור לפעם הבאה)
+				s.mu.Lock()
+				s.noLang[model] = true
+				s.mu.Unlock()
+				log.Printf("הערה: %s לא מקבל הגדרת שפה (%v) — ממשיך בלעדיה.", model, err)
+				data, status, err = s.callKey(key, model, noLang)
+			}
 			if err == nil {
 				err = speechLengthCheck(text, data)
 				if err != nil {
@@ -751,6 +780,13 @@ func spokenFile(name string) string { return strings.TrimSuffix(name, ".tts") + 
 
 const spokenSuffix = "-spoken.txt"
 
+// spokenVersion: גרסת הקול של התפריטים והכותרות. שינוי שלה = כל התפריטים
+// והכותרות נוצרים מחדש פעם אחת (he-IL: עד אז הקול ניחש את השפה ולפעמים טעה).
+const spokenVersion = "he-IL"
+
+// spokenRecord: מה שנשמר בקובץ -spoken.txt — הנוסח וגרסת הקול.
+func spokenRecord(text string) string { return text + "\n#voice=" + spokenVersion }
+
 // uploadSpoken: מעלה קובץ טקסט של תפריט / כותרת (M1000.tts, 99999.tts), ומחליף
 // גם את קובץ הקול שלו. קול ישן אומר את הטקסט הישן — נמחק מיד (עד שהחדש מוכן
 // מושמע הטקסט). טקסט שלא השתנה, ויש לו כבר קול — לא נוגעים.
@@ -776,18 +812,16 @@ func uploadSpoken(cfg *config, ext, name, text string) error {
 	if hasWav {
 		// ימות המשיח מוחקים את M1000.tts כשעולה M1000.wav — לכן הנוסח שהקול אומר
 		// שמור גם בקובץ נפרד (ימות לא משמיעים ולא מציגים קבצי txt).
-		old, exists, err := cfg.y.read(ext, name)
-		if err == nil && !exists {
-			old, _, err = cfg.y.read(ext, spokenFile(name))
-		}
-		if err == nil && old == text && sameMusic(cfg, ext, name) {
+		// הקובץ שומר גם את גרסת הקול (spokenRecord) — קול מגרסה ישנה נוצר מחדש.
+		old, _, err := cfg.y.read(ext, spokenFile(name))
+		if err == nil && old == spokenRecord(text) && sameMusic(cfg, ext, name) {
 			return nil // בדיוק מה שכבר בשלוחה, עם קול (ועם אותו שיר ברקע)
 		}
 	}
 	if err := cfg.y.upload(ext, name, text); err != nil {
 		return err
 	}
-	if err := cfg.y.upload(ext, spokenFile(name), text); err != nil {
+	if err := cfg.y.upload(ext, spokenFile(name), spokenRecord(text)); err != nil {
 		log.Printf("הערה: שמירת %s בשלוחה %q נכשלה: %v", spokenFile(name), ext, err)
 	}
 	if hasWav {

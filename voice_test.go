@@ -20,6 +20,8 @@ type fakeTTS struct {
 	quota  map[string]bool // מפתחות שהגיעו למכסה
 	calls  []string
 	texts  []string
+	langs  []string // languageCode בכל בקשה
+	noLang bool     // המודל המזויף דוחה languageCode (400)
 }
 
 func (g *fakeTTS) handler(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +48,21 @@ func (g *fakeTTS) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, _ := io.ReadAll(r.Body)
 	json.Unmarshal(raw, &req)
+	var cfgReq struct {
+		GenerationConfig struct {
+			SpeechConfig struct {
+				LanguageCode string `json:"languageCode"`
+			} `json:"speechConfig"`
+		} `json:"generationConfig"`
+	}
+	json.Unmarshal(raw, &cfgReq)
+	lang := cfgReq.GenerationConfig.SpeechConfig.LanguageCode
+	g.langs = append(g.langs, lang)
+	if g.noLang && lang != "" {
+		w.WriteHeader(400)
+		io.WriteString(w, `{"error":{"message":"languageCode not supported"}}`)
+		return
+	}
 	text := req.Contents[0].Parts[0].Text
 	g.texts = append(g.texts, text)
 	json.NewEncoder(w).Encode(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{
@@ -443,5 +460,25 @@ func TestVoicePhrasingLasts(t *testing.T) {
 	got := whenText(tm, whenVoice)
 	if got != "ביום שלישי, 6 באוקטובר, בשעה 1 ו 56 דקות בצהריים" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestSpeechHebrewLanguage(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		g := &fakeTTS{status: map[string]int{}, noLang: reject}
+		withFakeTTS(t, g)
+		s := newSpeaker("GKEY", "", "on")
+		for i := 0; i < 2; i++ {
+			if _, _, err := s.synthesize("עדכוני אריאל דנינו.", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !reject && (len(g.langs) != 2 || g.langs[0] != "he-IL") {
+			t.Fatalf("langs %v", g.langs)
+		}
+		// מודל שדוחה את השפה: ניסיון אחד עם השפה, ומשם בלעדיה
+		if reject && (len(g.langs) != 3 || g.langs[0] != "he-IL" || g.langs[1] != "" || g.langs[2] != "") {
+			t.Fatalf("reject langs %v", g.langs)
+		}
 	}
 }
