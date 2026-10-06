@@ -34,9 +34,25 @@ type fakeGemini struct {
 	keys     map[string]int // מפתח נוסף → הסטטוס שהוא מקבל (200 = עובד)
 	reply    string
 	lastBody string
+	slow     map[string]time.Duration // path substring → כמה זמן לא לענות (עומס)
 }
 
 func (g *fakeGemini) handler(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	var wait time.Duration
+	for sub, d := range g.slow {
+		if strings.Contains(r.URL.Path, sub) {
+			wait = d
+		}
+	}
+	g.mu.Unlock()
+	if wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls++
@@ -323,5 +339,72 @@ func TestVisionRetriesMissingDescription(t *testing.T) {
 	}
 	if g.calls != calls {
 		t.Fatal("described again")
+	}
+}
+
+// Gemini איטי (לא עונה בזמן) לא עוצר את הקו: ההודעה עולה אחרי visionWait בלי
+// תיאור, הניתוח ממשיך ברקע, והתיאור מתווסף בסבב הבא.
+func TestVisionSlowDoesNotHoldTheLine(t *testing.T) {
+	g := &fakeGemini{reply: `{"description": "רכבי צבא בכניסה ליישוב", "text": ""}`, slow: map[string]time.Duration{"/": 1500 * time.Millisecond}}
+	withFakeGemini(t, g)
+	oldWait := visionWait
+	visionWait = 100 * time.Millisecond
+	t.Cleanup(func() { visionWait = oldWait })
+	pic := testPNG()
+	now := time.Now().Unix()
+	var f *fakeYemotServer
+	mux := http.NewServeMux()
+	mux.HandleFunc("/img/", func(w http.ResponseWriter, r *http.Request) { w.Write(pic) })
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { f.handler(w, r) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	f = archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 300, Text: "תיעוד מהשטח", HTML: `<div class="photo"><img src="/img/1.jpg"></div><div class="msgtext">תיעוד מהשטח</div>`},
+		{ID: 2, Channel: "a", TS: now - 200, Text: "הודעה בלי תמונה"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	cfg := newTestCfg(srv)
+	cfg.vision = newVisionClient("GKEY", "", "on")
+	st := &state{}
+	start := time.Now()
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 1200*time.Millisecond {
+		t.Fatalf("sync waited for Gemini: %v", d)
+	}
+	if got := f.files["ivr2:/1/10001.tts"]; got == "" || strings.Contains(got, "בתמונה") {
+		t.Fatalf("first: %q", got)
+	}
+	if f.files["ivr2:/1/10003.tts"] == "" {
+		t.Fatal("the next message did not go up")
+	}
+	time.Sleep(2 * time.Second) // הניתוח מסתיים ברקע
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"ivr2:/1/10001.tts", "ivr2:/2/1/10001.tts"} {
+		if got := f.files[p]; !strings.HasSuffix(got, "בתמונה: רכבי צבא בכניסה ליישוב.") {
+			t.Fatalf("%s: %q", p, got)
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.calls != 1 {
+		t.Fatalf("calls %d", g.calls)
+	}
+}
+
+// מודל שלא עונה בזמן (timeout) — עוברים למודל הבא באותה בקשה.
+func TestVisionTimeoutFallsBack(t *testing.T) {
+	g := &fakeGemini{reply: `{"description": "שלט בכניסה ליישוב", "text": ""}`, slow: map[string]time.Duration{"/" + visionModels[0] + ":": 3 * time.Second}}
+	withFakeGemini(t, g)
+	pic := testPNG()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(pic) }))
+	defer srv.Close()
+	v := newVisionClient("GKEY", "", "on")
+	v.client.Timeout = 300 * time.Millisecond
+	desc, _, err := v.analyze([]string{srv.URL + "/a.jpg"}, "")
+	if err != nil || desc != "שלט בכניסה ליישוב" {
+		t.Fatalf("%q %v (paths %v)", desc, err, g.paths)
 	}
 }

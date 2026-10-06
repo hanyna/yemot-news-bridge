@@ -22,6 +22,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -39,6 +40,14 @@ const (
 	visionRetry     = 2 * time.Minute  // אחרי תקלה זמנית — מתי לנסות שוב את אותה הודעה
 	visionTextMax   = 400              // אורך מקסימלי לטקסט שבתמונה (תווים)
 )
+
+// visionWait: כמה זמן הודעה עם תמונה מחכה לתיאור לפני שהיא עולה לקו. הניתוח
+// עצמו ממשיך ברקע — אם הוא מאחר, ההודעה עולה בלי תיאור והוא מתווסף כשהוא מגיע
+// (retryPhotos). כך Gemini איטי לא עוצר את כל הקו.
+var visionWait = 25 * time.Second
+
+// visionBudget: אחרי כמה זמן מפסיקים לנסות מודלים נוספים לאותה בקשה (עומס).
+var visionBudget = 100 * time.Second
 
 // visionModels: המודל הראשון שעובד נשמר לכל ההפעלה. GEMINI_MODEL מוסיף מודל בראש הרשימה.
 var visionModels = []string{"gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"}
@@ -76,8 +85,11 @@ type visionClient struct {
 	eps      map[int]int          // לכל מפתח: הכתובת שעובדת איתו (מפתח AI Studio / Vertex)
 	quota    map[[2]int]time.Time // [מפתח, מודל] → עד מתי במכסה / לא זמין
 
+	callMu sync.Mutex // בקשה אחת ל-Gemini בכל פעם (מכסה לדקה); שומר על השדות שלמעלה ועל last
+
 	mu        sync.Mutex
-	cache     map[string]string // itemKey → התוספת להקראה ("" = אין / נכשל סופית)
+	pending   map[string]chan struct{} // ניתוח שרץ עכשיו ברקע (נסגר כשהוא מסתיים)
+	cache     map[string]string        // itemKey → התוספת להקראה ("" = אין / נכשל סופית)
 	tries     map[string]int
 	retryAt   map[string]time.Time // תקלה זמנית — מתי לנסות שוב את ההודעה
 	pausedTil time.Time
@@ -110,6 +122,7 @@ func newVisionClient(key, model, mode string, more ...string) *visionClient {
 		models:  models,
 		eps:     map[int]int{},
 		quota:   map[[2]int]time.Time{},
+		pending: map[string]chan struct{}{},
 		cache:   map[string]string{},
 		tries:   map[string]int{},
 		retryAt: map[string]time.Time{},
@@ -187,47 +200,89 @@ func (st *state) describePhotoRetry(cfg *config, it FeedItem, now time.Time) (st
 	}
 	key := itemKey(it)
 	v.mu.Lock()
+	if d, ok := v.cache[key]; ok {
+		v.mu.Unlock()
+		return d, false
+	}
+	if ch, ok := v.pending[key]; ok {
+		v.mu.Unlock()
+		return v.result(key, ch, 0) // כבר רץ ברקע — לא מחכים שוב
+	}
+	urls := photoURLs(it.HTML, cfg.feedURL)
+	if len(urls) == 0 {
+		v.mu.Unlock()
+		return "", false
+	}
+	if now.Sub(time.Unix(it.TS, 0)) > visionMaxAge {
+		v.mu.Unlock()
+		return "", false
+	}
+	if time.Now().Before(v.pausedTil) || time.Now().Before(v.retryAt[key]) {
+		v.mu.Unlock()
+		return "", true // לא נשמר במטמון — ננסה שוב אחר כך
+	}
+	ch := make(chan struct{})
+	v.pending[key] = ch
+	v.mu.Unlock()
+	go v.run(key, urls, cleanForSpeech(it.RawText), ch)
+	return v.result(key, ch, visionWait)
+}
+
+// result: מחכה לניתוח עד wait (0 = בלי לחכות), ומחזיר מה שיש.
+func (v *visionClient) result(key string, ch chan struct{}, wait time.Duration) (string, bool) {
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		select {
+		case <-ch:
+		case <-t.C:
+		}
+		t.Stop()
+	}
+	v.mu.Lock()
 	defer v.mu.Unlock()
 	if d, ok := v.cache[key]; ok {
 		return d, false
 	}
-	urls := photoURLs(it.HTML, cfg.feedURL)
-	if len(urls) == 0 {
-		return "", false
-	}
-	if now.Sub(time.Unix(it.TS, 0)) > visionMaxAge {
-		return "", false
-	}
-	if time.Now().Before(v.pausedTil) || time.Now().Before(v.retryAt[key]) {
-		return "", true // לא נשמר במטמון — ננסה שוב אחר כך
-	}
+	return "", true // עוד רץ, או תקלה זמנית — התיאור יתווסף אחר כך (retryPhotos)
+}
+
+// run: הניתוח עצמו, ברקע. בקשה אחת בכל פעם, עם הפסקה בין בקשות.
+func (v *visionClient) run(key string, urls []string, msgText string, ch chan struct{}) {
+	v.callMu.Lock()
 	if wait := visionGap - time.Since(v.last); wait > 0 {
 		time.Sleep(wait)
 	}
 	v.last = time.Now()
-	desc, text, err := v.analyze(urls, cleanForSpeech(it.RawText))
+	desc, text, err := v.analyze(urls, msgText)
+	v.callMu.Unlock()
+
+	v.mu.Lock()
+	defer func() {
+		delete(v.pending, key)
+		v.mu.Unlock()
+		close(ch)
+	}()
 	if err != nil {
 		v.tries[key]++
 		var pe *visionPauseErr
 		if errors.As(err, &pe) {
 			v.pausedTil = time.Now().Add(visionPause)
 			v.warnOnce("pause:"+pe.why, "ניתוח תמונות: "+pe.why+" — ממשיך בלי תיאור, ומנסה שוב בעוד "+visionPause.String()+" (התיאור יתווסף להודעות שחיכו).")
-			return "", true
+			return
 		}
 		log.Printf("ניתוח תמונה %s נכשל (%d/%d): %v", key, v.tries[key], visionTries, err)
 		if v.tries[key] >= visionTries {
 			v.cache[key] = ""
-			return "", false
+			return
 		}
 		v.retryAt[key] = time.Now().Add(visionRetry)
-		return "", true
+		return
 	}
 	out := spokenPhoto(desc, text, len(urls) > 1)
 	v.cache[key] = out
 	if out != "" {
 		log.Printf("ניתוח תמונה %s: %.120s", key, out)
 	}
-	return out, false
 }
 
 // spokenPhoto: "בתמונה: <תיאור>. כתוב בתמונה: <טקסט>." (אלבום: "בתמונות").
@@ -320,6 +375,7 @@ func (v *visionClient) analyze(urls []string, msgText string) (desc, text string
 // סוף הסיפור: מנסים מודל אחר, ואז מפתח אחר. הפסקה רק כשכולם במכסה.
 func (v *visionClient) generate(body []byte) (string, error) {
 	now := time.Now()
+	start := now
 	var lastErr, busyErr error
 	quota, tried := false, false
 	for i := range v.keys {
@@ -339,6 +395,9 @@ func (v *visionClient) generate(body []byte) (string, error) {
 				if until, ok := v.quota[[2]int{k, m}]; ok && now.Before(until) {
 					quota = true
 					continue
+				}
+				if busyErr != nil && time.Since(start) > visionBudget {
+					return "", busyErr // עומס — לא ממשיכים לנסות לנצח; ננסה שוב בעוד כמה דקות
 				}
 				tried = true
 				out, status, err := v.callKey(k, e, m, body)
@@ -405,7 +464,12 @@ func (v *visionClient) callKey(k, endpoint, model int, body []byte) (string, int
 	req.Header.Set("x-goog-api-key", key)
 	resp, err := v.client.Do(req)
 	if err != nil {
-		return "", 0, errors.New(strings.ReplaceAll(err.Error(), key, "***"))
+		status := 0
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			status = http.StatusGatewayTimeout // לא ענו בזמן (עומס) — כמו 504: מודל אחר
+		}
+		return "", status, errors.New(strings.ReplaceAll(err.Error(), key, "***"))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
