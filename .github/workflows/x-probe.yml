@@ -1,0 +1,47 @@
+name: X sources probe (temporary)
+on:
+  workflow_dispatch: {}
+  push:
+    paths: [".github/workflows/x-probe.yml"]
+permissions:
+  issues: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=/tmp/probe.md
+          echo "# בדיקת מקורות לטוויטר — $(date -u)" > $out
+          echo '```' >> $out
+          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129 Safari/537.36"
+          for round in 1 2 3; do
+            echo "== סבב $round" >> $out
+            for h in meiretingr ariel__danino; do
+              r=$(curl -s -m 20 -A "$UA" -o /tmp/fx.json -w "%{http_code} %{time_total}" "https://api.fxtwitter.com/2/profile/$h/statuses")
+              n=$(grep -o '"type":"status"' /tmp/fx.json | wc -l)
+              echo "fxtwitter $h: $r statuses=$n" >> $out
+              for inst in nitter.jaydenha.uk nitter.meowing.monster nitter.tiekoetter.com nitter.netbub.com nitter.privacyredirect.com nitter.poast.org nitter.space lightbrd.com nitter.kuuro.net nitter.catsarch.com nitter.net xcancel.com twiiit.com; do
+                r=$(curl -sL -m 20 -A "$UA" -o /tmp/n.xml -w "%{http_code} %{time_total}" "https://$inst/$h/rss")
+                items=$(grep -c "<item>" /tmp/n.xml)
+                first=$(grep -o "<pubDate>[^<]*" /tmp/n.xml | sed -n 2p)
+                head=$(head -c 80 /tmp/n.xml | tr -d '\n')
+                echo "  $inst $h: $r items=$items $first | $head" >> $out
+              done
+            done
+            [ $round -lt 3 ] && sleep 120
+          done
+          # דוגמה מלאה מהמקור הראשון שעובד
+          for inst in nitter.jaydenha.uk nitter.meowing.monster nitter.tiekoetter.com nitter.netbub.com nitter.privacyredirect.com nitter.poast.org nitter.space lightbrd.com; do
+            if curl -sL -m 20 -A "$UA" -o /tmp/n.xml "https://$inst/meiretingr/rss" && grep -q "<item>" /tmp/n.xml; then
+              echo "== דוגמה מ-$inst" >> $out
+              head -c 6000 /tmp/n.xml >> $out
+              echo >> $out
+              break
+            fi
+          done
+          echo '```' >> $out
+          gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
