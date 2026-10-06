@@ -1,0 +1,35 @@
+name: Menu check (temporary)
+on: workflow_dispatch
+permissions:
+  contents: read
+  issues: write
+  actions: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check menu
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          K: ${{ secrets.YEMOT_API_KEY }}
+        run: |
+          set +e
+          Y=https://www.call2all.co.il/ym/api
+          rd() { curl -s -H "Authorization: $K" --data-urlencode "what=ivr2:/$1" "$Y/GetTextFile" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("contents",""))' 2>&1 | head -c 600; }
+          { echo "# בדיקת תפריט — $(date -u)"; echo '```'
+          for f in 2/M1000.tts 2/M1000-spoken.txt 2/ext.ini 2/4/99999-spoken.txt 2/4/ext.ini 2/5/99999-spoken.txt 3/M1000-spoken.txt; do echo "== $f: $(rd $f)"; done
+          for d in 2 2/4 3; do echo "== dir $d:"; curl -s -H "Authorization: $K" --data-urlencode "path=ivr2:/$d" "$Y/GetIVR2Dir" | python3 -c '
+          import sys,json
+          d=json.load(sys.stdin)
+          print("dirs",[x.get("name") for x in d.get("dirs") or []])
+          print("files",[x.get("name") for x in (d.get("files") or [])+(d.get("ini") or []) if not x.get("name","")[:1].isdigit() or x.get("name","").startswith("99999")])'; done
+          for R in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/bridge.yml/runs?per_page=3" --jq '.workflow_runs[].id'); do
+            J=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$R/jobs" --jq '.jobs[0].id')
+            curl -sSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/jobs/$J/logs" -o log.txt
+            echo "== הפעלה $R: $(wc -l < log.txt) שורות"
+            grep -E 'תפריט בחירת כתב|2/4|ayeletlash|איילת|כותרת|קול מוכן: f' log.txt | grep -v 'שלוחה 2/4 / ' | cut -c1-260 | tail -25
+          done
+          echo '```'; } > report.md
+          num=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=50" --jq '.[] | select(.title=="בדיקת קול (זמני)") | .number' | head -1)
+          gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" -F body=@report.md --jq .html_url
