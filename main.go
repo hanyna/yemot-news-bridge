@@ -1041,7 +1041,9 @@ func isSystemFile(name string) bool {
 // isBridgeFile: קבצים שהגשר עצמו יוצר בשלוחה — ext.ini, NNN.tts (המבנה הקודם),
 // קבצי הארכיון (NNNNN.tts / NNNNN.wav) והאינדקס שלו.
 func isBridgeFile(name string) bool {
-	n := strings.ToLower(name)
+	// "~10179.wav": ימות המשיח שומרים כך עותק של קובץ שהוחלף או נמחק בזמן
+	// האזנה. זה קובץ של הגשר — לא סיבה לחסום את השלוחה (וככה הכתב נעלם מהתפריט).
+	n := strings.TrimLeft(strings.ToLower(name), "~")
 	if n == "ext.ini" || n == archiveIndex || n == podcastIndex || strings.HasSuffix(n, spokenSuffix) {
 		return true
 	}

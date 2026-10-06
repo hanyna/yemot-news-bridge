@@ -12,3 +12,14 @@ func TestMain(m *testing.M) {
 	archStride = 2
 	os.Exit(m.Run())
 }
+
+func TestBridgeFileTilde(t *testing.T) {
+	for _, n := range []string{"~10179.wav", "~10179.tts", "10179.tts"} {
+		if !isBridgeFile(n) {
+			t.Errorf("%s should be a bridge file", n)
+		}
+	}
+	if isBridgeFile("~song.mp3") {
+		t.Error("foreign file")
+	}
+}
