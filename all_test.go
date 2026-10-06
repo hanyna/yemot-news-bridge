@@ -1796,6 +1796,16 @@ func TestEpisodes(t *testing.T) {
 	if f.mediaHits != hits || f.has("ivr2:/3/2", "10000.wav") || f.has("ivr2:/3/2", "10001.tts") || !f.has("ivr2:/3/2", "10002.wav") {
 		t.Fatalf("after removal: downloads %d→%d, files %v", hits, f.mediaHits, f.dirs["ivr2:/3/2"])
 	}
+	// כתבה: רק ההקראה, בלי קובץ שמע ובלי הורדה.
+	art := "נוער הגבעות | 2023-08-15 | טקסט: מאת אריאל דנינו. תקציר הכתבה."
+	cfg.podcasts = withEpisodes(parsePodcasts("חושבים בקול של הקול היהודי | "+srv.URL+"/rss/pod"), parseEpisodes(strings.Split(list, "\n")[0]+"\n"+art), "", 2)
+	hits = f.mediaHits
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if fl["ivr2:/3/2/10005.tts"] != "כתבה: נוער הגבעות. פורסמה ב 15 באוגוסט 2023. מאת אריאל דנינו. תקציר הכתבה." || f.has("ivr2:/3/2", "10004.wav") || f.mediaHits != hits {
+		t.Fatalf("article: %q %v", fl["ivr2:/3/2/10005.tts"], f.dirs["ivr2:/3/2"])
+	}
 	if got := withEpisodes(nil, parseEpisodes(list), "x", 2); len(got) != 1 || got[0].url != episodesURL {
 		t.Fatalf("no series: %+v", got)
 	}

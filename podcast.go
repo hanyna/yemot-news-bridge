@@ -59,6 +59,7 @@ const episodesURL = "episodes:"
 
 // parseEpisodes: שורה לכל פרק בודד — "שם הפרק | קישור לקובץ השמע",
 // או "שם הפרק | 2026-03-08 | קישור" (עם תאריך הפרסום).
+// כתבה (מוקראת): "שם הכתבה | 2026-03-08 | טקסט: התקציר שיוקרא".
 func parseEpisodes(s string) []*podEpisode {
 	var out []*podEpisode
 	for _, line := range strings.Split(s, "\n") {
@@ -68,11 +69,15 @@ func parseEpisodes(s string) []*podEpisode {
 		}
 		f := strings.Split(line, "|")
 		link := strings.TrimSpace(f[len(f)-1])
-		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+		text := ""
+		if t, ok := strings.CutPrefix(link, "טקסט:"); ok {
+			text, link = strings.TrimSpace(t), ""
+		}
+		if text == "" && !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
 			log.Printf("הערה: שורה ב-EPISODES בלי קישור לקובץ שמע — מדלג: %q", line)
 			continue
 		}
-		e := &podEpisode{src: link}
+		e := &podEpisode{src: link, text: text}
 		if len(f) > 1 {
 			e.title = strings.TrimSpace(f[0])
 		}
@@ -84,7 +89,11 @@ func parseEpisodes(s string) []*podEpisode {
 			}
 		}
 		h := fnv.New64a()
-		h.Write([]byte(link))
+		if text != "" {
+			h.Write([]byte("text:" + e.title + "\n" + text))
+		} else {
+			h.Write([]byte(link))
+		}
 		e.id = fmt.Sprintf("%016x", h.Sum64())
 		out = append(out, e)
 	}
@@ -143,7 +152,8 @@ type podEpisode struct {
 	title  string
 	secs   int
 	src    string
-	queued bool // נכנס לתור בהפעלה הזו
+	text   string // כתבה (EPISODES עם "טקסט:"): מוקראת, בלי קובץ שמע
+	queued bool   // נכנס לתור בהפעלה הזו
 }
 
 type podcast struct {
@@ -406,7 +416,7 @@ func (p *podcast) sync(cfg *config, st *state, now time.Time, keep int) {
 	}
 	for _, e := range p.eps { // הפרטים מההזנה — להקראה ולתור
 		if f, ok := inFeed[e.id]; ok {
-			e.title, e.secs, e.src = f.title, f.secs, f.src
+			e.title, e.secs, e.src, e.text = f.title, f.secs, f.src, f.text
 		} else if e.state == podQueued {
 			e.state, p.dirty = podFailed, true // הפרק ירד מההזנה לפני שהקול שלו עלה
 		}
@@ -428,6 +438,9 @@ func (p *podcast) sync(cfg *config, st *state, now time.Time, keep int) {
 			break
 		}
 		f.base, f.state = p.next, podQueued
+		if f.text != "" {
+			f.state = podAudio // כתבה: אין קול להוריד — רק ההקראה
+		}
 		p.next += 2
 		p.eps[f.id] = f
 		if f.ts > p.last {
@@ -568,6 +581,18 @@ func (p *podcast) rotate(cfg *config, keep int) {
 
 // podcastIntro: "<שם הפרק>. פורסם ב 8 בספטמבר, באורך 44 דקות."
 func podcastIntro(p *podcast, e *podEpisode, loc *time.Location) string {
+	if e.text != "" {
+		s := "כתבה: " + cleanForSpeech(e.title)
+		if e.ts > 0 {
+			t := time.Unix(e.ts, 0).In(loc)
+			s += fmt.Sprintf(". פורסמה ב %d %s %d", t.Day(), months[t.Month()], t.Year())
+		}
+		s += ". " + strings.TrimRight(cleanForSpeech(e.text), ". ") + "."
+		if r := []rune(s); len(r) > maxPerFile {
+			s = cutAtWord(r[:maxPerFile]) + "."
+		}
+		return s
+	}
 	title := cleanForSpeech(e.title)
 	if title == "" {
 		title = "פרק מתוך " + p.name()
