@@ -51,6 +51,7 @@ type xAcct struct {
 	handle  string // כמו שנכתב ב-X_ACCOUNTS
 	title   string // השם שמוצג בטוויטר (העברי)
 	items   map[int]FeedItem
+	skip    map[int]bool // ציוצים מ-Nitter ש-FxTwitter הראה שלא נכנסים (תגובה לאחרים)
 	nextTry time.Time
 	fails   int
 	lastErr string
@@ -67,6 +68,10 @@ type xSource struct {
 	mu      sync.Mutex
 	last    time.Time
 	lastLog time.Time
+
+	nitterOK  bool
+	nitterCur int                  // ה-Nitter שעבד בפעם האחרונה (אינדקס ב-xNitterHosts) — xnitter.go
+	nitterBad map[string]time.Time // Nitter שנכשל → עד מתי לא לנסות אותו
 }
 
 // isXChannel: ערוץ בקו שהוא חשבון טוויטר.
@@ -77,7 +82,7 @@ func newXSource(list, base string) *xSource {
 	if b := strings.TrimRight(strings.TrimSpace(base), "/"); b != "" {
 		xBase = b
 	}
-	s := &xSource{client: &http.Client{Timeout: 30 * time.Second}}
+	s := &xSource{client: &http.Client{Timeout: 30 * time.Second}, nitterBad: map[string]time.Time{}}
 	seen := map[string]bool{}
 	for _, f := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
 		h := xHandle(f)
@@ -85,7 +90,7 @@ func newXSource(list, base string) *xSource {
 			continue
 		}
 		seen[strings.ToLower(h)] = true
-		s.accts = append(s.accts, &xAcct{handle: h, items: map[int]FeedItem{}})
+		s.accts = append(s.accts, &xAcct{handle: h, items: map[int]FeedItem{}, skip: map[int]bool{}})
 	}
 	if len(s.accts) == 0 {
 		return nil
@@ -258,18 +263,25 @@ func xItem(t *xStatus, channel string) (FeedItem, bool) {
 // ---------------------------------------------------------------------------
 
 func (s *xSource) get(path string) ([]byte, int, error) {
-	s.mu.Lock()
-	if wait := xGap - time.Since(s.last); wait > 0 {
-		time.Sleep(wait)
+	return s.getURL(xBase+path, "yemot-news-bridge (phone news line; https://github.com/hanyna/yemot-news-bridge)", "application/json", true)
+}
+
+// getURL: בקשה אחת. gap — לשמור הפסקה מינימלית בין בקשות לאותו שירות (FxTwitter).
+func (s *xSource) getURL(u, ua, accept string, gap bool) ([]byte, int, error) {
+	if gap {
+		s.mu.Lock()
+		if wait := xGap - time.Since(s.last); wait > 0 {
+			time.Sleep(wait)
+		}
+		s.last = time.Now()
+		s.mu.Unlock()
 	}
-	s.last = time.Now()
-	s.mu.Unlock()
-	req, err := http.NewRequest(http.MethodGet, xBase+path, nil)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("User-Agent", "yemot-news-bridge (phone news line; https://github.com/hanyna/yemot-news-bridge)")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", accept)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -279,8 +291,18 @@ func (s *xSource) get(path string) ([]byte, int, error) {
 	return body, resp.StatusCode, err
 }
 
-// fetch: הציוצים האחרונים של חשבון אחד.
+// fetch: הציוצים האחרונים של חשבון אחד — משני מקורות: FxTwitter ו-Nitter
+// (xnitter.go). כל אחד מהם לבד מספיק; יחד — לא מפספסים ציוצים.
 func (s *xSource) fetch(a *xAcct) error {
+	fxErr := s.fetchFx(a)
+	if s.fetchNitter(a) {
+		return nil
+	}
+	return fxErr
+}
+
+// fetchFx: הציוצים האחרונים של חשבון אחד מ-FxTwitter.
+func (s *xSource) fetchFx(a *xAcct) error {
 	body, code, err := s.get("/2/profile/" + url.PathEscape(a.handle) + "/statuses")
 	if err != nil {
 		return err
@@ -329,27 +351,38 @@ func (s *xSource) fetch(a *xAcct) error {
 		}
 	}
 	for i := range r.Results {
-		t := &r.Results[i]
-		if a.title == "" && strings.EqualFold(t.Author.ScreenName, a.handle) && t.Author.Name != "" {
-			a.title = hebrewTitle(t.Author.Name)
-		}
-		shared := !isNullJSON(t.RepostedBy) || !strings.EqualFold(t.Author.ScreenName, a.handle)
-		if !shared && t.replyToOther(a.handle) {
-			continue // תגובה לאחרים — לא נכנסת
-		}
-		if shared { // ריטוויט: "שיתף ציוץ של ..." ואחריו הציוץ
-			who := hebrewTitle(strings.TrimSpace(t.Author.Name))
-			if who == "" {
-				who = t.Author.ScreenName
-			}
-			c := *t
-			c.Text = "שיתף ציוץ של " + who + ": " + strings.TrimSpace(t.Text)
-			t = &c
-		}
-		if it, ok := xItem(t, a.channel()); ok {
-			a.items[it.ID] = it
-		}
+		s.addStatus(a, &r.Results[i])
 	}
+	a.trimItems()
+	return nil
+}
+
+// addStatus: ציוץ אחד מ-FxTwitter → לזיכרון של החשבון (ריטוויט: "שיתף ציוץ של ...";
+// תגובה לאחרים — לא נכנסת).
+func (s *xSource) addStatus(a *xAcct, t *xStatus) {
+	if a.title == "" && strings.EqualFold(t.Author.ScreenName, a.handle) && t.Author.Name != "" {
+		a.title = hebrewTitle(t.Author.Name)
+	}
+	shared := !isNullJSON(t.RepostedBy) || !strings.EqualFold(t.Author.ScreenName, a.handle)
+	if !shared && t.replyToOther(a.handle) {
+		return // תגובה לאחרים — לא נכנסת
+	}
+	if shared { // ריטוויט: "שיתף ציוץ של ..." ואחריו הציוץ
+		who := hebrewTitle(strings.TrimSpace(t.Author.Name))
+		if who == "" {
+			who = t.Author.ScreenName
+		}
+		c := *t
+		c.Text = "שיתף ציוץ של " + who + ": " + strings.TrimSpace(t.Text)
+		t = &c
+	}
+	if it, ok := xItem(t, a.channel()); ok {
+		a.items[it.ID] = it
+	}
+}
+
+// trimItems: רק xKeep הציוצים האחרונים נשמרים בזיכרון.
+func (a *xAcct) trimItems() {
 	if len(a.items) > xKeep {
 		ids := make([]int, 0, len(a.items))
 		for id := range a.items {
@@ -360,7 +393,6 @@ func (s *xSource) fetch(a *xAcct) error {
 			delete(a.items, id)
 		}
 	}
-	return nil
 }
 
 // poll: בודק את החשבונות שהגיע זמנם, ומחזיר את כל הציוצים שבזיכרון ואת

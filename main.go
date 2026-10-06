@@ -190,6 +190,7 @@ func main() {
 	default:
 		log.Println("מקור ההודעות: שרת ערוץ חי (SOURCE=server).")
 	}
+	setNitterHosts(os.Getenv("X_NITTER")) // מקור שני לטוויטר — xnitter.go
 	cfg.x = newXSource(os.Getenv("X_ACCOUNTS"), os.Getenv("X_API"))
 	if cfg.x != nil {
 		log.Printf("טוויטר: %d חשבונות, כל חשבון נבדק בערך כל %v (דרך %s, בלי חשבון).", len(cfg.x.accts), cfg.x.every, xBase)

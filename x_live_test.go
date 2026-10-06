@@ -18,7 +18,8 @@ func TestXLive(t *testing.T) {
 	if list == "" {
 		t.Skip("X_LIVE לא מוגדר")
 	}
-	s := newXSource(list, "")
+	setNitterHosts(os.Getenv("X_NITTER"))
+	s := newXSource(list, os.Getenv("X_API"))
 	items, chans := s.poll(time.Now())
 	for _, a := range s.accts {
 		fmt.Printf("\n## %s — שם: %q, ציוצים שנכנסים לקו: %d, תקלה: %q\n", a.handle, a.title, len(a.items), a.lastErr)

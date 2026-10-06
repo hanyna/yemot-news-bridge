@@ -40,12 +40,13 @@ func TestXHandle(t *testing.T) {
 
 // fakeX: שירות מדומה בצורה של api.fxtwitter.com.
 type fakeX struct {
-	mu       sync.Mutex
-	statuses map[string]string // handle → JSON של /2/profile/<h>/statuses
-	profiles map[string]string // handle → JSON של /<h>
-	media    map[string]string // handle → JSON של /2/profile/<h>/media
-	status   int               // != 0 — כל בקשה מחזירה את הקוד הזה
-	calls    int
+	mu         sync.Mutex
+	statuses   map[string]string // handle → JSON של /2/profile/<h>/statuses
+	profiles   map[string]string // handle → JSON של /<h>
+	media      map[string]string // handle → JSON של /2/profile/<h>/media
+	statusByID map[string]string // id → JSON של /2/status/<id>
+	status     int               // != 0 — כל בקשה מחזירה את הקוד הזה
+	calls      int
 }
 
 func (f *fakeX) handler(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +58,14 @@ func (f *fakeX) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := strings.Trim(r.URL.Path, "/")
+	if strings.HasPrefix(p, "2/status/") {
+		if b, ok := f.statusByID[strings.TrimPrefix(p, "2/status/")]; ok {
+			w.Write([]byte(b))
+			return
+		}
+		w.WriteHeader(404)
+		return
+	}
 	if strings.HasPrefix(p, "2/profile/") && strings.HasSuffix(p, "/media") {
 		if b, ok := f.media[strings.TrimSuffix(strings.TrimPrefix(p, "2/profile/"), "/media")]; ok {
 			w.Write([]byte(b))
