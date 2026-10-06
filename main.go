@@ -392,6 +392,7 @@ func syncOnce(cfg *config, st *state) error {
 		chs, err = fetchChannels(cfg.client, cfg.feedURL, cfg.feedKey)
 		if err == nil {
 			chs = append(chs, xChans...)
+			chs = withTgChannels(chs, cfg.tg)
 		}
 	}
 	if err == nil {
@@ -455,6 +456,10 @@ func syncOnce(cfg *config, st *state) error {
 				continue
 			}
 			name := speakerName(ch.Name, titles)
+			// השלוחה קיימת — הכתב נשאר בתפריט גם כשהעדכון שלה נכשל בסבב הזה
+			// (תקלה זמנית). אחרת התפריט משתנה, והקול שלו נוצר מחדש בלי הכתב.
+			n, _ := strconv.Atoi(strings.TrimPrefix(ext, chooseExt+"/"))
+			choices = append(choices, choice{n, fmt.Sprintf("ל%s הקישו %d.", updatesOf(name), n)})
 			a, err := st.archiveFor(cfg, ext, ch.Name, false, now)
 			if err != nil {
 				log.Printf("הערה: הארכיון של שלוחה %s (%s) לא נטען: %v", ext, name, err)
@@ -472,8 +477,6 @@ func syncOnce(cfg *config, st *state) error {
 				continue
 			}
 			a.rerender(cfg, now, &budget)
-			n, _ := strconv.Atoi(strings.TrimPrefix(ext, chooseExt+"/"))
-			choices = append(choices, choice{n, fmt.Sprintf("ל%s הקישו %d.", updatesOf(name), n)})
 		}
 	}
 	sort.Slice(choices, func(i, j int) bool { return choices[i].n < choices[j].n })
@@ -1364,4 +1367,22 @@ func envInt(key string, fallback int) int {
 		return n
 	}
 	return fallback
+}
+
+// withTgChannels: בזמן גיבוי דרך שרת ערוץ חי — גם הערוצים שב-CHANNELS שהשרת לא
+// מכיר. אחרת כתב נעלם מתפריט בחירת הכתב בכל פעם שטלגרם חוסמים לזמן מה.
+func withTgChannels(chs []Channel, tg *tgSource) []Channel {
+	if tg == nil {
+		return chs
+	}
+	have := map[string]bool{}
+	for _, c := range chs {
+		have[strings.ToLower(c.Name)] = true
+	}
+	for _, c := range tg.chans {
+		if !have[strings.ToLower(c.name)] {
+			chs = append(chs, Channel{Name: c.name, Title: c.title})
+		}
+	}
+	return chs
 }

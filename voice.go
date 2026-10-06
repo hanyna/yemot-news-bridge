@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,12 +46,12 @@ var speechModels = []string{"gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts",
 var speechEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 
 const (
-	speechTries      = 3                // ניסיונות לכל קובץ
-	speechDayPause   = time.Hour        // מודל שהגיע למכסה היומית — לא מנסים אותו לפני כן
-	speechBusyPause  = 30 * time.Second // כל המודלים עמוסים — הפסקה קצרה
-	speechRequeueAge = 6 * time.Hour    // אחרי הפעלה מחדש: הודעות מהשעות האחרונות בלי קול — חוזרות לתור
-	speechRequeueMax = 20               // כמה לכל היותר בכל שלוחה
-	speechTimeout    = 5 * time.Minute  // בקשה אחת (הודעה ארוכה במלואה לוקחת כמה דקות)
+	speechTries      = 3                   // ניסיונות לכל קובץ
+	speechDayPause   = time.Hour           // מודל שהגיע למכסה היומית — לא מנסים אותו לפני כן
+	speechBusyPause  = 30 * time.Second    // כל המודלים עמוסים — הפסקה קצרה
+	speechRequeueAge = 14 * 24 * time.Hour // אחרי הפעלה מחדש: הודעות בלי קול (עד שבועיים אחורה) — חוזרות לתור, מהחדשה לישנה
+	speechRequeueMax = 40                  // כמה לכל היותר בכל שלוחה בכל הפעלה
+	speechTimeout    = 5 * time.Minute     // בקשה אחת (הודעה ארוכה במלואה לוקחת כמה דקות)
 )
 
 // speechFile: קובץ הקול של ההקראה (אותו מספר כמו introFile, בסיומת wav).
@@ -66,10 +67,10 @@ const fullSuffix = "-full.txt"
 // speechMaxChars: עד כמה תווים הקול מקריא (הודעה ארוכה מזה — נחתכת גם בקול).
 const speechMaxChars = 4000
 
-// audioItem: טקסט הקול של הודעה — הזמן כיום בשבוע, כדי שלא יתיישן בחצות.
+// audioItem: טקסט הקול של הודעה — הזמן כיום בשבוע ותאריך, כדי שלא יתיישן לעולם.
 func audioItem(it FeedItem, titles map[string]string, loc *time.Location, withName bool) string {
 	t := time.Unix(it.TS, 0).In(loc)
-	head := itemHead(it.Channel, t, whenThisWeek, titles, withName)
+	head := itemHead(it.Channel, t, whenVoice, titles, withName)
 	body := it.Text
 	const cutNote = " המשך ההודעה לא הוקרא."
 	room := speechMaxChars - len([]rune(head)) - len([]rune(cutNote))
@@ -456,6 +457,15 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 			}
 			data, status, err := s.callKey(key, model, body)
 			if err == nil {
+				err = speechLengthCheck(text, data)
+				if err != nil {
+					// המודל דילג על חלק מהטקסט (או חזר על עצמו) — המודל הבא
+					log.Printf("הערה: %s: %v", model, err)
+					lastErr, allQuota = fmt.Errorf("%s: %w", model, err), false
+					continue
+				}
+			}
+			if err == nil {
 				if len(s.keys) > 1 {
 					model = fmt.Sprintf("%s, מפתח %d", model, k+1)
 				}
@@ -661,8 +671,8 @@ func (st *state) speechTick(cfg *config) {
 			continue
 		}
 		a.addFile(speechFile(r.base))
-		if !e.voiced {
-			e.voiced, a.dirty = true, true
+		if !e.voiced || !e.lasting {
+			e.voiced, e.lasting, a.dirty = true, true, true
 		}
 	}
 }
@@ -709,6 +719,8 @@ func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string
 		return
 	}
 	a.spoken = true
+	items = append([]FeedItem(nil), items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].TS > items[j].TS }) // מהחדשה לישנה
 	n := 0
 	for _, it := range items {
 		e := a.entries[itemKey(it)]
@@ -721,7 +733,7 @@ func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string
 			// ההקראה בשלוחה כוללת את תיאור התמונה (Gemini), וההודעה מהטלגרם לא —
 			// הקול נבנה מההקראה, כדי שהתיאור לא ייעלם אחרי הפעלה מחדש.
 			if old, exists, err := cfg.y.read(a.ext, introFile(e.base)); err == nil && exists && strings.Contains(old, "בתמונ") {
-				if t, ok := replaceWhen(old, time.Unix(e.ts, 0).In(cfg.loc), e.class, whenThisWeek); ok {
+				if t, ok := replaceWhen(old, time.Unix(e.ts, 0).In(cfg.loc), e.class, whenVoice); ok {
 					text = t
 				}
 			}
@@ -831,4 +843,32 @@ func retryAfter(raw []byte) time.Duration {
 		}
 	}
 	return time.Minute
+}
+
+// speechLengthCheck: משתנה — בבדיקות הקול המזויף קצר מאוד, ולכן הבדיקה מכובה שם.
+var speechLengthCheck = checkSpeechLength
+
+// גבולות סבירים לקצב ההקראה בעברית (תווים לשנייה, כולל רווחים). קול מהיר מזה —
+// המודל דילג על חלק מהטקסט; איטי מזה — חזר על עצמו או נתקע.
+const (
+	speechMaxCPS  = 24.0
+	speechMinCPS  = 3.0
+	speechCheckAt = 40 // טקסט קצר מזה — לא בודקים
+)
+
+// checkSpeechLength: האם אורך הקול מתאים לאורך הטקסט.
+func checkSpeechLength(text string, wav []byte) error {
+	n := len([]rune(strings.TrimSpace(text)))
+	sec, err := wavSeconds(wav)
+	if n < speechCheckAt || err != nil || sec <= 0 {
+		return nil
+	}
+	cps := float64(n) / sec
+	switch {
+	case cps > speechMaxCPS:
+		return fmt.Errorf("הקול קצר מדי (%.0f שניות ל-%d תווים) — חלק מהטקסט לא הוקרא", sec, n)
+	case cps < speechMinCPS:
+		return fmt.Errorf("הקול ארוך מדי (%.0f שניות ל-%d תווים)", sec, n)
+	}
+	return nil
 }

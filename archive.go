@@ -86,14 +86,15 @@ const (
 )
 
 type archEntry struct {
-	key    string // ערוץ/מזהה ההודעה
-	base   int    // -1: דילגנו על ההודעה (ההעלאה נכשלה שוב ושוב)
-	ts     int64
-	class  int    // ניסוח הזמן שבהקראה שבשלוחה (whenClass)
-	audio  int    // audioNone / audioPending / audioDone / audioNo
-	media  string // "v" סרטון, "o" הודעה קולית, "" אין
-	voiced bool   // יש לה קול מוכן בניסוח "ביום שישי..." (voice.go) — לא מתיישן בחצות
-	photo  bool   // יש בה תמונה שעוד לא קיבלה תיאור (תקלה זמנית ב-Gemini) — retryPhotos
+	key     string // ערוץ/מזהה ההודעה
+	base    int    // -1: דילגנו על ההודעה (ההעלאה נכשלה שוב ושוב)
+	ts      int64
+	class   int    // ניסוח הזמן שבהקראה שבשלוחה (whenClass)
+	audio   int    // audioNone / audioPending / audioDone / audioNo
+	media   string // "v" סרטון, "o" הודעה קולית, "" אין
+	voiced  bool   // יש לה קול מוכן בניסוח "ביום שישי..." (voice.go) — לא מתיישן בחצות
+	lasting bool   // הקול המוכן בניסוח עם תאריך ("ביום שלישי, 6 באוקטובר...") — לא נמחק לעולם
+	photo   bool   // יש בה תמונה שעוד לא קיבלה תיאור (תקלה זמנית ב-Gemini) — retryPhotos
 }
 
 type archive struct {
@@ -239,6 +240,7 @@ func parseArchive(txt string) archiveFile {
 			if len(p) > 7 { // דגלים: w — קול מוכן ביום בשבוע, p — תמונה שמחכה לתיאור
 				e.voiced = strings.Contains(p[7], "w")
 				e.photo = strings.Contains(p[7], "p")
+				e.lasting = strings.Contains(p[7], "d")
 			}
 			f.entries[e.key] = e
 		}
@@ -280,6 +282,9 @@ func (a *archive) encode(now time.Time) string {
 		voice := ""
 		if e.voiced {
 			voice = "w" // קול מוכן בניסוח יום בשבוע (voice.go)
+		}
+		if e.lasting {
+			voice += "d" // הקול בניסוח עם תאריך — נשאר לתמיד
 		}
 		if e.photo {
 			voice += "p" // תמונה שמחכה לתיאור (vision.go)
@@ -520,7 +525,7 @@ func (a *archive) retryPhotos(cfg *config, st *state, items []FeedItem, titles m
 		e.class = whenClass(time.Unix(e.ts, 0).In(cfg.loc), now)
 		if a.hasFile(speechFile(e.base)) {
 			if err := a.dropFile(cfg, speechFile(e.base)); err == nil {
-				e.voiced = false
+				e.voiced, e.lasting = false, false
 			}
 		}
 		cfg.speech.retext(e.key, e.ts, a.ext, e.base, audioItem(it, titles, cfg.loc, a.withName), a.withName)
@@ -704,8 +709,9 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 		}
 		e.class, a.dirty = c, true
 		// הקול: מגרסה קודמת ("היום"/"אתמול") — מתיישן, נמחק (מושמע הטקסט המעודכן).
-		// קול בניסוח יום בשבוע — נשאר עד שההודעה בת שבוע (אז הניסוח עובר לתאריך).
-		if a.hasFile(speechFile(e.base)) && (!e.voiced || c == whenDate) {
+		// קול בניסוח יום בשבוע — נשאר עד שההודעה בת שבוע. קול עם תאריך — לתמיד.
+		// קול שנמחק נוצר מחדש בניסוח עם תאריך (requeueSpeech).
+		if a.hasFile(speechFile(e.base)) && !e.lasting && (!e.voiced || c == whenDate) {
 			if err := a.dropFile(cfg, speechFile(e.base)); err != nil {
 				log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %s נכשלה: %v", speechFile(e.base), a.ext, err)
 			} else {

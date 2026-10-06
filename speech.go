@@ -182,6 +182,9 @@ const (
 	whenYesterday = 1
 	whenThisWeek  = 2
 	whenDate      = 7
+	// whenVoice: הניסוח שבקול המוכן — יום בשבוע וגם תאריך ("ביום שלישי, 6 באוקטובר,
+	// בשעה ..."). נכון לתמיד, ולכן הקול לא נמחק כשההודעה מתיישנת.
+	whenVoice = 8
 )
 
 func whenClass(t, now time.Time) int {
@@ -208,6 +211,8 @@ func whenText(t time.Time, class int) string {
 		return "אתמול " + clock
 	case whenThisWeek:
 		return "ביום " + weekdays[t.Weekday()] + " " + clock
+	case whenVoice:
+		return fmt.Sprintf("ביום %s, %d %s, %s", weekdays[t.Weekday()], t.Day(), months[t.Month()], clock)
 	default:
 		return fmt.Sprintf("ב %d %s %s", t.Day(), months[t.Month()], clock)
 	}
