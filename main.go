@@ -171,11 +171,12 @@ func main() {
 		adminRegister: envOr("ADMIN_TZINTUK_REGISTER", "off") == "on",
 		adminListen:   envOr("ADMIN_LISTEN_EXT", "4"),
 		exclude:       parseExclude(os.Getenv("EXCLUDE_CHANNELS")),
-		podcasts:      parsePodcasts(os.Getenv("PODCASTS")),
-		podcastExt:    envOr("PODCAST_EXT", "3"),
-		podcastKeep:   envInt("PODCAST_KEEP", 10),
-		client:        &http.Client{Timeout: 30 * time.Second},
-		feedClient:    &http.Client{Timeout: 90 * time.Second},
+		podcasts: withEpisodes(parsePodcasts(os.Getenv("PODCASTS")), parseEpisodes(os.Getenv("EPISODES")),
+			strings.TrimSpace(os.Getenv("EPISODES_NAME")), envInt("EPISODES_SLOT", 2)),
+		podcastExt:  envOr("PODCAST_EXT", "3"),
+		podcastKeep: envInt("PODCAST_KEEP", 10),
+		client:      &http.Client{Timeout: 30 * time.Second},
+		feedClient:  &http.Client{Timeout: 90 * time.Second},
 	}
 	apiKey := cleanKey(os.Getenv("YEMOT_API_KEY"))
 	cfg.tg = newTgSource(envOr("CHANNELS", defaultChannels), os.Getenv("SOURCE"))

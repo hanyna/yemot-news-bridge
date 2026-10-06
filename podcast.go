@@ -49,7 +49,68 @@ const (
 
 type podcastSource struct {
 	name string // בתפריט ובכותרת: "חושבים בקול של הקול היהודי" (ריק — השם מההזנה)
-	url  string // ההזנה (RSS)
+	url  string // ההזנה (RSS). בשלוחת הפרקים הבודדים: episodesURL
+	// פרקים בודדים (EPISODES): רשימה קבועה במקום הזנה. nil = פודקאסט רגיל.
+	static []*podEpisode
+}
+
+// episodesURL: ה"הזנה" של שלוחת הפרקים הבודדים (נשמר ב-podcast.txt שלה).
+const episodesURL = "episodes:"
+
+// parseEpisodes: שורה לכל פרק בודד — "שם הפרק | קישור לקובץ השמע",
+// או "שם הפרק | 2026-03-08 | קישור" (עם תאריך הפרסום).
+func parseEpisodes(s string) []*podEpisode {
+	var out []*podEpisode
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "|")
+		link := strings.TrimSpace(f[len(f)-1])
+		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+			log.Printf("הערה: שורה ב-EPISODES בלי קישור לקובץ שמע — מדלג: %q", line)
+			continue
+		}
+		e := &podEpisode{src: link}
+		if len(f) > 1 {
+			e.title = strings.TrimSpace(f[0])
+		}
+		if len(f) > 2 {
+			if t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(f[1]), time.FixedZone("IL", 3*3600)); err == nil {
+				e.ts = t.Add(12 * time.Hour).Unix()
+			} else {
+				log.Printf("הערה: תאריך לא מובן ב-EPISODES (צריך 2026-03-08): %q", f[1])
+			}
+		}
+		h := fnv.New64a()
+		h.Write([]byte(link))
+		e.id = fmt.Sprintf("%016x", h.Sum64())
+		out = append(out, e)
+	}
+	return out
+}
+
+// withEpisodes: שלוחת הפרקים הבודדים נכנסת למקום slot (2 = 3/2) ברשימת הפודקאסטים;
+// הסדרות ממלאות את שאר המספרים (3/1, 3/3, 3/4...).
+func withEpisodes(series []podcastSource, eps []*podEpisode, name string, slot int) []podcastSource {
+	if len(eps) == 0 {
+		return series
+	}
+	if name == "" {
+		name = "פרקים נבחרים"
+	}
+	src := podcastSource{name: name, url: episodesURL, static: eps}
+	i := slot - 1
+	if i < 0 {
+		i = 0
+	}
+	if i > len(series) {
+		i = len(series) // אין מספיק סדרות לפניה — המקום הפנוי הבא
+	}
+	out := append([]podcastSource(nil), series[:i]...)
+	out = append(out, src)
+	return append(out, series[i:]...)
 }
 
 // parsePodcasts: שורה לכל פודקאסט — "שם | קישור להזנה", או רק הקישור.
@@ -322,7 +383,18 @@ func (p *podcast) sync(cfg *config, st *state, now time.Time, keep int) {
 		return
 	}
 	p.checked = time.Now()
-	title, feed, err := fetchPodcast(p.src.url)
+	var title string
+	var feed []*podEpisode
+	var err error
+	if p.src.static != nil {
+		for _, e := range p.src.static {
+			c := *e
+			feed = append(feed, &c)
+		}
+		sort.SliceStable(feed, func(i, j int) bool { return feed[i].ts < feed[j].ts })
+	} else {
+		title, feed, err = fetchPodcast(p.src.url)
+	}
 	if err != nil {
 		log.Printf("הערה: ההזנה של הפודקאסט %s (שלוחה %s) לא נקראה — ננסה שוב בעוד %v: %v", p.name(), p.ext, podcastEvery, err)
 		return
@@ -342,11 +414,11 @@ func (p *podcast) sync(cfg *config, st *state, now time.Time, keep int) {
 	// פרקים חדשים: בהפעלה הראשונה — האחרונים; אחר כך — מה שחדש מהאחרון שנכנס.
 	var add []*podEpisode
 	for _, f := range feed {
-		if p.eps[f.id] == nil && (p.fresh || f.ts > p.last) {
+		if p.eps[f.id] == nil && (p.fresh || f.ts > p.last || p.src.static != nil) {
 			add = append(add, f)
 		}
 	}
-	if len(add) > keep {
+	if len(add) > keep && p.src.static == nil {
 		add = add[len(add)-keep:]
 	}
 	p.fresh = false
@@ -446,10 +518,24 @@ func (p *podcast) rotate(cfg *config, keep int) {
 			in = append(in, e)
 		}
 	}
-	if len(in) <= keep {
+	var old []*podEpisode
+	if p.src.static != nil {
+		// פרקים בודדים: נשארים כל מה שברשימה; פרק שהורד מ-EPISODES — נמחק מהשלוחה.
+		want := map[string]bool{}
+		for _, e := range p.src.static {
+			want[e.id] = true
+		}
+		for _, e := range in {
+			if !want[e.id] {
+				old = append(old, e)
+			}
+		}
+	} else if len(in) > keep {
+		old = in[:len(in)-keep]
+	}
+	if len(old) == 0 {
 		return
 	}
-	old := in[:len(in)-keep]
 	info, err := cfg.y.dir(p.ext)
 	if err != nil {
 		log.Printf("הערה: לא הצלחתי לבדוק את הקבצים בשלוחה %s (מחיקת פרקים ישנים): %v", p.ext, err)
@@ -477,7 +563,7 @@ func (p *podcast) rotate(cfg *config, keep int) {
 		delete(p.eps, e.id)
 	}
 	p.dirty = true
-	log.Printf("פודקאסט %s: נמחקו %d פרקים ישנים (נשמרים %d האחרונים).", p.name(), len(old), keep)
+	log.Printf("פודקאסט %s: נמחקו %d פרקים ישנים.", p.name(), len(old))
 }
 
 // podcastIntro: "<שם הפרק>. פורסם ב 8 בספטמבר, באורך 44 דקות."

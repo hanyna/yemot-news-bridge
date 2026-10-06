@@ -1755,3 +1755,51 @@ func TestPodcastWithRatingFile(t *testing.T) {
 		t.Fatalf("menu: %q", got)
 	}
 }
+
+// TestEpisodes: פרקים בודדים (EPISODES) בשלוחה 3/2, לצד סדרה ב-3/1. כל הפרקים
+// שברשימה נכנסים; פרק שהורד מהרשימה נמחק מהשלוחה; ואין הורדה כפולה.
+func TestEpisodes(t *testing.T) {
+	withFakeTranscode(t)
+	defer func(d time.Duration) { podcastEvery = d }(podcastEvery)
+	podcastEvery = 0
+	day, now := int64(24*3600), time.Now().Unix()
+	f := archiveServer(nil, `{"channels":[]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	f.rss = podcastRSS(srv.URL, now-day)
+	cfg := newTestCfg(srv)
+	list := "אלישע ירד בשיחה פתוחה | 2026-03-08 | " + srv.URL + "/ep/7.mp3\nשיחה שנייה | " + srv.URL + "/ep/8.mp3"
+	cfg.podcasts = withEpisodes(parsePodcasts("חושבים בקול של הקול היהודי | "+srv.URL+"/rss/pod"), parseEpisodes(list), "", 2)
+	cfg.podcastExt, cfg.podcastKeep = "3", 2
+	st := &state{}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	fl := f.files
+	if fl["ivr2:/3/M1000.tts"] != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1. לפרקים נבחרים הקישו 2." {
+		t.Fatalf("menu: %q", fl["ivr2:/3/M1000.tts"])
+	}
+	if fl["ivr2:/3/2/10000.wav"] != "AUDIO:MP3:EP-8.mp3;convert=1" || fl["ivr2:/3/2/10002.wav"] != "AUDIO:MP3:EP-7.mp3;convert=1" {
+		t.Fatalf("3/2: %v", f.dirs["ivr2:/3/2"])
+	}
+	if fl["ivr2:/3/2/10003.tts"] != "אלישע ירד בשיחה פתוחה. פורסם ב 8 במרץ." || fl["ivr2:/3/2/10001.tts"] != "שיחה שנייה." {
+		t.Fatalf("intros: %q | %q", fl["ivr2:/3/2/10003.tts"], fl["ivr2:/3/2/10001.tts"])
+	}
+	if fl["ivr2:/3/1/10000.wav"] == "" {
+		t.Fatalf("series still in 3/1: %v", f.dirs["ivr2:/3/1"])
+	}
+	hits := f.mediaHits
+	cfg.podcasts = withEpisodes(parsePodcasts("חושבים בקול של הקול היהודי | "+srv.URL+"/rss/pod"), parseEpisodes(strings.Split(list, "\n")[0]), "", 2)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.mediaHits != hits || f.has("ivr2:/3/2", "10000.wav") || f.has("ivr2:/3/2", "10001.tts") || !f.has("ivr2:/3/2", "10002.wav") {
+		t.Fatalf("after removal: downloads %d→%d, files %v", hits, f.mediaHits, f.dirs["ivr2:/3/2"])
+	}
+	if got := withEpisodes(nil, parseEpisodes(list), "x", 2); len(got) != 1 || got[0].url != episodesURL {
+		t.Fatalf("no series: %+v", got)
+	}
+	if got := withEpisodes(parsePodcasts("https://a/feed"), nil, "", 2); len(got) != 1 || got[0].static != nil {
+		t.Fatal("no episodes")
+	}
+}
