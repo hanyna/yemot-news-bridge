@@ -14,13 +14,21 @@ jobs:
           set +e
           exec > probe-out.txt 2>&1
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          L="https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8"
-          for q in "" "?dvr=86400" "?dvr=100000" "?dvr=7200"; do
-            F=$(curl -sS -L -m 30 -A "$UA" "$L$q" -o m.m3u8 -w "%{url_effective}")
-            V=$(grep -v '^#' m.m3u8 | tr -d '\r' | grep . | head -1)
-            V="$(dirname "$F")/$V"
-            echo "== q=$q variant $V"; curl -sS -L -m 60 -A "$UA" "$V" -o v.m3u8 -w "status=%{http_code} size=%{size_download}\n"; tr -d '\r' < v.m3u8 | head -12; echo "segments=$(grep -c EXTINF v.m3u8)"; grep -m3 -E 'PROGRAM-DATE|TARGETDUR|MEDIA-SEQ' v.m3u8; tail -2 v.m3u8
+          B="https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx"
+          sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
+          now=$(date +%s)
+          for ago in 600 3600 21600 79200 82800 86000 90000 172800; do
+            st=$(( (now - ago - 978307200) / 4 * 4 * 1000 ))
+            for v in "bitrate=928000&audioId=1&videoId=12" "bitrate=928000&audioId=1" "audioId=1"; do
+              u="$B/fragment.ts?$v&startTime=$st"
+              r=$(curl -sS -L -m 30 -A "$UA" "$u" -o f.ts -w "%{http_code} %{size_download}")
+              echo "ago=$ago [$v] -> $r $(ffprobe -v error -show_entries stream=codec_type -of csv=p=0 f.ts 2>/dev/null | tr '\n' ',')"
+            done
           done
+          # 2-minute timing test: download 30 sequential fragments from 22h ago
+          st0=$(( (now - 79200 - 978307200) / 4 * 4 * 1000 ))
+          t0=$(date +%s); for i in $(seq 0 29); do curl -sS -L -m 30 -A "$UA" "$B/fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=$((st0+i*4000))" >> big.ts; done; echo "30 frags in $(( $(date +%s)-t0 ))s size=$(stat -c %s big.ts)"
+          ffmpeg -hide_banner -loglevel error -i big.ts -vn -ac 1 -ar 16000 -b:a 32k big.mp3; ffprobe -v error -show_entries format=duration -of csv=p=0 big.mp3
           exit 0
           echo "== yt playlist rss"
           curl -sS -m 30 "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" -o yt.xml -w "status=%{http_code}\n"
