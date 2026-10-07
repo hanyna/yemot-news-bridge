@@ -14,33 +14,20 @@ jobs:
           set +e
           exec > probe-out.txt 2>&1
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          echo "== itunes search"
-          for t in "%D7%94%D7%A4%D7%98%D7%A8%D7%99%D7%95%D7%98%D7%99%D7%9D" "%D7%94%D7%A4%D7%98%D7%A8%D7%99%D7%95%D7%98%D7%99%D7%9D%2014" "patriots%2014"; do
-            curl -sS -m 30 "https://itunes.apple.com/search?term=$t&media=podcast&country=il&limit=15" | jq -r '.results[] | [.collectionName,.artistName,.feedUrl,.trackCount,.releaseDate] | @tsv'
-          done
-          echo "== spotify page"
-          curl -sS -L -m 30 -A "$UA" "https://open.spotify.com/show/4qkG28SrHynd859I9Ot0eP" -o sp.html -w "status=%{http_code}\n"
-          grep -oE '(anchor\.fm|creators\.spotify\.com|omny|rss|feed)[^"<> ]{0,120}' sp.html | sort -u | head -20
-          grep -oE '<title>[^<]*' sp.html
-          echo "== feeds"
-          for f in $(cat feeds.txt 2>/dev/null); do :; done
-          curl -sS -m 30 "https://itunes.apple.com/search?term=%D7%94%D7%A4%D7%98%D7%A8%D7%99%D7%95%D7%98%D7%99%D7%9D&media=podcast&country=il&limit=15" | jq -r '.results[].feedUrl' | sort -u > feeds.txt
-          for f in $(cat feeds.txt); do
-            echo "--- $f"
-            curl -sS -L -m 30 -A "$UA" "$f" -o feed.xml -w "status=%{http_code} size=%{size_download}\n"
-            python3 - <<'EOF'
-          import xml.etree.ElementTree as ET
-          try:
-              r = ET.parse('feed.xml').getroot()
-              ch = r.find('channel')
-              print('TITLE', ch.findtext('title'))
-              ns = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'}
-              for it in ch.findall('item')[:8]:
-                  enc = it.find('enclosure')
-                  print(' |', it.findtext('pubDate'), '|', it.findtext('itunes:duration', namespaces=ns), '|', (it.findtext('title') or '')[:90], '|', enc.get('url')[:120] if enc is not None else None)
-          except Exception as e:
-              print('ERR', e)
-          EOF
+          L="https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8"
+          echo "== live master"; curl -sS -m 30 -A "$UA" -D - "$L" | head -60
+          V=$(curl -sS -m 30 -A "$UA" "$L" | grep -v '^#' | grep . | tail -1)
+          case "$V" in http*) ;; *) V="$(dirname $L)/$V";; esac
+          echo "== variant $V"; curl -sS -m 30 -A "$UA" "$V" -o v.m3u8; head -20 v.m3u8; echo "lines=$(grep -c EXTINF v.m3u8)"; tail -3 v.m3u8
+          for q in "?dvr=86400" "?startTime=$(date -u -d '-25 hours' +%s)" "?timeshift=90000"; do echo "-- try $q"; curl -sS -m 30 -A "$UA" "$L$q" -o t.m3u8 -w "status=%{http_code}\n"; head -5 t.m3u8; done
+          echo "== ffmpeg 20s"; timeout 60 ffmpeg -hide_banner -loglevel warning -user_agent "$UA" -i "$L" -t 20 -vn -ac 1 -b:a 32k /tmp/rec.mp3; ls -la /tmp/rec.mp3
+          echo "== yt playlist rss"
+          curl -sS -m 30 "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" -o yt.xml -w "status=%{http_code}\n"
+          grep -oE '<(yt:videoId|title|published)>[^<]*' yt.xml | head -40
+          ID=$(grep -oE '<yt:videoId>[^<]*' yt.xml | head -1 | cut -d'>' -f2)
+          echo "== piped/invidious for $ID"
+          for p in "https://pipedapi.kavin.rocks/streams/$ID" "https://api.piped.private.coffee/streams/$ID" "https://pipedapi.adminforge.de/streams/$ID" "https://inv.nadeko.net/api/v1/videos/$ID" "https://invidious.nerdvpn.de/api/v1/videos/$ID" "https://yewtu.be/api/v1/videos/$ID"; do
+            echo "-- $p"; curl -sS -m 25 -A "$UA" "$p" -o p.json -w "status=%{http_code} size=%{size_download}\n"; head -c 300 p.json; echo
           done
           exit 0
       - run: |
