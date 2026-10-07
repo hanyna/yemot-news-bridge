@@ -1,0 +1,24 @@
+name: probe-yt
+on: { workflow_dispatch: {} }
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - run: |
+          pip install -q -U yt-dlp
+          yt-dlp --version
+          echo "== playlist (first 25) =="
+          yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s|%(upload_date)s|%(title)s" "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" || echo "PLAYLIST FAILED"
+          echo "== channel videos (first 25) =="
+          yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s|%(title)s" "https://www.youtube.com/@C14news/videos" || echo "CHANNEL FAILED"
+          echo "== rss =="
+          curl -sS -m 20 "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" | head -c 3000 || echo "RSS FAILED"
+      - run: |
+          echo "== audio download test =="
+          ID=$(yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s" "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" | awk -F'|' '$2>2400{print $1; exit}')
+          echo "long video: $ID"
+          for c in "" "-S +size --extractor-args youtube:player_client=android" "--extractor-args youtube:player_client=ios" "--extractor-args youtube:player_client=tv"; do
+            echo "--- try: $c"
+            if timeout 300 yt-dlp -f "bestaudio[abr<=64]/bestaudio/best" $c --no-playlist -o "/tmp/a.%(ext)s" "https://www.youtube.com/watch?v=$ID"; then ls -la /tmp/a.*; echo "OK with: $c"; break; fi
+          done
