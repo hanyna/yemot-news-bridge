@@ -1,101 +1,109 @@
-== itunes search
-הליברל | עם דרור רפאל	NVP	https://anchor.fm/s/1152a1cbc/podcast/rss	12	2026-10-06T17:04:00Z
-איך הצלחת?	Idan Ben Or	https://anchor.fm/s/f721baf4/podcast/rss	111	2026-09-26T17:00:00Z
-סוללים דרך - מאמרים	סוללים דרך	https://anchor.fm/s/fb5bab20/podcast/rss	439	2026-05-18T20:25:00Z
-הפודקאסט של רז זאובר	רז זאובר	https://anchor.fm/s/ed8174a8/podcast/rss	132	2026-10-03T17:37:00Z
-עוסקים עסקים באמונה	אלחנן בניה ויזמות נדלן	https://anchor.fm/s/10ea857a0/podcast/rss	7	2026-05-04T12:05:00Z
-פודקאסט בצהוב שחור	האחים נקש	https://anchor.fm/s/b65b660/podcast/rss	283	2026-09-16T20:21:00Z
-תוריד ת׳גוף	torid tagoof	https://anchor.fm/s/f3e95ea0/podcast/rss	117	2026-01-05T22:53:00Z
-מחשבה תחילה	המכון למחשבה ישראלית	https://anchor.fm/s/112325dd0/podcast/rss	74	2026-04-03T05:00:00Z
-The Luko Show	Patriots14	https://anchor.fm/s/851de18/podcast/rss	2	2021-04-09T19:39:00Z
-== spotify page
+== live master
+HTTP/1.1 302 Moved Temporarily
+Server: nginx/1.20.2
+Date: Wed, 07 Oct 2026 16:32:59 GMT
+Content-Length: 1
+Connection: keep-alive
+Vary: Origin
+Location: https://n-121-7.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8
+
+ == variant https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/ 
+curl: (3) URL rejected: Malformed input to a URL function
+head: cannot open 'v.m3u8' for reading: No such file or directory
+grep: v.m3u8: No such file or directory
+lines=
+tail: cannot open 'v.m3u8' for reading: No such file or directory
+-- try ?dvr=86400
+status=302
+ -- try ?startTime=1791300780
+status=302
+ -- try ?timeshift=90000
+status=302
+ == ffmpeg 20s
+timeout: failed to run command ‘ffmpeg’: No such file or directory
+ls: cannot access '/tmp/rec.mp3': No such file or directory
+== yt playlist rss
 status=200
-<title>Spotify – Web Player
-== feeds
---- https://anchor.fm/s/10ea857a0/podcast/rss
-status=200 size=31070
-TITLE עוסקים עסקים באמונה
- | Mon, 04 May 2026 12:05:13 GMT | 00:40:29 | ע(ו)סקים עסקים באמונה | אלחנן בן פורת מארח את נדב רט - איך בוחרים נכון בחיים ובעסק (פרק 7) | https://anchor.fm/s/10ea857a0/podcast/play/119409671/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-4-3%2F
- | Mon, 13 Apr 2026 15:39:13 GMT | 00:45:58 |  אלחנן בן פורת מארח את דביר דמרי - נדל״ן, שליחות ודיוק: איך עושים עסקים בלי לאבד את המצפן  | https://anchor.fm/s/10ea857a0/podcast/play/118382138/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-3-13%2
- | Mon, 23 Mar 2026 16:00:01 GMT | 00:42:36 | אלחנן בן פורת מארח את הרב שניאור אשכנזי, הסוד לאיזון בין הצלחה לחיים אמיתיים(פרק 5) | https://anchor.fm/s/10ea857a0/podcast/play/117351534/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-23%2
- | Wed, 11 Mar 2026 16:00:00 GMT | 00:42:17 | איך משחררים שליטה ונשארים צינור? אלחנן בן פורת מארח את דויד הס | (פרק 4) | https://anchor.fm/s/10ea857a0/podcast/play/116071368/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-1-26%2
- | Thu, 26 Feb 2026 08:42:37 GMT | 01:08:35 | אלחנן בן פורת מארח את ידידיה מאיר | בין הפטריוטים לישיבה: איך לא להיות מושפע כשאתה משפיע ( | https://anchor.fm/s/10ea857a0/podcast/play/116071186/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-1-26%2
- | Mon, 09 Feb 2026 16:28:07 GMT | 00:45:25 | איך עושים עסקים מתוך אמת ושמחה? אלחנן בן פורת מארח את ערן אביטל | (פרק 2) | https://anchor.fm/s/10ea857a0/podcast/play/115251835/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-1-9%2F
- | Tue, 03 Feb 2026 14:13:27 GMT | 00:50:58 | אמונה, עסקים ונדל״ן - איך מצליחים בלי לאבד את הערכים | (פרק 1) | https://anchor.fm/s/10ea857a0/podcast/play/114967830/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-1-3%2F
---- https://anchor.fm/s/112325dd0/podcast/rss
-status=200 size=122189
-TITLE מחשבה תחילה
- | Sun, 05 Apr 2026 17:30:00 GMT | 00:48:11 | פרק 74, פרופ׳ חגי רם: האם איראן תיכנע | https://anchor.fm/s/112325dd0/podcast/play/123926244/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-8%2F
- | Fri, 03 Apr 2026 05:00:00 GMT | 00:39:59 | פרק 73, ד״ר דורון אביטל - התברברנו בניווט | https://anchor.fm/s/112325dd0/podcast/play/121251689/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-5-11%2
- | Tue, 06 Aug 2024 05:00:00 GMT | 00:36:22 | פרק 72, עלמוורק מרשה דוידיאן - ״מדיניות מטיבה כלפי שכונות מוחלשות תחזק את הישראליות״ | https://anchor.fm/s/112325dd0/podcast/play/121250619/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-5-9%2F
- | Tue, 30 Jul 2024 07:08:08 GMT | 00:35:03 | פרק 71, עו״ד יורם צברי – ״ישראל מתפרקת: אנחנו צריכים שנה של פסק-זמן מהעימותים הפנימיים״ | https://anchor.fm/s/112325dd0/podcast/play/119424574/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-4-3%2F
- | Tue, 25 Jun 2024 22:42:13 GMT | 00:33:14 | פרק 70, ד״ר עידית שכנאי רן – "בניה מחדש של הקיבוצים היא חלק מהחזון ותפקידו של הקיבוץ בחברה | https://anchor.fm/s/112325dd0/podcast/play/119424548/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-4-3%2F
- | Tue, 18 Jun 2024 19:21:06 GMT | 00:45:09 | פרק 69, ד״ר שגיא אלבז – "בחירות אזוריות הכרחיות, הם יאפשרו מעבר מזהות שבטית לזהות אזורית – | https://anchor.fm/s/112325dd0/podcast/play/119424563/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-4-3%2F
- | Wed, 01 May 2024 06:26:02 GMT | 00:39:38 | פרק 68, עו"ד אביה אלף – "שיקולים זרים מעידים שטובת הציבור לא עמדה לנגד עיני השרה שקד במינו | https://anchor.fm/s/112325dd0/podcast/play/119424608/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-4-3%2F
- | Mon, 29 Apr 2024 07:12:52 GMT | 01:01:41 | פרק 67, תנ"צ בדימוס עופר שומר – "הפוליטיקה נכנסה למשטרה" | https://anchor.fm/s/112325dd0/podcast/play/119424598/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-4-3%2F
---- https://anchor.fm/s/1152a1cbc/podcast/rss
-status=200 size=21697
-TITLE הליברל | עם דרור רפאל
- | Tue, 06 Oct 2026 17:04:35 GMT | 01:04:10 | אורטל דיין משתפת ב״הליברל״ על הזוגיות: ״אנחנו לא מדברים שום דבר על פוליטיקה״ | https://anchor.fm/s/1152a1cbc/podcast/play/126947532/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-9-6%2F
- | Tue, 29 Sep 2026 16:40:50 GMT | 01:05:45 | "בישראל השלטון הוא האיזון למערכות החזקות באמת" | דרור רפאל מארח את יותם זמרי | https://anchor.fm/s/1152a1cbc/podcast/play/126488139/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-29%2
- | Tue, 22 Sep 2026 13:45:14 GMT | 00:54:21 | השיחה הפתוחה והמרתקת של איתמר פלישמן | דרור רפאל מארח - הליברל | https://anchor.fm/s/1152a1cbc/podcast/play/126135204/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-22%2
- | Tue, 15 Sep 2026 13:49:13 GMT | 00:57:55 | ״כשהייתי באוצר - אני ואשתי הסתובבנו עם שומרי ראש״ | הליברל, דרור רפאל מארח את פרופ׳ ירון ז | https://anchor.fm/s/1152a1cbc/podcast/play/125769489/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-15%2
- | Tue, 08 Sep 2026 14:00:00 GMT | 01:03:20 | "חס וחלילה אם יקום אידיוט שיסגור את ערוץ 14" | דרור רפאל מארח את שי גולדן - הליברל פרק 8 | https://anchor.fm/s/1152a1cbc/podcast/play/125321618/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-7%2F
- | Tue, 01 Sep 2026 01:50:00 GMT | 00:58:12 | דרור רפאל מארח את בן סאבו, ממייסדי יחידת החשמונאים וחושף את מאחורי הקלעים | הליברל, פרק 7 | https://anchor.fm/s/1152a1cbc/podcast/play/124982949/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-31%2
- | Mon, 24 Aug 2026 17:34:23 GMT | 01:01:57 | ח"כ אוחנה: "ההיסטוריה מלמדת שכשהליכוד הפסיד הוא הלך לאופוזיציה" | דרור רפאל מארח - הליברל  | https://anchor.fm/s/1152a1cbc/podcast/play/124670085/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-24%2
- | Tue, 18 Aug 2026 13:42:30 GMT | 00:50:32 | "בגלל הפטריוטים אני לא מדבר עם אורלי על פוליטיקה" | דרור רפאל מארח את גיא מרוז | הליברל פר | https://anchor.fm/s/1152a1cbc/podcast/play/124388237/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-18%2
---- https://anchor.fm/s/b65b660/podcast/rss
-status=200 size=485963
-TITLE פודקאסט בצהוב שחור
- | Sun, 20 Sep 2026 11:58:35 GMT | 01:33:26 | פרק 284 - אדון הסולחות | https://anchor.fm/s/b65b660/podcast/play/126024262/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-20%2F4
- | Wed, 16 Sep 2026 20:21:34 GMT | 01:12:56 | פרק 283 - הביטחון חוזר (אורח: מני ממטרה) | https://anchor.fm/s/b65b660/podcast/play/125841591/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-16%2F4
- | Mon, 07 Sep 2026 23:01:44 GMT | 01:12:01 | פרק 282 - ניצחון בדוחאק | https://anchor.fm/s/b65b660/podcast/play/125363829/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-7%2F43
- | Thu, 03 Sep 2026 21:53:10 GMT | 00:51:43 | פרק 281 - תיסכולי שנים רבות | https://anchor.fm/s/b65b660/podcast/play/125174562/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-3%2F43
- | Sun, 30 Aug 2026 19:12:28 GMT | 01:11:30 | פרק 280 - ג'-פאניקה | https://anchor.fm/s/b65b660/podcast/play/124944262/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-30%2F4
- | Fri, 14 Aug 2026 00:06:17 GMT | 01:00:25 | פרק 279 - נלחמים בעצמינו | https://anchor.fm/s/b65b660/podcast/play/124197825/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-14%2F4
- | Sat, 01 Aug 2026 21:36:24 GMT | 01:44:10 | פרק 278 - הצעדה החלה | https://anchor.fm/s/b65b660/podcast/play/123629052/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-1%2F42
- | Sun, 26 Jul 2026 22:19:29 GMT | 01:34:37 | פרק 277 - בידיים שלנו | https://anchor.fm/s/b65b660/podcast/play/123356854/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-26%2F4
---- https://anchor.fm/s/ed8174a8/podcast/rss
-status=200 size=510015
-TITLE הפודקאסט של רז זאובר
- | Sat, 03 Oct 2026 17:37:42 GMT | 01:19:17 |  בני גנץ: מ-7 באוקטובר דרך איראן ועד הבחירות | https://anchor.fm/s/ed8174a8/podcast/play/126752311/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-9-3%2F4
- | Wed, 30 Sep 2026 04:45:00 GMT | 01:14:39 | השערה שתוביל לרוצח של תאיר ראדה? עם מיה איידן ורוני שצ'וצ'ינסקי  | https://anchor.fm/s/ed8174a8/podcast/play/126504599/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-29%2F
- | Mon, 28 Sep 2026 07:00:24 GMT | 01:09:45 | פרופ׳ עמרי ונדל - אסטרוביולוגיה בחלל  | https://anchor.fm/s/ed8174a8/podcast/play/126370207/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-27%2F
- | Tue, 22 Sep 2026 04:30:00 GMT | 01:11:23 | פרופ׳ צבי פירן ותעלומת חורי התולעת  | https://anchor.fm/s/ed8174a8/podcast/play/126098967/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-21%2F
- | Tue, 15 Sep 2026 04:30:00 GMT | 01:25:28 |  האסטרונום אילן מנוליס: הרגע שישנה את האנושות מתקרב | https://anchor.fm/s/ed8174a8/podcast/play/125710887/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-14%2F
- | Tue, 08 Sep 2026 04:30:00 GMT | 01:04:54 | האודיסיאה, כמו שנולאן התכוון? עם ד"ר עידו חברוני  | https://anchor.fm/s/ed8174a8/podcast/play/125417941/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-8%2F4
- | Wed, 02 Sep 2026 04:28:00 GMT | 00:31:20 | מה קרה באמת לסופרמן הישראלי? מתן בלו חושף מה גרם ללבו לעצור  | https://anchor.fm/s/ed8174a8/podcast/play/125000475/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-31%2F
- | Sun, 30 Aug 2026 04:30:00 GMT | 01:37:09 | האם אנו לא לבד ביקום? עם יו״ר סוכנות החלל לשעבר, פרופ׳ יצחק בן־ישראל | https://anchor.fm/s/ed8174a8/podcast/play/124894944/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-29%2F
---- https://anchor.fm/s/f3e95ea0/podcast/rss
-status=200 size=150926
-TITLE תוריד ת׳גוף
- | Mon, 05 Jan 2026 22:53:58 GMT | 01:17:30 | 79 היה טוב היה ביטון | https://anchor.fm/s/f3e95ea0/podcast/play/113549806/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-0-5%2F4
- | Wed, 17 Dec 2025 18:08:31 GMT | 01:25:10 | תוריד ת'גוף פרק 78 פותחים סיבוב עם רדונדו ג'וניור ותומר עמרני ומאור דהן | https://anchor.fm/s/f3e95ea0/podcast/play/112770322/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2025-11-17%2
- | Wed, 10 Dec 2025 13:31:05 GMT | 01:17:14 | משחק עונה בטרנר, תיקו בדרבי ירושלים, חיפה והפועל מנצחות | תוריד תגוף פרק 77 | https://anchor.fm/s/f3e95ea0/podcast/play/112420574/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2025-11-10%2
- | Mon, 01 Dec 2025 21:33:13 GMT | 01:23:15 | חוזרים מפגרה - ב"ש וביתר מנצחות, חיפה ומכבי ת"א בחלוקת נקודות | 76 | https://anchor.fm/s/f3e95ea0/podcast/play/111988742/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2025-11-1%2F
- | Tue, 11 Nov 2025 09:35:14 GMT | 01:34:26 | תוריד ת'גוף פרק 62 - רואים שש שש | https://anchor.fm/s/f3e95ea0/podcast/play/111007375/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2025-10-11%2
- | Wed, 05 Nov 2025 13:39:46 GMT | 01:30:08 | תוריד ת'גוף פרק 74 עם אורי לוי ועופר ניקוס | https://anchor.fm/s/f3e95ea0/podcast/play/110729906/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2025-10-5%2F
- | Wed, 22 Oct 2025 14:29:13 GMT | 01:26:43 | פוצץ הדרבי וחזר הברק, סיכום מחזור בליגת העל | 73  | https://anchor.fm/s/f3e95ea0/podcast/play/110046540/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2025-9-22%2F
- | Sun, 05 Oct 2025 21:52:41 GMT | 01:23:54 |  פרק 72 - יש שופטים בתל אביב  | https://anchor.fm/s/f3e95ea0/podcast/play/109252097/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2025-9-5%2F4
---- https://anchor.fm/s/f721baf4/podcast/rss
-status=200 size=401303
-TITLE איך הצלחת?
- | Sat, 26 Sep 2026 17:00:00 GMT | 01:20:07 | ד״ר לביולוגיה מולקולרית: "ככה תוכל לרפא את עצמך" | איך הצלחת עם ד"ר אביטל בק | https://anchor.fm/s/f721baf4/podcast/play/126273306/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-25%2F
- | Thu, 24 Sep 2026 11:57:22 GMT | 01:28:10 | בנה חברה של מיליארד שקל: “רוב היזמים לא מבינים למה הם נכנסים” | איך הצלחת עם מיכה אבני | https://anchor.fm/s/f721baf4/podcast/play/126139417/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-24%2F
- | Tue, 15 Sep 2026 16:00:00 GMT | 01:04:52 | המומחה למוגנות ילדים: זאת הטעות שגורמת לילדים לא לספר להורים | https://anchor.fm/s/f721baf4/podcast/play/125760568/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-8-15%2F
- | Mon, 31 Aug 2026 07:06:27 GMT | 01:32:23 | היזם שסירב ל20 מיליון שקל, לא ישן בלילות והנפיק חברה בבורסה כמעט בלי הכנסות | איך הצלחת עם | https://anchor.fm/s/f721baf4/podcast/play/124943021/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-7-30%2F
- | Tue, 21 Jul 2026 16:17:53 GMT | 01:06:27 | למה כולנו במינוס? היועצת הפיננסית הבכירה על החובות, הבנקים ומחירי הדירות | איך הצלחת עם עמ | https://anchor.fm/s/f721baf4/podcast/play/123106044/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-21%2F
- | Tue, 14 Jul 2026 16:00:00 GMT | 00:59:01 | מלוחם בדובדבן לרב: הרב ברוך גזהיי על גיוס חרדים, שלום בית והסערה התקשורתית | https://anchor.fm/s/f721baf4/podcast/play/122753255/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-13%2F
- | Mon, 13 Jul 2026 04:22:55 GMT | 01:02:46 | ״הפכנו לגן עדן לנוכלים״: קומבינת תגי הנכה, הכופר לבדואים ולמה צריך לפרק את ההסתדרות | אביר | https://anchor.fm/s/f721baf4/podcast/play/122752633/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-13%2F
- | Tue, 23 Jun 2026 15:13:00 GMT | 01:01:49 | ״תפסתי את אשתו של החבר הכי טוב שלי״ | החוקר הפרטי המפורסם בישראל חושף את הסיפורים הכי מטור | https://anchor.fm/s/f721baf4/podcast/play/121792440/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-5-21%2F
---- https://anchor.fm/s/fb5bab20/podcast/rss
-status=200 size=523805
-TITLE סוללים דרך - מאמרים
- | Mon, 18 May 2026 20:25:59 GMT | 00:04:30 | התייחסות לאירוע פאצ' משיח | https://anchor.fm/s/fb5bab20/podcast/play/120189359/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-4-18%2F
- | Tue, 31 Mar 2026 21:00:29 GMT | 00:06:43 | פסח מצה ומרור – בימים ההם בזמן הזה | https://anchor.fm/s/fb5bab20/podcast/play/117767937/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-31%2F
- | Tue, 31 Mar 2026 20:50:09 GMT | 00:05:29 | הברית היהודית חיבורים ואחדות בדרך להנהגה | https://anchor.fm/s/fb5bab20/podcast/play/117767384/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-31%2F
- | Wed, 25 Mar 2026 21:15:32 GMT | 00:03:11 | גזלייטינג רגשי על ערכה המוסרי של מלחמה | https://anchor.fm/s/fb5bab20/podcast/play/117478909/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-25%2F
- | Tue, 24 Mar 2026 21:36:52 GMT | 00:05:42 | תעשיית הדכדוך מול רוח הגבורה: מי מפחד מניצחון יהודי? | https://anchor.fm/s/fb5bab20/podcast/play/117428104/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-24%2F
- | Tue, 24 Mar 2026 21:36:04 GMT | 00:06:55 | כלי לזיהוי השתייכות אידיאולוגית של ארגון  | https://anchor.fm/s/fb5bab20/podcast/play/117428086/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-24%2F
- | Thu, 19 Mar 2026 05:13:17 GMT | 00:10:19 | על עצומת פרופסור משה כהן אליה | https://anchor.fm/s/fb5bab20/podcast/play/117154401/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-19%2F
- | Thu, 19 Mar 2026 05:11:57 GMT | 00:06:25 | קו פרשת המים סדקים בקונספציה הדתית לאומית | https://anchor.fm/s/fb5bab20/podcast/play/117154371/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-19%2F
+<title>הפטריוטים
+<published>2017-10-16T21:15:56+00:00
+<yt:videoId>99Yq0j12NXg
+<title>הפטריוטים עם ינון מגל | 06.10.2026 | התוכנית המלאה
+<published>2026-10-06T20:23:55+00:00
+<yt:videoId>97qT7GNXiyo
+<title>יסכה חיימוב, ממפלגת &quot;נעם לישראל&quot; ואחותו של ראש השב&quot;כ דוד זיני בריאיון
+<published>2026-10-06T19:51:39+00:00
+<yt:videoId>AsmADB089JI
+<title>הפטריוטים עם ינון מגל | 5.10.2026 | התוכנית המלאה
+<published>2026-10-05T20:00:06+00:00
+<yt:videoId>xsagHkji9VQ
+<title>&quot;סמל ניצחון&quot;: יוזמת תפילת חג שמחת תורה סמוך למתחם הנובה מגיבה לטענות נגדה
+<published>2026-10-05T19:47:48+00:00
+<yt:videoId>7oZlpcEc-cc
+<title>הפטריוטים עם ינון מגל | 4.10.2026 | התוכנית המלאה
+<published>2026-10-04T19:57:13+00:00
+<yt:videoId>vO57nXHKTvY
+<title>&quot;עושים עליי קמפיין&quot;: יוסף חדאד בריאיון סוער לינון מגל לאחר הסערה סביבו
+<published>2026-10-04T19:54:42+00:00
+<yt:videoId>PVkU_9UtN5Q
+<title>הפטריוטים עם ינון מגל | 3.10.2026 | התוכנית המלאה
+<published>2026-10-03T20:21:01+00:00
+<yt:videoId>Vqh1CQyqjgY
+<title>הפטריוטים עם ינון מגל | 1.10.2026 | התוכנית המלאה
+<published>2026-10-02T08:39:42+00:00
+<yt:videoId>8CykBC2oAXs
+<title>&quot;טאטע תטהר!&quot;: הזמר יאיר אלייצור בסוכת הפטריוטים
+<published>2026-10-01T19:47:08+00:00
+<yt:videoId>t4WDTya3Sko
+<title>&quot;אתה בחרתנו מכל העמים&quot;: חיים ישראל עושה שמח בסוכת הפטריוטים!
+<published>2026-09-30T20:09:29+00:00
+<yt:videoId>C3NgEKJ28bM
+<title>&quot;אין שום דבר שנעלם ממלך העולם!&quot;: הזמר חיים ישראל מרים את סוכת הפטריוטים
+<published>2026-09-30T20:04:42+00:00
+<yt:videoId>ItU7275Ga9k
+<title>הפטריוטים עם ינון מגל | 29.9.2026 | התוכנית המלאה
+<published>2026-09-29T19:57:41+00:00
+<yt:videoId>weMWlQ8A6NE
+<title>חג בסוכת הפטריוטים: רמי דנוך ובצלאל גלעדי במופע חגיגי
+== piped/invidious for 99Yq0j12NXg
+-- https://pipedapi.kavin.rocks/streams/99Yq0j12NXg
+status=526 size=0
+
+-- https://api.piped.private.coffee/streams/99Yq0j12NXg
+status=500 size=1357
+{"error":"org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException: YouTube probably temporarily blocked anonymous watch access with this IP , got error LOGIN_REQUIRED: \"Sign in to confirm that you're not a bot\"\n\tat org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStre
+-- https://pipedapi.adminforge.de/streams/99Yq0j12NXg
+status=301 size=289
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html><head>
+<title>301 Moved Permanently</title>
+</head><body>
+<h1>Moved Permanently</h1>
+<p>The document has moved <a href="https://adminforge.de/streams/99Yq0j12NXg">here</a>.</p>
+</body></html>
+
+-- https://inv.nadeko.net/api/v1/videos/99Yq0j12NXg
+status=403 size=17
+Endpoint disabled
+-- https://invidious.nerdvpn.de/api/v1/videos/99Yq0j12NXg
+status=401 size=574
+<html>
+<head><title>401 Authorization Required</title></head>
+<body>
+<center><h1>401 Authorization Required</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page
+-- https://yewtu.be/api/v1/videos/99Yq0j12NXg
+status=403 size=552
+<html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding t
