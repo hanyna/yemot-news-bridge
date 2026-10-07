@@ -14,28 +14,33 @@ jobs:
           set +e
           exec > probe-out.txt 2>&1
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          for u in "https://tv.c14.co.il/" "https://tv.c14.co.il/serie/63cd2cf4ca5a380012e20fe0" "https://vod.c14.co.il/serie/63cd2cf4ca5a380012e20fe0" "https://tv.c14.co.il/player/channel/63a2edcb4343c600125cdbb6"; do
-            echo "== GET $u"
-            curl -sS -L -m 30 -A "$UA" -o page.html -w "status=%{http_code} final=%{url_effective} size=%{size_download}\n" "$u"
-            grep -o '<script[^>]*src="[^"]*"' page.html | head -20
-            grep -oE 'https?://[a-zA-Z0-9./_-]*(api|graphql|redge|redgalaxy|player|cdn)[a-zA-Z0-9./_-]*' page.html | sort -u | head -40
-            grep -oE '<link[^>]*(manifest|preconnect|dns-prefetch)[^>]*>' page.html | head
-            echo "-- inline json keys:"; grep -oE '"(apiUrl|API_URL|apiBase|baseUrl|tenant|platform)[^,]{0,120}' page.html | head
+          echo "== itunes search"
+          for t in "%D7%94%D7%A4%D7%98%D7%A8%D7%99%D7%95%D7%98%D7%99%D7%9D" "%D7%94%D7%A4%D7%98%D7%A8%D7%99%D7%95%D7%98%D7%99%D7%9D%2014" "patriots%2014"; do
+            curl -sS -m 30 "https://itunes.apple.com/search?term=$t&media=podcast&country=il&limit=15" | jq -r '.results[] | [.collectionName,.artistName,.feedUrl,.trackCount,.releaseDate] | @tsv'
           done
-          echo "== JS bundles"
-          for j in $(grep -o '<script[^>]*src="[^"]*"' page.html | grep -o 'src="[^"]*"' | cut -d'"' -f2 | head -8); do
-            case "$j" in /*) j="https://tv.c14.co.il$j";; esac
-            echo "-- $j"
-            curl -sS -m 30 -A "$UA" "$j" | grep -oE 'https?://[a-zA-Z0-9./_-]*(api|redge|redgalaxy|galaxy)[a-zA-Z0-9./_-]*' | sort -u | head -30
-            curl -sS -m 30 -A "$UA" "$j" | grep -oE '"/?(api|items|series|episodes|vods?|products|playlist|playback)[a-zA-Z0-9/_{}-]*"' | sort -u | head -40
-          done
-          echo "== yt-dlp other clients"
-          pip install -q -U yt-dlp
-          sudo apt-get install -y -qq deno >/dev/null 2>&1 || (curl -fsSL https://deno.land/install.sh | sh >/dev/null 2>&1; export PATH="$HOME/.deno/bin:$PATH")
-          export PATH="$HOME/.deno/bin:$PATH"
-          for c in "--extractor-args youtube:player_client=mweb" "--extractor-args youtube:player_client=web_embedded" "--extractor-args youtube:player_client=tv_embedded" "--extractor-args youtube:player_client=web_safari"; do
-            echo "--- try: $c"; rm -f /tmp/a.*
-            if timeout 240 yt-dlp -f "bestaudio[abr<=64]/bestaudio/best" $c --no-playlist -o "/tmp/a.%(ext)s" "https://www.youtube.com/watch?v=99Yq0j12NXg" 2>&1 | tail -3; then ls -la /tmp/a.* 2>/dev/null && echo "OK with: $c" && break; fi
+          echo "== spotify page"
+          curl -sS -L -m 30 -A "$UA" "https://open.spotify.com/show/4qkG28SrHynd859I9Ot0eP" -o sp.html -w "status=%{http_code}\n"
+          grep -oE '(anchor\.fm|creators\.spotify\.com|omny|rss|feed)[^"<> ]{0,120}' sp.html | sort -u | head -20
+          grep -oE '<title>[^<]*' sp.html
+          echo "== feeds"
+          for f in $(cat feeds.txt 2>/dev/null); do :; done
+          curl -sS -m 30 "https://itunes.apple.com/search?term=%D7%94%D7%A4%D7%98%D7%A8%D7%99%D7%95%D7%98%D7%99%D7%9D&media=podcast&country=il&limit=15" | jq -r '.results[].feedUrl' | sort -u > feeds.txt
+          for f in $(cat feeds.txt); do
+            echo "--- $f"
+            curl -sS -L -m 30 -A "$UA" "$f" -o feed.xml -w "status=%{http_code} size=%{size_download}\n"
+            python3 - <<'EOF'
+          import xml.etree.ElementTree as ET
+          try:
+              r = ET.parse('feed.xml').getroot()
+              ch = r.find('channel')
+              print('TITLE', ch.findtext('title'))
+              ns = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'}
+              for it in ch.findall('item')[:8]:
+                  enc = it.find('enclosure')
+                  print(' |', it.findtext('pubDate'), '|', it.findtext('itunes:duration', namespaces=ns), '|', (it.findtext('title') or '')[:90], '|', enc.get('url')[:120] if enc is not None else None)
+          except Exception as e:
+              print('ERR', e)
+          EOF
           done
           exit 0
       - run: |
