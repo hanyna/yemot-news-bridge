@@ -1,27 +1,58 @@
 == live master
-HTTP/1.1 302 Moved Temporarily
-Server: nginx/1.20.2
-Date: Wed, 07 Oct 2026 16:32:59 GMT
-Content-Length: 1
-Connection: keep-alive
-Vary: Origin
-Location: https://n-121-7.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8
-
- == variant https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/ 
+final=https://n-121-4.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8
+#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=928000&audioId=1&videoId=12
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
+== variant https://n-121-13.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12
 curl: (3) URL rejected: Malformed input to a URL function
 head: cannot open 'v.m3u8' for reading: No such file or directory
 grep: v.m3u8: No such file or directory
-lines=
+segments=
 tail: cannot open 'v.m3u8' for reading: No such file or directory
 -- try ?dvr=86400
-status=302
- -- try ?startTime=1791300780
-status=302
- -- try ?timeshift=90000
-status=302
- == ffmpeg 20s
-timeout: failed to run command ‘ffmpeg’: No such file or directory
-ls: cannot access '/tmp/rec.mp3': No such file or directory
+status=200
+#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=86400
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=1928000&audioId=1&videoId=8&dvr=86400
+-- try ?startTime=1791300899
+status=200
+#EXTM3U
+-- try ?timeshift=90000
+status=200
+#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=928000&audioId=1&videoId=12
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
+-- try ?begin=20261006T153459
+status=200
+#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=928000&audioId=1&videoId=12
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
+-- try ?ts=1791300899
+status=200
+#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=928000&audioId=1&videoId=12
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
+playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
+== ffmpeg 20s
+mime type is not rfc8216 compliant
+-rw-r--r-- 1 runner runner 80397 Oct  7 16:35 /tmp/rec.mp3
+== stream info
+  Duration: N/A, start: 94117.726044, bitrate: N/A
+  Program 0 
+  Stream #0:0: Audio: aac (LC) ([15][0][0][0] / 0x000F), 48000 Hz, stereo, fltp
+  Stream #0:1: Video: h264 (High) ([27][0][0][0] / 0x001B), yuv420p, 960x540 [SAR 1:1 DAR 16:9], 50 fps, 50 tbr, 90k tbn
+  Program 1 
+  Stream #0:2: Audio: aac (LC) ([15][0][0][0] / 0x000F), 48000 Hz, stereo, fltp
+  Stream #0:3: Video: h264 (High) ([27][0][0][0] / 0x001B), yuv420p, 960x540 [SAR 1:1 DAR 16:9], 50 fps, 50 tbr, 90k tbn
 == yt playlist rss
 status=200
 <title>הפטריוטים
@@ -85,16 +116,9 @@ status=301 size=289
 status=403 size=17
 Endpoint disabled
 -- https://invidious.nerdvpn.de/api/v1/videos/99Yq0j12NXg
-status=401 size=574
-<html>
-<head><title>401 Authorization Required</title></head>
-<body>
-<center><h1>401 Authorization Required</h1></center>
-<hr><center>nginx</center>
-</body>
-</html>
-<!-- a padding to disable MSIE and Chrome friendly error page -->
-<!-- a padding to disable MSIE and Chrome friendly error page
+curl: (28) Connection timed out after 25001 milliseconds
+status=000 size=0
+Endpoint disabled
 -- https://yewtu.be/api/v1/videos/99Yq0j12NXg
 status=403 size=552
 <html>
