@@ -1,5 +1,7 @@
 name: probe-yt
-on: { workflow_dispatch: {} }
+on:
+  push:
+    branches: [probe-yt]
 jobs:
   probe:
     runs-on: ubuntu-latest
