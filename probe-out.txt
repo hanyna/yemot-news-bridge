@@ -1,133 +1,80 @@
-== live master
-final=https://n-121-4.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8
+== q= variant https://n-121-13.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12
+status=200 size=821
 #EXTM3U
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=928000&audioId=1&videoId=12
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
-== variant https://n-121-13.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12
-curl: (3) URL rejected: Malformed input to a URL function
-head: cannot open 'v.m3u8' for reading: No such file or directory
-grep: v.m3u8: No such file or directory
-segments=
-tail: cannot open 'v.m3u8' for reading: No such file or directory
--- try ?dvr=86400
-status=200
-#EXTM3U
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=86400
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=1928000&audioId=1&videoId=8&dvr=86400
--- try ?startTime=1791300899
-status=200
-#EXTM3U
--- try ?timeshift=90000
-status=200
-#EXTM3U
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=928000&audioId=1&videoId=12
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
--- try ?begin=20261006T153459
-status=200
-#EXTM3U
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=928000&audioId=1&videoId=12
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
--- try ?ts=1791300899
-status=200
-#EXTM3U
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=928000&audioId=1&videoId=12
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1928000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=960x540
-playlist.m3u8?bitrate=1928000&audioId=1&videoId=8
-== ffmpeg 20s
-mime type is not rfc8216 compliant
--rw-r--r-- 1 runner runner 80397 Oct  7 16:35 /tmp/rec.mp3
-== stream info
-  Duration: N/A, start: 94117.726044, bitrate: N/A
-  Program 0 
-  Stream #0:0: Audio: aac (LC) ([15][0][0][0] / 0x000F), 48000 Hz, stereo, fltp
-  Stream #0:1: Video: h264 (High) ([27][0][0][0] / 0x001B), yuv420p, 960x540 [SAR 1:1 DAR 16:9], 50 fps, 50 tbr, 90k tbn
-  Program 1 
-  Stream #0:2: Audio: aac (LC) ([15][0][0][0] / 0x000F), 48000 Hz, stereo, fltp
-  Stream #0:3: Video: h264 (High) ([27][0][0][0] / 0x001B), yuv420p, 960x540 [SAR 1:1 DAR 16:9], 50 fps, 50 tbr, 90k tbn
-== yt playlist rss
-status=200
-<title>הפטריוטים
-<published>2017-10-16T21:15:56+00:00
-<yt:videoId>99Yq0j12NXg
-<title>הפטריוטים עם ינון מגל | 06.10.2026 | התוכנית המלאה
-<published>2026-10-06T20:23:55+00:00
-<yt:videoId>97qT7GNXiyo
-<title>יסכה חיימוב, ממפלגת &quot;נעם לישראל&quot; ואחותו של ראש השב&quot;כ דוד זיני בריאיון
-<published>2026-10-06T19:51:39+00:00
-<yt:videoId>AsmADB089JI
-<title>הפטריוטים עם ינון מגל | 5.10.2026 | התוכנית המלאה
-<published>2026-10-05T20:00:06+00:00
-<yt:videoId>xsagHkji9VQ
-<title>&quot;סמל ניצחון&quot;: יוזמת תפילת חג שמחת תורה סמוך למתחם הנובה מגיבה לטענות נגדה
-<published>2026-10-05T19:47:48+00:00
-<yt:videoId>7oZlpcEc-cc
-<title>הפטריוטים עם ינון מגל | 4.10.2026 | התוכנית המלאה
-<published>2026-10-04T19:57:13+00:00
-<yt:videoId>vO57nXHKTvY
-<title>&quot;עושים עליי קמפיין&quot;: יוסף חדאד בריאיון סוער לינון מגל לאחר הסערה סביבו
-<published>2026-10-04T19:54:42+00:00
-<yt:videoId>PVkU_9UtN5Q
-<title>הפטריוטים עם ינון מגל | 3.10.2026 | התוכנית המלאה
-<published>2026-10-03T20:21:01+00:00
-<yt:videoId>Vqh1CQyqjgY
-<title>הפטריוטים עם ינון מגל | 1.10.2026 | התוכנית המלאה
-<published>2026-10-02T08:39:42+00:00
-<yt:videoId>8CykBC2oAXs
-<title>&quot;טאטע תטהר!&quot;: הזמר יאיר אלייצור בסוכת הפטריוטים
-<published>2026-10-01T19:47:08+00:00
-<yt:videoId>t4WDTya3Sko
-<title>&quot;אתה בחרתנו מכל העמים&quot;: חיים ישראל עושה שמח בסוכת הפטריוטים!
-<published>2026-09-30T20:09:29+00:00
-<yt:videoId>C3NgEKJ28bM
-<title>&quot;אין שום דבר שנעלם ממלך העולם!&quot;: הזמר חיים ישראל מרים את סוכת הפטריוטים
-<published>2026-09-30T20:04:42+00:00
-<yt:videoId>ItU7275Ga9k
-<title>הפטריוטים עם ינון מגל | 29.9.2026 | התוכנית המלאה
-<published>2026-09-29T19:57:41+00:00
-<yt:videoId>weMWlQ8A6NE
-<title>חג בסוכת הפטריוטים: רמי דנוך ובצלאל גלעדי במופע חגיגי
-== piped/invidious for 99Yq0j12NXg
--- https://pipedapi.kavin.rocks/streams/99Yq0j12NXg
-status=526 size=0
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:04.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270941
 
--- https://api.piped.private.coffee/streams/99Yq0j12NXg
-status=500 size=1357
-{"error":"org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException: YouTube probably temporarily blocked anonymous watch access with this IP , got error LOGIN_REQUIRED: \"Sign in to confirm that you're not a bot\"\n\tat org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStre
--- https://pipedapi.adminforge.de/streams/99Yq0j12NXg
-status=301 size=289
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
-<html><head>
-<title>301 Moved Permanently</title>
-</head><body>
-<h1>Moved Permanently</h1>
-<p>The document has moved <a href="https://adminforge.de/streams/99Yq0j12NXg">here</a>.</p>
-</body></html>
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083764000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083768000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083772000
+segments=8
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:04.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270941
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083792000
+== q=?dvr=86400 variant https://n-121-5.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=86400
+status=200 size=1913
+#EXTM3U
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:16.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270929
 
--- https://inv.nadeko.net/api/v1/videos/99Yq0j12NXg
-status=403 size=17
-Endpoint disabled
--- https://invidious.nerdvpn.de/api/v1/videos/99Yq0j12NXg
-curl: (28) Connection timed out after 25001 milliseconds
-status=000 size=0
-Endpoint disabled
--- https://yewtu.be/api/v1/videos/99Yq0j12NXg
-status=403 size=552
-<html>
-<head><title>403 Forbidden</title></head>
-<body>
-<center><h1>403 Forbidden</h1></center>
-<hr><center>openresty</center>
-</body>
-</html>
-<!-- a padding to disable MSIE and Chrome friendly error page -->
-<!-- a padding to disable MSIE and Chrome friendly error page -->
-<!-- a padding t
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083716000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083720000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083724000
+segments=21
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:16.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270929
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083796000
+== q=?dvr=100000 variant https://n-121-13.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=100000
+status=200 size=2249
+#EXTM3U
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:00.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270925
+
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083700000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083704000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083708000
+segments=25
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:00.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270925
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083796000
+== q=?dvr=7200 variant https://n-121-12.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=7200
+status=200 size=821
+#EXTM3U
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:12.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270943
+
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083772000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083776000
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083780000
+segments=8
+#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:12.000Z
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:203270943
+#EXTINF:4,
+fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083800000
