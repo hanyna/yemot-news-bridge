@@ -1,80 +1,26 @@
-== q= variant https://n-121-13.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12
-status=200 size=821
-#EXTM3U
-#EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:04.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270941
-
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083764000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083768000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083772000
-segments=8
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:04.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270941
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083792000
-== q=?dvr=86400 variant https://n-121-5.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=86400
-status=200 size=1913
-#EXTM3U
-#EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:16.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270929
-
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083716000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083720000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083724000
-segments=21
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:16.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270929
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083796000
-== q=?dvr=100000 variant https://n-121-13.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=100000
-status=200 size=2249
-#EXTM3U
-#EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:00.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270925
-
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083700000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083704000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083708000
-segments=25
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:35:00.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270925
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083796000
-== q=?dvr=7200 variant https://n-121-12.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8?bitrate=928000&audioId=1&videoId=12&dvr=7200
-status=200 size=821
-#EXTM3U
-#EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:12.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270943
-
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083772000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083776000
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083780000
-segments=8
-#EXT-X-PROGRAM-DATE-TIME:2026-10-07T16:36:12.000Z
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:203270943
-#EXTINF:4,
-fragment.ts?bitrate=928000&audioId=1&videoId=12&startTime=813083800000
+ago=600 [bitrate=928000&audioId=1&videoId=12] -> 200 508728 audio,video,,audio,video,
+ago=600 [bitrate=928000&audioId=1] -> 200 95880 audio,,audio,
+ago=600 [audioId=1] -> 200 95880 audio,,audio,
+ago=3600 [bitrate=928000&audioId=1&videoId=12] -> 200 541816 audio,video,,audio,video,
+ago=3600 [bitrate=928000&audioId=1] -> 200 98700 audio,,audio,
+ago=3600 [audioId=1] -> 200 98700 audio,,audio,
+ago=21600 [bitrate=928000&audioId=1&videoId=12] -> 200 532792 audio,video,,audio,video,
+ago=21600 [bitrate=928000&audioId=1] -> 200 96068 audio,,audio,
+ago=21600 [audioId=1] -> 200 96068 audio,,audio,
+ago=79200 [bitrate=928000&audioId=1&videoId=12] -> 200 565880 audio,video,,audio,video,
+ago=79200 [bitrate=928000&audioId=1] -> 200 104340 audio,,audio,
+ago=79200 [audioId=1] -> 200 104340 audio,,audio,
+ago=82800 [bitrate=928000&audioId=1&videoId=12] -> 200 415480 audio,video,,audio,video,
+ago=82800 [bitrate=928000&audioId=1] -> 200 107160 audio,,audio,
+ago=82800 [audioId=1] -> 200 107160 audio,,audio,
+ago=86000 [bitrate=928000&audioId=1&videoId=12] -> 200 538808 audio,video,,audio,video,
+ago=86000 [bitrate=928000&audioId=1] -> 200 98888 audio,,audio,
+ago=86000 [audioId=1] -> 200 98888 audio,,audio,
+ago=90000 [bitrate=928000&audioId=1&videoId=12] -> 200 502712 audio,video,,audio,video,
+ago=90000 [bitrate=928000&audioId=1] -> 200 98888 audio,,audio,
+ago=90000 [audioId=1] -> 200 98888 audio,,audio,
+ago=172800 [bitrate=928000&audioId=1&videoId=12] -> 200 568888 audio,video,,audio,video,
+ago=172800 [bitrate=928000&audioId=1] -> 200 98700 audio,,audio,
+ago=172800 [audioId=1] -> 200 98700 audio,,audio,
+30 frags in 77s size=16678796
+120.096000
