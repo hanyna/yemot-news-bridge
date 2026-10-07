@@ -2,12 +2,17 @@ name: probe-yt
 on:
   push:
     branches: [probe-yt]
+permissions:
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v5
       - run: |
+          set +e
+          exec > probe-out.txt 2>&1
           pip install -q -U yt-dlp
           yt-dlp --version
           echo "== playlist (first 25) =="
@@ -15,12 +20,17 @@ jobs:
           echo "== channel videos (first 25) =="
           yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s|%(title)s" "https://www.youtube.com/@C14news/videos" || echo "CHANNEL FAILED"
           echo "== rss =="
-          curl -sS -m 20 "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" | head -c 3000 || echo "RSS FAILED"
-      - run: |
+          curl -sS -m 20 "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" | head -c 2500 || echo "RSS FAILED"
+          echo
           echo "== audio download test =="
           ID=$(yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s" "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" | awk -F'|' '$2>2400{print $1; exit}')
           echo "long video: $ID"
-          for c in "" "-S +size --extractor-args youtube:player_client=android" "--extractor-args youtube:player_client=ios" "--extractor-args youtube:player_client=tv"; do
+          for c in "" "--extractor-args youtube:player_client=android" "--extractor-args youtube:player_client=ios" "--extractor-args youtube:player_client=tv"; do
             echo "--- try: $c"
+            rm -f /tmp/a.*
             if timeout 300 yt-dlp -f "bestaudio[abr<=64]/bestaudio/best" $c --no-playlist -o "/tmp/a.%(ext)s" "https://www.youtube.com/watch?v=$ID"; then ls -la /tmp/a.*; echo "OK with: $c"; break; fi
           done
+          exit 0
+      - run: |
+          git config user.name probe && git config user.email probe@none
+          git add probe-out.txt && git commit -qm "probe output [skip ci]" && git push
