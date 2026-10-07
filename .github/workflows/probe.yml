@@ -13,22 +13,29 @@ jobs:
       - run: |
           set +e
           exec > probe-out.txt 2>&1
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          for u in "https://tv.c14.co.il/" "https://tv.c14.co.il/serie/63cd2cf4ca5a380012e20fe0" "https://vod.c14.co.il/serie/63cd2cf4ca5a380012e20fe0" "https://tv.c14.co.il/player/channel/63a2edcb4343c600125cdbb6"; do
+            echo "== GET $u"
+            curl -sS -L -m 30 -A "$UA" -o page.html -w "status=%{http_code} final=%{url_effective} size=%{size_download}\n" "$u"
+            grep -o '<script[^>]*src="[^"]*"' page.html | head -20
+            grep -oE 'https?://[a-zA-Z0-9./_-]*(api|graphql|redge|redgalaxy|player|cdn)[a-zA-Z0-9./_-]*' page.html | sort -u | head -40
+            grep -oE '<link[^>]*(manifest|preconnect|dns-prefetch)[^>]*>' page.html | head
+            echo "-- inline json keys:"; grep -oE '"(apiUrl|API_URL|apiBase|baseUrl|tenant|platform)[^,]{0,120}' page.html | head
+          done
+          echo "== JS bundles"
+          for j in $(grep -o '<script[^>]*src="[^"]*"' page.html | grep -o 'src="[^"]*"' | cut -d'"' -f2 | head -8); do
+            case "$j" in /*) j="https://tv.c14.co.il$j";; esac
+            echo "-- $j"
+            curl -sS -m 30 -A "$UA" "$j" | grep -oE 'https?://[a-zA-Z0-9./_-]*(api|redge|redgalaxy|galaxy)[a-zA-Z0-9./_-]*' | sort -u | head -30
+            curl -sS -m 30 -A "$UA" "$j" | grep -oE '"/?(api|items|series|episodes|vods?|products|playlist|playback)[a-zA-Z0-9/_{}-]*"' | sort -u | head -40
+          done
+          echo "== yt-dlp other clients"
           pip install -q -U yt-dlp
-          yt-dlp --version
-          echo "== playlist (first 25) =="
-          yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s|%(upload_date)s|%(title)s" "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" || echo "PLAYLIST FAILED"
-          echo "== channel videos (first 25) =="
-          yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s|%(title)s" "https://www.youtube.com/@C14news/videos" || echo "CHANNEL FAILED"
-          echo "== rss =="
-          curl -sS -m 20 "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" | head -c 2500 || echo "RSS FAILED"
-          echo
-          echo "== audio download test =="
-          ID=$(yt-dlp --flat-playlist --playlist-end 25 --print "%(id)s|%(duration)s" "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" | awk -F'|' '$2>2400{print $1; exit}')
-          echo "long video: $ID"
-          for c in "" "--extractor-args youtube:player_client=android" "--extractor-args youtube:player_client=ios" "--extractor-args youtube:player_client=tv"; do
-            echo "--- try: $c"
-            rm -f /tmp/a.*
-            if timeout 300 yt-dlp -f "bestaudio[abr<=64]/bestaudio/best" $c --no-playlist -o "/tmp/a.%(ext)s" "https://www.youtube.com/watch?v=$ID"; then ls -la /tmp/a.*; echo "OK with: $c"; break; fi
+          sudo apt-get install -y -qq deno >/dev/null 2>&1 || (curl -fsSL https://deno.land/install.sh | sh >/dev/null 2>&1; export PATH="$HOME/.deno/bin:$PATH")
+          export PATH="$HOME/.deno/bin:$PATH"
+          for c in "--extractor-args youtube:player_client=mweb" "--extractor-args youtube:player_client=web_embedded" "--extractor-args youtube:player_client=tv_embedded" "--extractor-args youtube:player_client=web_safari"; do
+            echo "--- try: $c"; rm -f /tmp/a.*
+            if timeout 240 yt-dlp -f "bestaudio[abr<=64]/bestaudio/best" $c --no-playlist -o "/tmp/a.%(ext)s" "https://www.youtube.com/watch?v=99Yq0j12NXg" 2>&1 | tail -3; then ls -la /tmp/a.* 2>/dev/null && echo "OK with: $c" && break; fi
           done
           exit 0
       - run: |
