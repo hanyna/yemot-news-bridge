@@ -49,9 +49,18 @@ const (
 
 type podcastSource struct {
 	name string // בתפריט ובכותרת: "חושבים בקול של הקול היהודי" (ריק — השם מההזנה)
-	url  string // ההזנה (RSS). בשלוחת הפרקים הבודדים: episodesURL
+	url  string // ההזנה (RSS), קישור c14:// (תוכנית מערוץ 14 — ראו c14.go), או episodesURL
+	keep int    // כמה פרקים נשמרים בשלוחה הזו. 0 = PODCAST_KEEP
 	// פרקים בודדים (EPISODES): רשימה קבועה במקום הזנה. nil = פודקאסט רגיל.
 	static []*podEpisode
+}
+
+// keepN: כמה פרקים נשמרים בשלוחה של הפודקאסט הזה.
+func (p *podcast) keepN(cfg *config) int {
+	if p.src.keep > 0 {
+		return p.src.keep
+	}
+	return cfg.podcastKeep
 }
 
 // episodesURL: ה"הזנה" של שלוחת הפרקים הבודדים (נשמר ב-podcast.txt שלה).
@@ -134,11 +143,20 @@ func parsePodcasts(s string) []podcastSource {
 		if i := strings.LastIndex(line, "|"); i >= 0 {
 			name, link = strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:])
 		}
-		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") && !isC14(link) {
 			log.Printf("הערה: שורה ב-PODCASTS בלי קישור להזנה — מדלג: %q", line)
 			continue
 		}
-		out = append(out, podcastSource{name: name, url: link})
+		src := podcastSource{name: name, url: link}
+		if isC14(link) {
+			c, err := parseC14(link)
+			if err != nil {
+				log.Printf("הערה: %v — מדלג על השורה.", err)
+				continue
+			}
+			src.keep = c.keep
+		}
+		out = append(out, src)
 	}
 	return out
 }
@@ -396,13 +414,16 @@ func (p *podcast) sync(cfg *config, st *state, now time.Time, keep int) {
 	var title string
 	var feed []*podEpisode
 	var err error
-	if p.src.static != nil {
+	switch {
+	case p.src.static != nil:
 		for _, e := range p.src.static {
 			c := *e
 			feed = append(feed, &c)
 		}
 		sort.SliceStable(feed, func(i, j int) bool { return feed[i].ts < feed[j].ts })
-	} else {
+	case isC14(p.src.url):
+		title, feed, err = fetchC14(p.src.url, cfg.loc, now)
+	default:
 		title, feed, err = fetchPodcast(p.src.url)
 	}
 	if err != nil {
@@ -634,7 +655,7 @@ func (st *state) syncPodcasts(cfg *config, now time.Time) {
 			log.Printf("הערה: שלוחת הפודקאסט %s לא נטענה: %v%s", ext, err, aclHint(err, "GetTextFile"))
 			continue
 		}
-		p.sync(cfg, st, now, cfg.podcastKeep)
+		p.sync(cfg, st, now, p.keepN(cfg))
 	}
 }
 
@@ -655,7 +676,7 @@ func (st *state) finishPodcasts(cfg *config) bool {
 			loaded = false // לא נטען בסבב הזה (תקלה זמנית מול ימות) — לא יודעים
 			continue
 		}
-		p.finish(cfg, cfg.podcastKeep)
+		p.finish(cfg, p.keepN(cfg))
 		if p.ready() == 0 {
 			continue // עוד אין מה לשמוע
 		}

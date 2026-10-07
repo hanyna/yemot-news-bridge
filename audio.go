@@ -513,6 +513,9 @@ var mediaClient = &http.Client{}
 // downloadMedia מוריד את הסרטון (דרך השרת של ערוץ חי), את ההודעה הקולית, או
 // פרק של פודקאסט.
 func downloadMedia(cfg *config, j *audioJob, path string) error {
+	if j.kind == "p" && isC14DVR(j.src) {
+		return downloadC14DVR(j.src, path) // הקלטה מהשידור החי של ערוץ 14 (c14.go)
+	}
 	if j.kind == "v" && isXChannel(j.channel) {
 		src := j.src
 		if src == "" && cfg.x != nil { // אחרי הפעלה מחדש — מהציוצים שבזיכרון
