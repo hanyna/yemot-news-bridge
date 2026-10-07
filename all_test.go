@@ -46,9 +46,10 @@ func TestWhen(t *testing.T) {
 		{time.Date(2026, 9, 22, 17, 10, 0, 0, loc), "בשעה 5 ו 10 דקות אחר הצהריים"},
 		{time.Date(2026, 9, 22, 18, 45, 0, 0, loc), "בשעה 6 ו 45 דקות בערב"},
 		{time.Date(2026, 9, 22, 0, 20, 0, 0, loc), "בשעה 12 ו 20 דקות בלילה"},
-		{time.Date(2026, 9, 21, 23, 0, 0, 0, loc), "אתמול בשעה 11 בלילה"},
-		{time.Date(2026, 9, 19, 8, 30, 0, 0, loc), "ביום שבת בשעה 8 וחצי בבוקר"},
-		{time.Date(2026, 9, 3, 8, 30, 0, 0, loc), "ב 3 בספטמבר בשעה 8 וחצי בבוקר"},
+		// בלי "אתמול", יום בשבוע ותאריך — רק השעה
+		{time.Date(2026, 9, 21, 23, 0, 0, 0, loc), "בשעה 11 בלילה"},
+		{time.Date(2026, 9, 19, 8, 30, 0, 0, loc), "בשעה 8 וחצי בבוקר"},
+		{time.Date(2026, 9, 3, 8, 30, 0, 0, loc), "בשעה 8 וחצי בבוקר"},
 	} {
 		if got := spokenWhen(c.t, now); got != c.want {
 			t.Errorf("got %q want %q", got, c.want)
@@ -754,6 +755,8 @@ func TestArchiveKeepsOldMessages(t *testing.T) {
 // TestArchiveRerenderYesterday: אחרי חצות "בשעה X" הופך ל"אתמול בשעה X" — גם
 // להודעה שכבר לא בשרת (הגוף נלקח מהקובץ שבשלוחה).
 func TestArchiveRerenderYesterday(t *testing.T) {
+	// הודעות שכבר בקו בניסוח הישן ("אתמול בשעה ...", קול עם יום ותאריך) — עוברות
+	// ל"בשעה ..." בלבד, והקול הישן נמחק. הודעות חדשות לא משתנות בחצות.
 	defer func() { nowFunc = time.Now }()
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
 	day := time.Date(2026, 9, 24, 20, 0, 0, 0, loc)
@@ -772,23 +775,34 @@ func TestArchiveRerenderYesterday(t *testing.T) {
 	if f.files["ivr2:/1/10003.tts"] != "אלישע ירד, בשעה 7 בערב. יוצאת מהשרת" {
 		t.Fatalf("today: %q", f.files["ivr2:/1/10003.tts"])
 	}
+	// מצב ישן: הקראה עם "אתמול" וקול מוכן בניסוח עם תאריך
+	a := st.arch["1"]
+	e := a.entries["a/2"]
+	e.class, e.voiced, e.lasting = whenYesterday, true, true
+	f.files["ivr2:/1/10003.tts"] = "אלישע ירד, אתמול בשעה 7 בערב. יוצאת מהשרת"
+	f.files["ivr2:/1/10003.wav"] = "old"
+	f.dirs["ivr2:/1"] = append(f.dirs["ivr2:/1"], "10003.wav")
+	a.files = append(a.files, "10003.wav")
 	f.items = f.items[:1]
 	nowFunc = func() time.Time { return day.Add(6 * time.Hour) } // 2 בלילה, למחרת
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, אתמול בשעה 6 בערב. נשארת בשרת" ||
-		f.files["ivr2:/1/10003.tts"] != "אלישע ירד, אתמול בשעה 7 בערב. יוצאת מהשרת" ||
-		f.files["ivr2:/2/1/10003.tts"] != "אתמול בשעה 7 בערב. יוצאת מהשרת" {
-		t.Fatalf("yesterday: %q | %q | %q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10003.tts"], f.files["ivr2:/2/1/10003.tts"])
+	if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, בשעה 6 בערב. נשארת בשרת" ||
+		f.files["ivr2:/1/10003.tts"] != "אלישע ירד, בשעה 7 בערב. יוצאת מהשרת" ||
+		f.files["ivr2:/2/1/10003.tts"] != "בשעה 7 בערב. יוצאת מהשרת" {
+		t.Fatalf("next day: %q | %q | %q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10003.tts"], f.files["ivr2:/2/1/10003.tts"])
 	}
-	// שבוע אחר כך — תאריך (ומכאן כבר לא משתנה).
+	if f.has("ivr2:/1", "10003.wav") || a.hasFile("10003.wav") || e.voiced {
+		t.Fatal("old voice with a date should be removed")
+	}
+	// שבוע אחר כך — עדיין רק השעה.
 	nowFunc = func() time.Time { return day.Add(8 * 24 * time.Hour) }
 	if err := syncOnce(&cfg, &state{}); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/1/10003.tts"] != "אלישע ירד, ב 24 בספטמבר בשעה 7 בערב. יוצאת מהשרת" {
-		t.Fatalf("date: %q", f.files["ivr2:/1/10003.tts"])
+	if f.files["ivr2:/1/10003.tts"] != "אלישע ירד, בשעה 7 בערב. יוצאת מהשרת" {
+		t.Fatalf("week later: %q", f.files["ivr2:/1/10003.tts"])
 	}
 }
 
@@ -1449,7 +1463,7 @@ func TestRerenderAfterRename(t *testing.T) {
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, אתמול בשעה 7 בערב. הודעה" || f.files["ivr2:/2/1/10001.tts"] != "אתמול בשעה 7 בערב. הודעה" {
+	if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, בשעה 7 בערב. הודעה" || f.files["ivr2:/2/1/10001.tts"] != "בשעה 7 בערב. הודעה" {
 		t.Fatalf("%q | %q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/2/1/10001.tts"])
 	}
 }

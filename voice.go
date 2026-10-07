@@ -11,9 +11,8 @@ package main
 //
 // חיסכון במכסה: בחינם Google נותנים רק 10 קבצי קול ביום לכל מודל. לכן:
 //   - קובץ קול אחד לכל הודעה — אותו קובץ עולה לשלוחה 1 ולשלוחת הכתב (עם שם הכתב).
-//   - בקול, הזמן נאמר כיום בשבוע ("ביום שישי בשעה 8 בבוקר") ולא "היום"/"אתמול" —
-//     ככה הקול לא צריך להיווצר מחדש בכל חצות. אחרי שבוע (כשהניסוח עובר לתאריך)
-//     הקול נמחק, וההודעה הישנה מושמעת כטקסט.
+//   - בקול, כמו בטקסט, נאמרת רק השעה ("אלישע ירד, בשעה 8 בבוקר") — בלי יום ותאריך,
+//     ולכן הקול לא מתיישן לעולם. קול ישן מלפני השינוי (עם יום/תאריך) נמחק — rerender.
 //   - הודעות ישנות לא מקבלות קול בדיעבד; רק הודעות חדשות (ואחרי הפעלה מחדש —
 //     הודעות מהשעות האחרונות שעוד לא קיבלו).
 //   - הודעה ארוכה: הטקסט נחתך (מגבלה של ימות המשיח), אבל הקול מקריא אותה במלואה.
@@ -70,10 +69,10 @@ const fullSuffix = "-full.txt"
 // speechMaxChars: עד כמה תווים הקול מקריא (הודעה ארוכה מזה — נחתכת גם בקול).
 const speechMaxChars = 4000
 
-// audioItem: טקסט הקול של הודעה — הזמן כיום בשבוע ותאריך, כדי שלא יתיישן לעולם.
+// audioItem: טקסט הקול של הודעה — "<כתב>, בשעה ...", בלי תאריך.
 func audioItem(it FeedItem, titles map[string]string, loc *time.Location, withName bool) string {
 	t := time.Unix(it.TS, 0).In(loc)
-	head := itemHead(it.Channel, t, whenVoice, titles, withName)
+	head := itemHead(it.Channel, t, whenToday, titles, withName)
 	body := it.Text
 	const cutNote = " המשך ההודעה לא הוקרא."
 	room := speechMaxChars - len([]rune(head)) - len([]rune(cutNote))
@@ -700,8 +699,8 @@ func (st *state) speechTick(cfg *config) {
 			continue
 		}
 		a.addFile(speechFile(r.base))
-		if !e.voiced || !e.lasting {
-			e.voiced, e.lasting, a.dirty = true, true, true
+		if !e.voiced || !e.lasting || !e.clock {
+			e.voiced, e.lasting, e.clock, a.dirty = true, true, true, true
 		}
 	}
 }
@@ -762,7 +761,7 @@ func (a *archive) requeueSpeech(cfg *config, items []FeedItem, titles map[string
 			// ההקראה בשלוחה כוללת את תיאור התמונה (Gemini), וההודעה מהטלגרם לא —
 			// הקול נבנה מההקראה, כדי שהתיאור לא ייעלם אחרי הפעלה מחדש.
 			if old, exists, err := cfg.y.read(a.ext, introFile(e.base)); err == nil && exists && strings.Contains(old, "בתמונ") {
-				if t, ok := replaceWhen(old, time.Unix(e.ts, 0).In(cfg.loc), e.class, whenVoice); ok {
+				if t, ok := replaceWhen(old, time.Unix(e.ts, 0).In(cfg.loc), e.class, whenToday); ok {
 					text = t
 				}
 			}

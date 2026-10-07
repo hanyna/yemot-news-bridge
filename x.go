@@ -50,6 +50,7 @@ var errXNotFound = errors.New("החשבון לא נמצא בטוויטר (בדק
 type xAcct struct {
 	handle  string // כמו שנכתב ב-X_ACCOUNTS
 	title   string // השם שמוצג בטוויטר (העברי)
+	fixed   bool   // השם נקבע ב-X_ACCOUNTS ("שם=אליה אביב") — לא מתעדכן מטוויטר
 	items   map[int]FeedItem
 	nextTry time.Time
 	fails   int
@@ -79,13 +80,27 @@ func newXSource(list, base string) *xSource {
 	}
 	s := &xSource{client: &http.Client{Timeout: 30 * time.Second}}
 	seen := map[string]bool{}
-	for _, f := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
+	add := func(f, name string) {
 		h := xHandle(f)
 		if h == "" || seen[strings.ToLower(h)] {
-			continue
+			return
 		}
 		seen[strings.ToLower(h)] = true
-		s.accts = append(s.accts, &xAcct{handle: h, items: map[int]FeedItem{}})
+		a := &xAcct{handle: h, items: map[int]FeedItem{}}
+		if name != "" {
+			a.title, a.fixed = name, true
+		}
+		s.accts = append(s.accts, a)
+	}
+	// "Eliya_aviv=אליה אביב": השם שיוקרא בקו, במקום השם שבפרופיל בטוויטר.
+	for _, part := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == '\n' }) {
+		if i := strings.Index(part, "="); i >= 0 {
+			add(part[:i], strings.Join(strings.Fields(part[i+1:]), " "))
+			continue
+		}
+		for _, f := range strings.Fields(part) {
+			add(f, "")
+		}
 	}
 	if len(s.accts) == 0 {
 		return nil
@@ -298,7 +313,7 @@ func (s *xSource) fetch(a *xAcct) error {
 			var p struct {
 				User xAuthor `json:"user"`
 			}
-			if json.Unmarshal(pb, &p) == nil && p.User.Name != "" {
+			if json.Unmarshal(pb, &p) == nil && p.User.Name != "" && !a.fixed {
 				a.title = hebrewTitle(p.User.Name)
 			}
 			return nil // קיים, פשוט אין ציוצים כרגע

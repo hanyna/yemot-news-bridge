@@ -445,3 +445,14 @@ func TestXMediaTab(t *testing.T) {
 		t.Fatal("media-only tweet missing")
 	}
 }
+
+func TestXFixedName(t *testing.T) {
+	s := newXSource("ariel__danino, Eliya_aviv=אליה  אביב\nhttps://x.com/meiretingr", "")
+	if s == nil || len(s.accts) != 3 {
+		t.Fatalf("%+v", s)
+	}
+	a := s.accts[1]
+	if a.handle != "Eliya_aviv" || a.title != "אליה אביב" || !a.fixed || s.accts[0].fixed || s.accts[2].handle != "meiretingr" {
+		t.Fatalf("%+v", a)
+	}
+}

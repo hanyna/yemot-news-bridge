@@ -187,20 +187,10 @@ const (
 	whenVoice = 8
 )
 
-func whenClass(t, now time.Time) int {
-	day := func(x time.Time) time.Time { return time.Date(x.Year(), x.Month(), x.Day(), 0, 0, 0, 0, x.Location()) }
-	days := int(day(now).Sub(day(t)).Hours()/24 + 0.5)
-	switch {
-	case days <= 0:
-		return whenToday
-	case days == 1:
-		return whenYesterday
-	case days < 7:
-		return whenThisWeek
-	default:
-		return whenDate
-	}
-}
+// מאז 7.10.2026 ההקראה אומרת רק את השעה ("אלישע ירד, בשעה 7 בערב"), בלי
+// "אתמול", יום בשבוע או תאריך — ולכן whenClass תמיד whenToday. הניסוחים הישנים
+// נשארים ב-whenText רק כדי ש-rerender ימצא ויחליף אותם בהודעות שכבר בקו.
+func whenClass(t, now time.Time) int { return whenToday }
 
 func whenText(t time.Time, class int) string {
 	clock := spokenClock(t)

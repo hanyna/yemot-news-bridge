@@ -93,7 +93,8 @@ type archEntry struct {
 	audio   int    // audioNone / audioPending / audioDone / audioNo
 	media   string // "v" סרטון, "o" הודעה קולית, "" אין
 	voiced  bool   // יש לה קול מוכן בניסוח "ביום שישי..." (voice.go) — לא מתיישן בחצות
-	lasting bool   // הקול המוכן בניסוח עם תאריך ("ביום שלישי, 6 באוקטובר...") — לא נמחק לעולם
+	lasting bool   // הקול המוכן לא מתיישן — לא נמחק לעולם
+	clock   bool   // הקול המוכן בניסוח החדש: רק השעה, בלי יום ותאריך (קול בלי הדגל — נמחק)
 	photo   bool   // יש בה תמונה שעוד לא קיבלה תיאור (תקלה זמנית ב-Gemini) — retryPhotos
 }
 
@@ -241,6 +242,7 @@ func parseArchive(txt string) archiveFile {
 				e.voiced = strings.Contains(p[7], "w")
 				e.photo = strings.Contains(p[7], "p")
 				e.lasting = strings.Contains(p[7], "d")
+				e.clock = strings.Contains(p[7], "c")
 			}
 			f.entries[e.key] = e
 		}
@@ -285,6 +287,9 @@ func (a *archive) encode(now time.Time) string {
 		}
 		if e.lasting {
 			voice += "d" // הקול בניסוח עם תאריך — נשאר לתמיד
+		}
+		if e.clock {
+			voice += "c" // הקול בניסוח שעה בלבד
 		}
 		if e.photo {
 			voice += "p" // תמונה שמחכה לתיאור (vision.go)
@@ -525,7 +530,7 @@ func (a *archive) retryPhotos(cfg *config, st *state, items []FeedItem, titles m
 		e.class = whenClass(time.Unix(e.ts, 0).In(cfg.loc), now)
 		if a.hasFile(speechFile(e.base)) {
 			if err := a.dropFile(cfg, speechFile(e.base)); err == nil {
-				e.voiced, e.lasting = false, false
+				e.voiced, e.lasting, e.clock = false, false, false
 			}
 		}
 		cfg.speech.retext(e.key, e.ts, a.ext, e.base, audioItem(it, titles, cfg.loc, a.withName), a.withName)
@@ -665,13 +670,17 @@ func (a *archive) requeue(cfg *config, st *state, items []FeedItem, now time.Tim
 	}
 }
 
-// rerender מעדכן את ניסוח הזמן בהקראות: "בשעה 8 בערב" ← "אתמול בשעה 8 בערב" ←
-// "ביום שני בשעה 8 בערב" ← "ב 3 בספטמבר בשעה 8 בערב". מחליפים רק את ביטוי
-// הזמן שבפתיחה — כך שגוף ההודעה (ושם הערוץ) נשארים בדיוק כמו שהיו.
+// rerender מעדכן את ניסוח הזמן בהקראות שכבר בקו: "אתמול בשעה 8 בערב" /
+// "ביום שני בשעה ..." / "ב 3 בספטמבר בשעה ..." ← "בשעה 8 בערב". מחליפים רק את
+// ביטוי הזמן שבפתיחה — כך שגוף ההודעה (ושם הערוץ) נשארים בדיוק כמו שהיו.
+// קול מוכן בניסוח הישן (עם יום ותאריך) נמחק, וההודעה מושמעת כטקסט עד שנוצר קול חדש.
 func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 	var list []*archEntry
 	for _, e := range a.entries {
-		if e.base >= 0 && e.class != whenClass(time.Unix(e.ts, 0).In(cfg.loc), now) {
+		if e.base < 0 {
+			continue
+		}
+		if e.class != whenClass(time.Unix(e.ts, 0).In(cfg.loc), now) || (!e.clock && a.hasFile(speechFile(e.base))) {
 			list = append(list, e)
 		}
 	}
@@ -683,42 +692,51 @@ func (a *archive) rerender(cfg *config, now time.Time, budget *int) {
 		*budget--
 		t := time.Unix(e.ts, 0).In(cfg.loc)
 		c := whenClass(t, now)
-		giveUp := func(why string, err error) {
-			a.rrFails[e.key]++
-			if a.rrFails[e.key] >= rerenderTries {
-				log.Printf("הערה: לא מעדכן את הזמן ב-%s בשלוחה %s (%s): %v", introFile(e.base), a.ext, why, err)
-				e.class, a.dirty = c, true
-			}
-		}
-		old, exists, err := cfg.y.read(a.ext, introFile(e.base))
-		if err == nil && !exists {
-			err = errors.New("הקובץ לא נמצא בשלוחה")
-		}
-		if err != nil {
-			giveUp("קריאה", err)
+		if e.class != c && !a.retime(cfg, e, t, c) {
 			continue
 		}
-		text, ok := replaceWhen(old, t, e.class, c)
-		if !ok {
-			e.class, a.dirty = c, true // לא מצאנו את ביטוי הזמן בפתיחה — משאירים כמו שהיא
-			continue
-		}
-		if err := cfg.y.upload(a.ext, introFile(e.base), text); err != nil {
-			giveUp("העלאה", err)
-			continue
-		}
-		e.class, a.dirty = c, true
-		// הקול: מגרסה קודמת ("היום"/"אתמול") — מתיישן, נמחק (מושמע הטקסט המעודכן).
-		// קול בניסוח יום בשבוע — נשאר עד שההודעה בת שבוע. קול עם תאריך — לתמיד.
-		// קול שנמחק נוצר מחדש בניסוח עם תאריך (requeueSpeech).
-		if a.hasFile(speechFile(e.base)) && !e.lasting && (!e.voiced || c == whenDate) {
+		if !e.clock && a.hasFile(speechFile(e.base)) {
 			if err := a.dropFile(cfg, speechFile(e.base)); err != nil {
-				log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %s נכשלה: %v", speechFile(e.base), a.ext, err)
+				a.rrFails[e.key]++
+				if a.rrFails[e.key] >= rerenderTries {
+					log.Printf("הערה: מחיקת הקול הישן %s בשלוחה %s נכשלה: %v", speechFile(e.base), a.ext, err)
+					e.clock = true // לא מנסים שוב לעולם
+				}
 			} else {
-				e.voiced = false
+				e.voiced, e.lasting = false, false
 			}
+			a.dirty = true
 		}
 	}
+}
+
+// retime מחליף את ביטוי הזמן בקובץ ההקראה. false: לא הצליח (ננסה שוב בסבב הבא).
+func (a *archive) retime(cfg *config, e *archEntry, t time.Time, c int) bool {
+	giveUp := func(why string, err error) bool {
+		a.rrFails[e.key]++
+		if a.rrFails[e.key] >= rerenderTries {
+			log.Printf("הערה: לא מעדכן את הזמן ב-%s בשלוחה %s (%s): %v", introFile(e.base), a.ext, why, err)
+			e.class, a.dirty = c, true
+		}
+		return false
+	}
+	old, exists, err := cfg.y.read(a.ext, introFile(e.base))
+	if err == nil && !exists {
+		err = errors.New("הקובץ לא נמצא בשלוחה")
+	}
+	if err != nil {
+		return giveUp("קריאה", err)
+	}
+	text, ok := replaceWhen(old, t, e.class, c)
+	if !ok {
+		e.class, a.dirty = c, true // לא מצאנו את ביטוי הזמן בפתיחה — משאירים כמו שהיא
+		return true
+	}
+	if err := cfg.y.upload(a.ext, introFile(e.base), text); err != nil {
+		return giveUp("העלאה", err)
+	}
+	e.class, a.dirty = c, true
+	return true
 }
 
 // replaceWhen מחליף את ביטוי הזמן שבפתיחת ההקראה (לפני הגוף — ב-120 התווים

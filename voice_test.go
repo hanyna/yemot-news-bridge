@@ -96,8 +96,8 @@ func TestSpeechUploadsWav(t *testing.T) {
 	if err := syncOnce(&cfg, st); err != nil {
 		t.Fatal(err)
 	}
-	// קובץ קול אחד — לשלוחה 1 ולשלוחת הכתב, עם שם הכתב והיום בשבוע
-	if got := f.files["ivr2:/1/10001.wav"]; got != "AUDIO:PHONE:אלישע ירד, ביום חמישי, 24 בספטמבר, בשעה 7 בערב. הודעה חדשה;convert=1" {
+	// קובץ קול אחד — לשלוחה 1 ולשלוחת הכתב, עם שם הכתב והשעה (בלי יום ותאריך)
+	if got := f.files["ivr2:/1/10001.wav"]; got != "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב. הודעה חדשה;convert=1" {
 		t.Fatalf("ext 1 wav: %q", got)
 	}
 	if got := f.files["ivr2:/2/1/10001.wav"]; got != f.files["ivr2:/1/10001.wav"] {
@@ -112,7 +112,7 @@ func TestSpeechUploadsWav(t *testing.T) {
 	if msgs != 1 {
 		t.Fatalf("one synthesis per message, got %d", msgs)
 	}
-	if !strings.Contains(f.files["ivr2:/1/archive.txt"], "e a/1 10000 ") || !strings.Contains(f.files["ivr2:/1/archive.txt"], " wd\n") {
+	if !strings.Contains(f.files["ivr2:/1/archive.txt"], "e a/1 10000 ") || !strings.Contains(f.files["ivr2:/1/archive.txt"], " wdc\n") {
 		t.Fatalf("voiced flag not saved: %q", f.files["ivr2:/1/archive.txt"])
 	}
 	if f.files["ivr2:/1/10001.tts"] == "" {
@@ -138,22 +138,17 @@ func TestSpeechUploadsWav(t *testing.T) {
 	}
 
 	st.speechTick(&cfg) // התפריטים (עולים בסוף הסבב) — כמו ברקע
-	// אחרי חצות: הטקסט מתעדכן ל"אתמול"; הקול ("ביום חמישי") נשאר — בלי ליצור מחדש
-	nowFunc = func() time.Time { return day.Add(6 * time.Hour) }
-	n = len(g.texts)
-	if err := syncOnce(&cfg, &state{}); err != nil { // גם אחרי הפעלה מחדש
-		t.Fatal(err)
-	}
-	if !strings.Contains(f.files["ivr2:/1/10001.tts"], "אתמול בשעה 7 בערב") || f.files["ivr2:/1/10001.wav"] == "" || len(g.texts) != n {
-		t.Fatalf("after midnight: tts=%q wav=%q synth=%q", f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10001.wav"], g.texts[n:])
-	}
-	// אחרי שבוע — הקול (עם התאריך) נשאר; לא עוברים לקריין הממוחשב
-	nowFunc = func() time.Time { return day.Add(8 * 24 * time.Hour) }
-	if err := syncOnce(&cfg, &state{}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(f.files["ivr2:/1/10001.wav"], "24 בספטמבר") || !strings.Contains(f.files["ivr2:/1/10001.tts"], "ב 24 בספטמבר") {
-		t.Fatalf("after a week: wav=%q tts=%q", f.files["ivr2:/1/10001.wav"], f.files["ivr2:/1/10001.tts"])
+	// אחרי חצות ואחרי שבוע: הטקסט והקול לא משתנים (רק השעה, בלי יום ותאריך),
+	// הקול נשאר ולא נוצר מחדש — גם אחרי הפעלה מחדש
+	for _, later := range []time.Duration{6 * time.Hour, 8 * 24 * time.Hour} {
+		nowFunc = func() time.Time { return day.Add(later) }
+		n = len(g.texts)
+		if err := syncOnce(&cfg, &state{}); err != nil {
+			t.Fatal(err)
+		}
+		if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, בשעה 7 בערב. הודעה חדשה" || !strings.Contains(f.files["ivr2:/1/10001.wav"], "אלישע ירד, בשעה 7 בערב.") || len(g.texts) != n {
+			t.Fatalf("after %v: tts=%q wav=%q synth=%q", later, f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10001.wav"], g.texts[n:])
+		}
 	}
 }
 
@@ -271,7 +266,7 @@ func TestSpeechLongMessageFull(t *testing.T) {
 		t.Fatalf("tts should be cut: %q", f.files["ivr2:/1/10001.tts"][len(f.files["ivr2:/1/10001.tts"])-80:])
 	}
 	wav := f.files["ivr2:/1/10001.wav"]
-	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, ביום חמישי, 24 בספטמבר, בשעה 7 בערב.") {
+	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב.") || strings.Contains(wav, "ביום") {
 		t.Fatalf("wav should be full: len=%d", len(wav))
 	}
 }
@@ -432,7 +427,7 @@ func TestSpeechKeepsPhotoDescription(t *testing.T) {
 		t.Fatal(err)
 	}
 	st2.speechTick(&cfg)
-	if got := f.files["ivr2:/1/10003.wav"]; !strings.Contains(got, "בתמונה: רכבי צבא בכניסה ליישוב") || !strings.Contains(got, "ביום") {
+	if got := f.files["ivr2:/1/10003.wav"]; !strings.Contains(got, "בתמונה: רכבי צבא בכניסה ליישוב") || strings.Contains(got, "ביום") || !strings.Contains(got, "אלישע ירד, בשעה") {
 		t.Fatalf("after restart: %q", got)
 	}
 }
