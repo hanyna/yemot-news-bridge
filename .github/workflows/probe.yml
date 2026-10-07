@@ -15,14 +15,13 @@ jobs:
           exec > probe-out.txt 2>&1
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
           L="https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8"
-          sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
-          echo "== live master"; curl -sS -L -m 30 -A "$UA" "$L" -o m.m3u8 -w "final=%{url_effective}\n"; F=$(curl -sS -L -m 30 -A "$UA" "$L" -o /dev/null -w "%{url_effective}"); cat m.m3u8 | head -40
-          V=$(grep -v '^#' m.m3u8 | grep . | head -1)
-          case "$V" in http*) ;; *) V="$(dirname $F)/$V";; esac
-          echo "== variant $V"; curl -sS -L -m 30 -A "$UA" "$V" -o v.m3u8; head -15 v.m3u8; echo "segments=$(grep -c EXTINF v.m3u8)"; tail -3 v.m3u8
-          for q in "?dvr=86400" "?startTime=$(date -u -d '-25 hours' +%s)" "?timeshift=90000" "?begin=$(date -u -d '-25 hours' +%Y%m%dT%H%M%S)" "?ts=$(date -u -d '-25 hours' +%s)"; do echo "-- try $q"; curl -sS -L -m 30 -A "$UA" "$F$q" -o t.m3u8 -w "status=%{http_code}\n"; head -8 t.m3u8; done
-          echo "== ffmpeg 20s"; timeout 90 ffmpeg -hide_banner -loglevel warning -user_agent "$UA" -i "$F" -t 20 -vn -ac 1 -b:a 32k /tmp/rec.mp3; ls -la /tmp/rec.mp3
-          echo "== stream info"; timeout 60 ffprobe -hide_banner -user_agent "$UA" "$F" 2>&1 | grep -E "Stream|Program|Duration" | head -20
+          for q in "" "?dvr=86400" "?dvr=100000" "?dvr=7200"; do
+            F=$(curl -sS -L -m 30 -A "$UA" "$L$q" -o m.m3u8 -w "%{url_effective}")
+            V=$(grep -v '^#' m.m3u8 | tr -d '\r' | grep . | head -1)
+            V="$(dirname "$F")/$V"
+            echo "== q=$q variant $V"; curl -sS -L -m 60 -A "$UA" "$V" -o v.m3u8 -w "status=%{http_code} size=%{size_download}\n"; tr -d '\r' < v.m3u8 | head -12; echo "segments=$(grep -c EXTINF v.m3u8)"; grep -m3 -E 'PROGRAM-DATE|TARGETDUR|MEDIA-SEQ' v.m3u8; tail -2 v.m3u8
+          done
+          exit 0
           echo "== yt playlist rss"
           curl -sS -m 30 "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4" -o yt.xml -w "status=%{http_code}\n"
           grep -oE '<(yt:videoId|title|published)>[^<]*' yt.xml | head -40
