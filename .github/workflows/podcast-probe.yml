@@ -21,7 +21,7 @@ jobs:
           echo "# בדיקת הקו אחרי התיקון — $(date -u)" > $out
           echo '```' >> $out
           K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
-          for e in 3 3/1 3/3 3/4; do
+          for e in 3/3; do
             echo "-- $e" >> $out
             curl -s -m 30 -H "Authorization: $K" --data-urlencode "path=ivr2:/$e" https://www.call2all.co.il/ym/api/GetIVR2Dir > /tmp/d.json
             python3 -c "import json;d=json.load(open('/tmp/d.json'));print(d.get('responseStatus'),d.get('message',''));[print(f.get('name'),f.get('mtime'),f.get('size')) for f in (d.get('files') or [])][-12:]" >> $out 2>&1
