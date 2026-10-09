@@ -191,6 +191,9 @@ func fetchC14(link string, loc *time.Location, now time.Time) (string, []*podEpi
 	seen := map[string]bool{}
 	var eps []*podEpisode
 	add := func(start time.Time, title string) {
+		if start.Weekday() == time.Friday {
+			return // בליל שבת אין תוכנית — גם אם משהו מופיע ביוטיוב
+		}
 		day := start.Format("2006-01-02")
 		end := start.Add(src.length)
 		if seen[day] || now.Sub(start) > c14DVRMax || now.Sub(end) < 5*time.Minute {
@@ -331,6 +334,19 @@ func c14PageTitles(playlist string) (string, []string, error) {
 		name = strings.TrimSpace(html.UnescapeString(m[1]))
 	}
 	return name, titles, nil
+}
+
+// c14Quiet: משישי בצהריים עד מוצאי שבת (22:00) לא מחפשים תוכניות של ערוץ 14 —
+// אין שידור, ומה שהיה בחמישי כבר נכנס.
+func c14Quiet(now time.Time, loc *time.Location) bool {
+	t := now.In(loc)
+	switch t.Weekday() {
+	case time.Friday:
+		return t.Hour() >= 12
+	case time.Saturday:
+		return t.Hour() < 22
+	}
+	return false
 }
 
 // isC14DVR: כתובת הקלטה מהשידור החי (c14dvr:<מאיזה זמן>:<עד איזה זמן>).

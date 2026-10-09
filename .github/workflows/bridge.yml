@@ -85,7 +85,7 @@ jobs:
           # len = אורך בדקות, keep = כמה תוכניות נשמרות בשלוחה.
           PODCASTS: |
             חושבים בקול של הקול היהודי | https://www.spreaker.com/show/4524009/episodes/feed
-            הפטריוטים | c14://playlist/PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4?start=21:00&len=93&keep=7&days=0-4
+            הפטריוטים | c14://playlist/PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4?start=21:00&len=93&keep=7&days=0-4&wait=6
             מדברים בהר של הקול היהודי | https://www.spreaker.com/show/4489948/episodes/feed
           # פרקים בודדים (לא סדרות) בשלוחה 3/2: שורה לכל פרק — "שם הפרק | תאריך | קישור לקובץ השמע".
           # כתבה (מוקראת בקול, עד כ-1,000 תווים): "שם הכתבה | תאריך | טקסט: התקציר".

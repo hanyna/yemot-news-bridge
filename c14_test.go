@@ -360,3 +360,33 @@ func TestParseC14Days(t *testing.T) {
 		}
 	}
 }
+
+func TestC14NoFriday(t *testing.T) {
+	withC14YouTube(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, c14FeedXML(c14Entry("הפטריוטים | 9.10.2026 | התוכנית המלאה", "2026-10-09T20:00:00+00:00")))
+	})
+	// גם אם יוטיוב מראה תוכנית בשישי, וגם עם days=0-6 — אין פרק לשישי
+	_, eps, err := fetchC14("c14://playlist/PL1?days=0-6&wait=0", ilLoc, time.Date(2026, 10, 9, 23, 30, 0, 0, ilLoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range eps {
+		if time.Unix(e.ts, 0).In(ilLoc).Weekday() == time.Friday {
+			t.Fatalf("friday episode: %v", epTitles(eps))
+		}
+	}
+	for _, c := range []struct {
+		t     time.Time
+		quiet bool
+	}{
+		{time.Date(2026, 10, 9, 9, 0, 0, 0, ilLoc), false},  // שישי בבוקר — עוד מחפשים (לתוכנית של חמישי)
+		{time.Date(2026, 10, 9, 20, 0, 0, 0, ilLoc), true},  // ליל שבת
+		{time.Date(2026, 10, 10, 12, 0, 0, 0, ilLoc), true}, // שבת
+		{time.Date(2026, 10, 10, 22, 30, 0, 0, ilLoc), false},
+		{time.Date(2026, 10, 11, 23, 0, 0, 0, ilLoc), false},
+	} {
+		if got := c14Quiet(c.t, ilLoc); got != c.quiet {
+			t.Errorf("%v: quiet=%v", c.t, got)
+		}
+	}
+}

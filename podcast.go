@@ -410,6 +410,9 @@ func (p *podcast) sync(cfg *config, st *state, now time.Time, keep int) {
 	if !p.checked.IsZero() && time.Since(p.checked) < podcastEvery {
 		return
 	}
+	if isC14(p.src.url) && c14Quiet(now, cfg.loc) {
+		return // שישי-שבת: לא מחפשים (c14.go)
+	}
 	p.checked = time.Now()
 	var title string
 	var feed []*podEpisode
