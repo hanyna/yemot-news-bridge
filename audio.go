@@ -706,14 +706,16 @@ var haveFFmpeg = sync.OnceValue(func() bool {
 
 // transcode מחלץ את הקול ל-MP3 מונו. ימות המשיח ממירים אותו לפורמט של טלפון
 // בזמן ההעלאה (convertAudio=1). סרטון / הודעה קולית: עוצמה אחידה (loudnorm).
-// פרק של פודקאסט (ארוך, וכבר מעובד): בלי loudnorm — מהיר — ובקצב נמוך יותר,
+// פרק של פודקאסט (ארוך): גם עוצמה אחידה, ובקצב נמוך יותר,
 // כדי שגם פרק של שעתיים יעבור את מגבלת ההעלאה של ימות. משתנה — לבדיקות.
 var transcode = func(in, out string, maxSecs int, podcast bool) error {
 	timeout := 3 * time.Minute
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", in, "-vn", "-map", "0:a:0", "-ac", "1"}
 	if podcast {
 		timeout = 15 * time.Minute
-		args = append(args, "-ar", "16000", "-b:a", "32k", "-t", strconv.Itoa(podcastMaxSecs))
+		// עוצמה אחידה גם לפרקים: הקלטה מהטלוויזיה (ערוץ 14) מגיעה חלשה (בערך -26dB) ונשמעת רע בטלפון.
+		// highpass — בלי זמזום נמוך שהטלפון ממילא לא מעביר. (פרק של שעה וחצי: כדקה-שתיים של עיבוד.)
+		args = append(args, "-ar", "16000", "-af", "highpass=f=70,loudnorm=I=-16:TP=-1.5:LRA=11", "-b:a", "32k", "-t", strconv.Itoa(podcastMaxSecs))
 	} else {
 		args = append(args, "-ar", "22050", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-b:a", "48k")
 		if maxSecs > 0 {
