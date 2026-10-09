@@ -23,18 +23,16 @@ jobs:
           K=x
           sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
           B=https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx
-          curl -sL -m 20 -A "$UA" "$B/playlist.m3u8" | head -30 >> $out
-          echo "-- variant:" >> $out
-          V=$(curl -sL -m 20 -A "$UA" "$B/playlist.m3u8" | grep -v '^#' | grep . | head -1)
-          echo "$V" >> $out
           u=$(date -u -d "2026-10-08T18:40:00Z" +%s)
           rm -f /tmp/all.ts
-          for i in $(seq 0 14); do ms=$(( ((u-978307200)/4*4 + i*4)*1000 )); curl -sL -m 20 -A "$UA" "$B/fragment.ts?audioId=1&startTime=$ms" >> /tmp/all.ts; done
-          ffprobe -hide_banner /tmp/all.ts 2>&1 | grep -i "stream\|duration" >> $out
-          for a in 0 2 3; do ms=$(( ((u-978307200)/4*4)*1000 )); r=$(curl -sL -m 20 -A "$UA" -o /tmp/a$a.ts -w "%{http_code} %{size_download}" "$B/fragment.ts?audioId=$a&startTime=$ms"); echo "audioId=$a → $r $(ffprobe -hide_banner /tmp/a$a.ts 2>&1 | grep -i stream | tr '\n' ' ')" >> $out; done
-          ms=$(( ((u-978307200)/4*4)*1000 )); r=$(curl -sL -m 20 -A "$UA" -o /tmp/nv.ts -w "%{http_code} %{size_download}" "$B/fragment.ts?startTime=$ms"); echo "no audioId → $r $(ffprobe -hide_banner /tmp/nv.ts 2>&1 | grep -i stream | tr '\n' ' ')" >> $out
-          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af "volumedetect,astats=metadata=0:reset=0" -f null - 2>&1 | grep -i "mean_volume\|max_volume\|discontinu\|non monotonic\|error" | head -8 >> $out
-          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af silencedetect=n=-45dB:d=0.05 -f null - 2>&1 | grep -c silence_start | sed 's/^/short gaps: /' >> $out
+          for i in $(seq 0 14); do ms=$(( ((u-978307200)/4*4 + i*4)*1000 )); curl -sL -m 20 -A "$UA" -o /tmp/f$i.ts "$B/fragment.ts?audioId=1&startTime=$ms"; cat /tmp/f$i.ts >> /tmp/all.ts; done
+          for i in 0 1 2; do ffprobe -v error -select_streams a:0 -show_entries stream=start_time,duration -of csv=p=0 /tmp/f$i.ts | tr '\n' ' ' >> $out; echo " (f$i)" >> $out; done
+          echo "-- gaps (plain concat), seconds:" >> $out
+          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af silencedetect=n=-50dB:d=0.02 -f null - 2>&1 | grep -o "silence_start: [0-9.]*\|silence_duration: [0-9.]*" | paste - - | head -20 >> $out
+          echo "-- gaps (async by timestamps):" >> $out
+          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af aresample=async=1000,silencedetect=n=-50dB:d=0.02 -f null - 2>&1 | grep -o "silence_start: [0-9.]*\|silence_duration: [0-9.]*" | paste - - | head -20 >> $out
+          echo "-- decode warnings:" >> $out
+          ffmpeg -hide_banner -nostdin -loglevel warning -i /tmp/all.ts -vn -f null - 2>&1 | sort | uniq -c | head -8 >> $out
           echo '```' >> $out
           sed -i "s/$K/***/g" $out
           gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
