@@ -23,18 +23,14 @@ jobs:
           PL=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
           curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html "https://www.youtube.com/playlist?list=$PL"
           python3 - >> $out 2>&1 <<'PY'
-          import re,json
+          import re,datetime
           s=open('/tmp/pl.html',encoding='utf-8').read()
-          print('playlistVideoRenderer', s.count('playlistVideoRenderer'), 'lockupViewModel', s.count('lockupViewModel'), 'continuation', s.count('continuationCommand'))
-          i=s.find('התוכנית המלאה'); print('first full at', i)
-          print(s[max(0,i-700):i+300].replace('\n',' '))
-          for m in re.finditer(r'"videoId":"([^"]{11})"',s):
-              pass
-          ids=[]
-          for m in re.finditer(r'"playlistVideoRenderer":\{"videoId":"([^"]{11})".*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"',s):
-              ids.append((m.group(1),m.group(2)))
-          print('parsed', len(ids))
-          for x in ids[:6]+[('...','')]+ids[-6:]: print(x)
+          ts=re.findall(r'"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"',s)
+          print('titles', len(ts))
+          for t in ts[:40]:
+              m=re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})',t)
+              wd=datetime.date(int(m[3]),int(m[2]),int(m[1])).strftime('%a') if m else ''
+              print(wd, t)
           PY
           curl -s -m 30 -o /tmp/e.json "https://api.spreaker.com/v2/shows/4489948/episodes?sorting=newest&limit=3"
           python3 -c "import json;[print(e['published_at'],e['title'],e['episode_id']) for e in json.load(open('/tmp/e.json'))['response']['items']]" >> $out 2>&1
