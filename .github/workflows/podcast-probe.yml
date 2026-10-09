@@ -18,42 +18,26 @@ jobs:
           set +e
           out=/tmp/probe.md
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          echo "# בדיקת פודקאסטים 2 — $(date -u)" > $out
+          echo "# בדיקת פודקאסטים 3 — $(date -u)" > $out
           echo '```' >> $out
           PL=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
-          echo "== YouTube feed בכמה צורות" >> $out
-          for ua in "" "$UA"; do
-            r=$(curl -s -m 30 ${ua:+-A "$ua"} -o /tmp/yt.xml -w "%{http_code}" "https://www.youtube.com/feeds/videos.xml?playlist_id=$PL"); echo "playlist feed ua=${ua:0:10} → $r" >> $out
-          done
-          r=$(curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html -w "%{http_code}" "https://www.youtube.com/playlist?list=$PL"); echo "playlist page → $r $(wc -c </tmp/pl.html)B" >> $out
-          grep -o '"channelId":"[^"]*"' /tmp/pl.html | sort | uniq -c | head -3 >> $out
-          grep -o '"title":{"runs":\[{"text":"[^"]*"' /tmp/pl.html | head -8 >> $out
-          grep -o '"title":{"simpleText":"[^"]*"' /tmp/pl.html | head -3 >> $out
-          CH=$(grep -o '"channelId":"UC[^"]*"' /tmp/pl.html | head -1 | cut -d'"' -f4)
-          if [ -n "$CH" ]; then r=$(curl -s -m 30 -o /tmp/ch.xml -w "%{http_code}" "https://www.youtube.com/feeds/videos.xml?channel_id=$CH"); echo "channel feed $CH → $r"  >> $out; grep -o '<title>[^<]*</title>\|<published>[^<]*' /tmp/ch.xml | grep -B1 -A1 "פטריוט" | head -12 >> $out; fi
-          echo >> $out
-          echo "== CDN עם מעקב הפניה" >> $out
-          u=$(date -u -d "2026-10-08T18:30:00Z" +%s); ms=$(( (u-978307200)/4*4*1000 ))
-          curl -s -m 20 -A "$UA" -o /dev/null -w "redirect → %{redirect_url}\n" "https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/fragment.ts?audioId=1&startTime=$ms" >> $out
-          r=$(curl -sL -m 30 -A "$UA" -o /tmp/f.ts -w "%{http_code} %{size_download}B final=%{url_effective}" "https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/fragment.ts?audioId=1&startTime=$ms"); echo "followed: $r" >> $out
-          head -c 200 /tmp/f.ts | tr -c '[:print:]' '.' >> $out; echo >> $out
-          echo >> $out
-          echo "== חושבים בקול: איפה הפרק החדש" >> $out
-          curl -s -m 30 -o /tmp/show.json "https://api.spreaker.com/v2/shows/4524009"
-          AU=$(python3 -c "import json;d=json.load(open('/tmp/show.json'))['response']['show'];print(d['author_id'])"); echo "author $AU" >> $out
-          curl -s -m 30 -o /tmp/shows.json "https://api.spreaker.com/v2/users/$AU/shows?limit=20"
-          python3 -c "import json;[print(s['show_id'],s['title'],s.get('last_episode_at')) for s in json.load(open('/tmp/shows.json'))['response']['items']]" >> $out 2>&1
-          curl -s -m 30 -o /tmp/it.json "https://itunes.apple.com/search?term=%D7%97%D7%95%D7%A9%D7%91%D7%99%D7%9D+%D7%91%D7%A7%D7%95%D7%9C&entity=podcast&country=il"
-          python3 -c "import json;[print(r.get('collectionName'),'|',r.get('artistName'),'|',r.get('releaseDate'),'|',r.get('feedUrl')) for r in json.load(open('/tmp/it.json'))['results'][:8]]" >> $out 2>&1
-          curl -s -m 30 -A "$UA" -o /tmp/tg.html "https://t.me/s/hakolhayehudi"
+          curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html "https://www.youtube.com/playlist?list=$PL"
           python3 - >> $out 2>&1 <<'PY'
-          import re,html
-          s=open('/tmp/tg.html',encoding='utf-8',errors='ignore').read()
-          for m in re.finditer(r'<div class="tgme_widget_message_text[^>]*>(.*?)</div>.*?datetime="([^"]+)"',s,re.S):
-              t=html.unescape(re.sub('<[^>]+>',' ',m.group(1)))
-              if 'חושבים' in t or 'spreaker' in m.group(1) or 'youtu' in m.group(1):
-                  print(m.group(2), ' '.join(t.split())[:160]); print('   links:', re.findall(r'href="(https?://[^"]+)"',m.group(1))[:3])
+          import re,json
+          s=open('/tmp/pl.html',encoding='utf-8').read()
+          print('playlistVideoRenderer', s.count('playlistVideoRenderer'), 'lockupViewModel', s.count('lockupViewModel'), 'continuation', s.count('continuationCommand'))
+          i=s.find('התוכנית המלאה'); print('first full at', i)
+          print(s[max(0,i-700):i+300].replace('\n',' '))
+          for m in re.finditer(r'"videoId":"([^"]{11})"',s):
+              pass
+          ids=[]
+          for m in re.finditer(r'"playlistVideoRenderer":\{"videoId":"([^"]{11})".*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"',s):
+              ids.append((m.group(1),m.group(2)))
+          print('parsed', len(ids))
+          for x in ids[:6]+[('...','')]+ids[-6:]: print(x)
           PY
+          curl -s -m 30 -o /tmp/e.json "https://api.spreaker.com/v2/shows/4489948/episodes?sorting=newest&limit=3"
+          python3 -c "import json;[print(e['published_at'],e['title'],e['episode_id']) for e in json.load(open('/tmp/e.json'))['response']['items']]" >> $out 2>&1
           echo '```' >> $out
           sed -i "s/$YEMOT_API_KEY/***/g" $out
           gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
