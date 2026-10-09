@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -258,4 +259,104 @@ func epTitles(eps []*podEpisode) []string {
 		out = append(out, e.title+" @"+time.Unix(e.ts, 0).In(ilLoc).Format("2.1"))
 	}
 	return out
+}
+
+// עמוד רשימת השמעה ביוטיוב (המבנה של אוקטובר 2026), כשההזנה מחזירה 404.
+func c14Page(titles ...string) string {
+	var b strings.Builder
+	b.WriteString(`<html><head><meta property="og:title" content="הפטריוטים"></head><body><script>var ytInitialData = {`)
+	for _, t := range titles {
+		q, _ := json.Marshal(t)
+		fmt.Fprintf(&b, `{"lockupViewModel":{"metadata":{"lockupMetadataViewModel":{"title":{"content":%s},"image":{}}}}},`, q)
+	}
+	b.WriteString(`};</script></body></html>`)
+	return b.String()
+}
+
+func withC14YouTube(t *testing.T, h http.HandlerFunc) {
+	srv := httptest.NewServer(h)
+	oldF, oldP := c14FeedBase, c14PageBase
+	c14FeedBase, c14PageBase = srv.URL+"/feed?playlist_id=", srv.URL+"/page?list="
+	t.Cleanup(func() { srv.Close(); c14FeedBase, c14PageBase = oldF, oldP })
+}
+
+func TestFetchC14PageWhenFeed404(t *testing.T) {
+	withC14YouTube(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/feed" {
+			w.WriteHeader(404)
+			return
+		}
+		fmt.Fprint(w, c14Page(
+			`ארז תדמור: "הוא לא יודע מה התפקיד שלו"`,
+			"הפטריוטים עם ינון מגל | 7.10.2026 | התוכנית המלאה",
+			"הפטריוטים עם ינון מגל | 06.10.2026 | התוכנית המלאה",
+		))
+	})
+	now := time.Date(2026, 10, 8, 9, 0, 0, 0, ilLoc)
+	name, eps, err := fetchC14("c14://playlist/PL1?start=21:00&len=93", ilLoc, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "הפטריוטים" || len(eps) != 2 || eps[1].title != "הפטריוטים עם ינון מגל" {
+		t.Fatalf("name=%q eps=%v", name, epTitles(eps))
+	}
+}
+
+func TestFetchC14Schedule(t *testing.T) {
+	// יוטיוב: יש 7.10 (רביעי), אין 8.10 (חמישי). עכשיו שישי.
+	withC14YouTube(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/feed" {
+			w.WriteHeader(404)
+			return
+		}
+		fmt.Fprint(w, c14Page("הפטריוטים עם ינון מגל | 7.10.2026 | התוכנית המלאה"))
+	})
+	link := "c14://playlist/PL1?start=21:00&len=93&days=0-4&wait=12"
+	early := time.Date(2026, 10, 9, 8, 30, 0, 0, ilLoc) // 10 שעות אחרי סוף השידור — עוד מחכים ליוטיוב
+	_, eps, err := fetchC14(link, ilLoc, early)
+	if err != nil || len(eps) != 1 {
+		t.Fatalf("early: %v %v", err, epTitles(eps))
+	}
+	later := time.Date(2026, 10, 9, 11, 0, 0, 0, ilLoc)
+	_, eps, err = fetchC14(link, ilLoc, later)
+	if err != nil || len(eps) != 2 {
+		t.Fatalf("later: %v %v", err, epTitles(eps))
+	}
+	th := eps[1]
+	if d := time.Unix(th.ts, 0).In(ilLoc); d.Day() != 8 || d.Hour() != 21 || th.title != "הפטריוטים עם ינון מגל" {
+		t.Fatalf("thursday: %v %q", d, th.title)
+	}
+	// אותו מזהה כמו אם יוטיוב היה מעלה את הסרטון — אין כפילות כשהוא מופיע אחר כך
+	withC14YouTube(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, c14FeedXML(c14Entry("הפטריוטים עם ינון מגל | 8.10.2026 | התוכנית המלאה", "2026-10-09T10:00:00+00:00")))
+	})
+	_, eps2, _ := fetchC14(link, ilLoc, later)
+	if len(eps2) != 2 || eps2[1].id != th.id {
+		t.Fatalf("id mismatch: %v", epTitles(eps2))
+	}
+	// שישי ושבת לא בימי השידור; ויוטיוב למטה לגמרי — עדיין לפי הלוח
+	withC14YouTube(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
+	_, eps3, err := fetchC14(link, ilLoc, time.Date(2026, 10, 10, 10, 0, 0, 0, ilLoc))
+	if err != nil || len(eps3) != 1 || time.Unix(eps3[0].ts, 0).In(ilLoc).Day() != 8 {
+		t.Fatalf("saturday: %v %v", err, epTitles(eps3))
+	}
+	// בלי days — יוטיוב למטה זו שגיאה (כמו קודם)
+	if _, _, err := fetchC14("c14://playlist/PL1", ilLoc, later); err == nil {
+		t.Fatal("expected error without days")
+	}
+}
+
+func TestParseC14Days(t *testing.T) {
+	s, err := parseC14("c14://playlist/X?days=0-4")
+	if err != nil || !s.days[0] || !s.days[4] || s.days[5] || s.days[6] || s.wait != 12*time.Hour {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if s, err := parseC14("c14://playlist/X?days=6,0&wait=3"); err != nil || !s.days[6] || !s.days[0] || s.days[1] || s.wait != 3*time.Hour {
+		t.Fatalf("%+v %v", s, err)
+	}
+	for _, bad := range []string{"days=5-2", "days=7", "days=x", "wait=99"} {
+		if _, err := parseC14("c14://playlist/X?" + bad); err == nil {
+			t.Errorf("%s: no error", bad)
+		}
+	}
 }

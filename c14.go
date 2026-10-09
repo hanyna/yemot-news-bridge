@@ -19,13 +19,23 @@ package main
 //
 // פרמטרים בקישור: start — שעת תחילת השידור (ברירת מחדל 21:00); len — אורך
 // ההקלטה בדקות (ברירת מחדל 93); keep — כמה פרקים נשמרים בשלוחה (אם חסר —
-// PODCAST_KEEP). תוכנית ששודרה לפני יותר מ-c14DVRMax כבר לא ב-CDN — מדלגים.
+// PODCAST_KEEP); days — ימי השידור הקבועים (0=ראשון ... 6=שבת, למשל days=0-4);
+// wait — כמה שעות אחרי סוף השידור מחכים ליוטיוב (ברירת מחדל 12).
+// תוכנית ששודרה לפני יותר מ-c14DVRMax כבר לא ב-CDN — מדלגים.
+//
+// ההזנה (RSS) של רשימת השמעה ביוטיוב החזירה 404 (אוקטובר 2026), לכן אם היא לא
+// עובדת קוראים את עמוד הרשימה עצמו. ויוטיוב לא תמיד מעלה את התוכנית המלאה (בעיקר
+// בחמישי): ביום שידור קבוע (days) שעבר wait שעות מסוף השידור ועדיין אין סרטון —
+// מקליטים לפי לוח השידורים, כדי לא לפספס את חלון החזרה.
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -39,11 +49,11 @@ import (
 
 const (
 	c14Scheme = "c14://"
-	c14DVRMax = 42 * time.Hour      // עומק חלון החזרה שסומכים עליו (נבדק: יומיים)
-	c14Epoch  = 978307200           // זמני הקטעים ב-CDN נספרים מ-1.1.2001 (אלפיות שנייה)
-	c14Frag   = 4                   // אורך קטע בשניות
-	c14Total  = 45 * time.Minute    // מגבלת זמן להורדת תוכנית שלמה
-	c14Full   = "התוכנית המלאה"     // הסימן בכותרת ביוטיוב שזו תוכנית שלמה
+	c14DVRMax = 42 * time.Hour   // עומק חלון החזרה שסומכים עליו (נבדק: יומיים)
+	c14Epoch  = 978307200        // זמני הקטעים ב-CDN נספרים מ-1.1.2001 (אלפיות שנייה)
+	c14Frag   = 4                // אורך קטע בשניות
+	c14Total  = 45 * time.Minute // מגבלת זמן להורדת תוכנית שלמה
+	c14Full   = "התוכנית המלאה"  // הסימן בכותרת ביוטיוב שזו תוכנית שלמה
 )
 
 // c14Stream: כתובת הבסיס של השידור החי. משתנה — לבדיקות ולעקיפה (C14_STREAM).
@@ -52,18 +62,23 @@ var c14Stream = "https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.li
 // c14FeedBase: הזנת רשימת השמעה ביוטיוב. משתנה — לבדיקות.
 var c14FeedBase = "https://www.youtube.com/feeds/videos.xml?playlist_id="
 
+// c14PageBase: עמוד רשימת ההשמעה ביוטיוב — כשההזנה לא עובדת. משתנה — לבדיקות.
+var c14PageBase = "https://www.youtube.com/playlist?list="
+
 type c14Source struct {
 	playlist string
 	start    [2]int // שעה, דקה (שעון ישראל)
 	length   time.Duration
 	keep     int
+	days     [7]bool       // ימי שידור קבועים (time.Weekday) — להקלטה גם בלי סרטון ביוטיוב
+	wait     time.Duration // כמה מחכים ליוטיוב אחרי סוף השידור
 }
 
 func isC14(link string) bool { return strings.HasPrefix(link, c14Scheme) }
 
 // parseC14 מפרק קישור c14://playlist/<id>?start=21:00&len=93&keep=7.
 func parseC14(link string) (c14Source, error) {
-	s := c14Source{start: [2]int{21, 0}, length: 93 * time.Minute}
+	s := c14Source{start: [2]int{21, 0}, length: 93 * time.Minute, wait: 12 * time.Hour}
 	rest, ok := strings.CutPrefix(link, c14Scheme+"playlist/")
 	if !ok {
 		return s, fmt.Errorf("קישור c14 לא מובן (צריך c14://playlist/<מזהה>): %q", link)
@@ -99,9 +114,52 @@ func parseC14(link string) (c14Source, error) {
 				return s, fmt.Errorf("keep לא מובן (1 עד 50): %q", v)
 			}
 			s.keep = n
+		case "days":
+			d, err := parseC14Days(v)
+			if err != nil {
+				return s, err
+			}
+			s.days = d
+		case "wait":
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 36 {
+				return s, fmt.Errorf("wait לא מובן (שעות, 0 עד 36): %q", v)
+			}
+			s.wait = time.Duration(n) * time.Hour
 		}
 	}
 	return s, nil
+}
+
+// parseC14Days: "0-4" או "0,1,2,3,4" (0=ראשון ... 6=שבת).
+func parseC14Days(v string) ([7]bool, error) {
+	var d [7]bool
+	bad := fmt.Errorf("days לא מובן (למשל days=0-4, כש-0 הוא יום ראשון): %q", v)
+	for _, part := range strings.Split(v, ",") {
+		a, b, rng := strings.Cut(strings.TrimSpace(part), "-")
+		from, err1 := strconv.Atoi(a)
+		to := from
+		var err2 error
+		if rng {
+			to, err2 = strconv.Atoi(b)
+		}
+		if err1 != nil || err2 != nil || from < 0 || to > 6 || from > to {
+			return d, bad
+		}
+		for i := from; i <= to; i++ {
+			d[i] = true
+		}
+	}
+	return d, nil
+}
+
+func (s c14Source) anyDay() bool {
+	for _, d := range s.days {
+		if d {
+			return true
+		}
+	}
+	return false
 }
 
 // reC14Date: תאריך בכותרת ביוטיוב — "06.10.2026" או "6.10.2026".
@@ -115,43 +173,46 @@ type ytFeed struct {
 	} `xml:"entry"`
 }
 
-// fetchC14 קורא את ההזנה של רשימת ההשמעה ביוטיוב ומחזיר פרק לכל תוכנית מלאה
-// שעדיין בחלון החזרה של ה-CDN, מהישנה לחדשה.
+// fetchC14 מחזיר פרק לכל תוכנית מלאה שעדיין בחלון החזרה של ה-CDN, מהישנה
+// לחדשה: לפי הסרטונים ברשימת ההשמעה ביוטיוב, ובימי השידור הקבועים (days) — גם
+// בלי סרטון, אחרי wait שעות.
 func fetchC14(link string, loc *time.Location, now time.Time) (string, []*podEpisode, error) {
 	src, err := parseC14(link)
 	if err != nil {
 		return "", nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c14FeedBase+src.playlist, nil)
+	name, titles, err := c14Titles(src.playlist)
 	if err != nil {
-		return "", nil, err
-	}
-	req.Header.Set("User-Agent", "yemot-news-bridge (playlist feed reader)")
-	resp, err := feedHTTP.Do(req)
-	if err != nil {
-		return "", nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("ההזנה של רשימת ההשמעה ביוטיוב: סטטוס %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return "", nil, err
-	}
-	var f ytFeed
-	if err := xml.Unmarshal(body, &f); err != nil {
-		return "", nil, fmt.Errorf("הזנה לא תקינה: %w", err)
+		if !src.anyDay() {
+			return "", nil, err
+		}
+		log.Printf("הערה: רשימת ההשמעה של ערוץ 14 ביוטיוב לא נקראה (%v) — ממשיך לפי לוח השידורים.", err)
 	}
 	seen := map[string]bool{}
 	var eps []*podEpisode
-	for _, e := range f.Entries {
-		if !strings.Contains(e.Title, c14Full) {
+	add := func(start time.Time, title string) {
+		day := start.Format("2006-01-02")
+		end := start.Add(src.length)
+		if seen[day] || now.Sub(start) > c14DVRMax || now.Sub(end) < 5*time.Minute {
+			return // כבר יש, יצא מחלון החזרה, או שהשידור עוד לא הסתיים
+		}
+		seen[day] = true
+		h := fnv.New64a()
+		fmt.Fprintf(h, "c14:%s:%s", src.playlist, day)
+		eps = append(eps, &podEpisode{
+			id:    fmt.Sprintf("%016x", h.Sum64()),
+			ts:    start.Unix(),
+			title: title,
+			secs:  int(src.length.Seconds()),
+			src:   fmt.Sprintf("c14dvr:%d:%d", start.Unix(), end.Unix()),
+		})
+	}
+	show := "" // שם התוכנית מהסרטון האחרון ("הפטריוטים עם ינון מגל") — לפרקים לפי לוח השידורים
+	for _, t := range titles {
+		if !strings.Contains(t, c14Full) {
 			continue
 		}
-		m := reC14Date.FindStringSubmatch(e.Title)
+		m := reC14Date.FindStringSubmatch(t)
 		if m == nil {
 			continue
 		}
@@ -161,28 +222,115 @@ func fetchC14(link string, loc *time.Location, now time.Time) (string, []*podEpi
 		if mo < 1 || mo > 12 || d < 1 || d > 31 {
 			continue
 		}
-		start := time.Date(y, time.Month(mo), d, src.start[0], src.start[1], 0, 0, loc)
-		end := start.Add(src.length)
-		if seen[m[0]] || now.Sub(start) > c14DVRMax || now.Sub(end) < 5*time.Minute {
-			continue // כבר יש, יצא מחלון החזרה, או שהשידור עוד לא הסתיים
-		}
-		seen[m[0]] = true
-		title := strings.TrimSpace(e.Title)
+		title := strings.TrimSpace(t)
 		if i := strings.IndexByte(title, '|'); i > 0 {
 			title = strings.TrimSpace(title[:i]) // "הפטריוטים עם ינון מגל | 6.10 | התוכנית המלאה" → השם בלבד; התאריך מוקרא ממילא
 		}
-		h := fnv.New64a()
-		fmt.Fprintf(h, "c14:%s:%s", src.playlist, start.Format("2006-01-02"))
-		eps = append(eps, &podEpisode{
-			id:    fmt.Sprintf("%016x", h.Sum64()),
-			ts:    start.Unix(),
-			title: title,
-			secs:  int(src.length.Seconds()),
-			src:   fmt.Sprintf("c14dvr:%d:%d", start.Unix(), end.Unix()),
-		})
+		if show == "" {
+			show = title
+		}
+		add(time.Date(y, time.Month(mo), d, src.start[0], src.start[1], 0, 0, loc), title)
+	}
+	if show == "" {
+		show = name
+	}
+	if src.anyDay() { // ימי שידור קבועים בלי סרטון ביוטיוב
+		today := now.In(loc)
+		for back := 0; back <= 2; back++ {
+			day := today.AddDate(0, 0, -back)
+			start := time.Date(day.Year(), day.Month(), day.Day(), src.start[0], src.start[1], 0, 0, loc)
+			if !src.days[start.Weekday()] || seen[start.Format("2006-01-02")] || now.Sub(start.Add(src.length)) < src.wait {
+				continue
+			}
+			add(start, show)
+		}
 	}
 	sort.SliceStable(eps, func(i, j int) bool { return eps[i].ts < eps[j].ts })
-	return f.Title, eps, nil
+	return name, eps, nil
+}
+
+// c14Titles: שם רשימת ההשמעה וכותרות הסרטונים בה (החדשים קודם) — מההזנה (RSS),
+// ואם היא לא עובדת — מעמוד הרשימה.
+func c14Titles(playlist string) (string, []string, error) {
+	name, titles, err := c14FeedTitles(playlist)
+	if err == nil {
+		return name, titles, nil
+	}
+	name, titles, err2 := c14PageTitles(playlist)
+	if err2 != nil {
+		return "", nil, fmt.Errorf("ההזנה: %v; העמוד: %v", err, err2)
+	}
+	return name, titles, nil
+}
+
+func c14Get(u, ua string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept-Language", "he,en;q=0.5")
+	req.Header.Set("Cookie", "CONSENT=YES+1") // בלי דף ההסכמה לעוגיות
+	resp, err := feedHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("סטטוס %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
+
+func c14FeedTitles(playlist string) (string, []string, error) {
+	body, err := c14Get(c14FeedBase+playlist, "yemot-news-bridge (playlist feed reader)")
+	if err != nil {
+		return "", nil, err
+	}
+	var f ytFeed
+	if err := xml.Unmarshal(body, &f); err != nil {
+		return "", nil, fmt.Errorf("הזנה לא תקינה: %w", err)
+	}
+	var titles []string
+	for _, e := range f.Entries {
+		titles = append(titles, e.Title)
+	}
+	return strings.TrimSpace(f.Title), titles, nil
+}
+
+var (
+	reYTLockup = regexp.MustCompile(`"lockupMetadataViewModel":\{"title":\{"content":("(?:[^"\\]|\\.)*")`)
+	reYTOld    = regexp.MustCompile(`"playlistVideoRenderer":\{"videoId":"[^"]*".*?"title":\{"runs":\[\{"text":("(?:[^"\\]|\\.)*")`)
+	reYTName   = regexp.MustCompile(`<meta property="og:title" content="([^"]*)"`)
+)
+
+func c14PageTitles(playlist string) (string, []string, error) {
+	body, err := c14Get(c14PageBase+playlist, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+	if err != nil {
+		return "", nil, err
+	}
+	page := string(body)
+	ms := reYTLockup.FindAllStringSubmatch(page, -1)
+	if len(ms) == 0 {
+		ms = reYTOld.FindAllStringSubmatch(page, -1)
+	}
+	var titles []string
+	for _, m := range ms {
+		var t string
+		if json.Unmarshal([]byte(m[1]), &t) == nil {
+			titles = append(titles, t)
+		}
+	}
+	if len(titles) == 0 {
+		return "", nil, errors.New("לא נמצאו סרטונים בעמוד (יוטיוב שינה את המבנה?)")
+	}
+	name := ""
+	if m := reYTName.FindStringSubmatch(page); m != nil {
+		name = strings.TrimSpace(html.UnescapeString(m[1]))
+	}
+	return name, titles, nil
 }
 
 // isC14DVR: כתובת הקלטה מהשידור החי (c14dvr:<מאיזה זמן>:<עד איזה זמן>).

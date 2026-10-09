@@ -34,7 +34,7 @@ var statusAPI = "https://api.github.com"
 
 // reProblem: שורות לוג שהן בעיה (עברית ואנגלית).
 // (\berror\b — לא "password_error_goto" שבהגדרות שלוחה; "חוסמים" לא — מופיע בשורת הפתיחה הרגילה.)
-var reProblem = regexp.MustCompile(`(?i)נכשל|שגיאה|חריגה|לא התקבל|חסומ|נחסמ|לא תקין|לא הצלחתי|\bpanic\b|\berror\b|\bfailed\b|\bfatal\b|HTTP [45]\d\d`)
+var reProblem = regexp.MustCompile(`(?i)נכשל|לא נקראה|שגיאה|חריגה|לא התקבל|חסומ|נחסמ|לא תקין|לא הצלחתי|\bpanic\b|\berror\b|\bfailed\b|\bfatal\b|HTTP [45]\d\d`)
 
 // reNum: מספרים בשורה — כדי ששורות שונות רק במספר ייספרו כאותה בעיה.
 var reNum = regexp.MustCompile(`\d+`)
