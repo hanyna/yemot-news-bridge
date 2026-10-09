@@ -18,31 +18,23 @@ jobs:
           set +e
           out=/tmp/probe.md
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          echo "# מקור מוכן להפטריוטים — $(date -u)" > $out
+          echo "# איכות ההקלטה מערוץ 14 — $(date -u)" > $out
           echo '```' >> $out
           K=x
-          PL=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
-          curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html "https://www.youtube.com/playlist?list=$PL"
-          VID=$(python3 -c "
-          import re
-          s=open('/tmp/pl.html',encoding='utf-8').read()
-          for m in re.finditer(r'\"contentId\":\"([^\"]{11})\"',s):
-              seg=s[m.end():m.end()+6000]
-              if 'התוכנית המלאה' in seg.split('contentId')[0]:
-                  print(m.group(1)); break
-          ")
-          echo "video $VID" >> $out
-          pip install -q -U yt-dlp >/dev/null 2>&1
-          timeout 120 yt-dlp -F "https://www.youtube.com/watch?v=$VID" 2>&1 | tail -15 >> $out
-          echo "-- iTunes" >> $out
-          curl -s -m 30 -o /tmp/it.json "https://itunes.apple.com/search?term=%D7%94%D7%A4%D7%98%D7%A8%D7%99%D7%95%D7%98%D7%99%D7%9D&entity=podcast&country=il"
-          python3 -c "import json;[print(r.get('collectionName'),'|',r.get('artistName'),'|',r.get('releaseDate'),'|',r.get('feedUrl')) for r in json.load(open('/tmp/it.json'))['results'][:8]]" >> $out 2>&1
-          echo "-- c14.co.il" >> $out
-          for u in "https://www.c14.co.il/" "https://www.c14.co.il/vod" "https://www.c14.co.il/patriots"; do
-            r=$(curl -sL -m 30 -A "$UA" -o /tmp/c.html -w "%{http_code} %{url_effective}" "$u"); echo "$u → $r $(wc -c </tmp/c.html)B" >> $out
-            grep -o 'href="[^"]*\(patriot\|פטריוט\|vod\|episode\|program\)[^"]*"' /tmp/c.html | sort -u | head -15 >> $out
-            grep -o '[a-z0-9.-]*\(redge\|kaltura\|jwplayer\|brightcove\|vimeo\)[a-z0-9./-]*' /tmp/c.html | sort -u | head -5 >> $out
-          done
+          sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
+          B=https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx
+          curl -sL -m 20 -A "$UA" "$B/playlist.m3u8" | head -30 >> $out
+          echo "-- variant:" >> $out
+          V=$(curl -sL -m 20 -A "$UA" "$B/playlist.m3u8" | grep -v '^#' | grep . | head -1)
+          echo "$V" >> $out
+          u=$(date -u -d "2026-10-08T18:40:00Z" +%s)
+          rm -f /tmp/all.ts
+          for i in $(seq 0 14); do ms=$(( ((u-978307200)/4*4 + i*4)*1000 )); curl -sL -m 20 -A "$UA" "$B/fragment.ts?audioId=1&startTime=$ms" >> /tmp/all.ts; done
+          ffprobe -hide_banner /tmp/all.ts 2>&1 | grep -i "stream\|duration" >> $out
+          for a in 0 2 3; do ms=$(( ((u-978307200)/4*4)*1000 )); r=$(curl -sL -m 20 -A "$UA" -o /tmp/a$a.ts -w "%{http_code} %{size_download}" "$B/fragment.ts?audioId=$a&startTime=$ms"); echo "audioId=$a → $r $(ffprobe -hide_banner /tmp/a$a.ts 2>&1 | grep -i stream | tr '\n' ' ')" >> $out; done
+          ms=$(( ((u-978307200)/4*4)*1000 )); r=$(curl -sL -m 20 -A "$UA" -o /tmp/nv.ts -w "%{http_code} %{size_download}" "$B/fragment.ts?startTime=$ms"); echo "no audioId → $r $(ffprobe -hide_banner /tmp/nv.ts 2>&1 | grep -i stream | tr '\n' ' ')" >> $out
+          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af "volumedetect,astats=metadata=0:reset=0" -f null - 2>&1 | grep -i "mean_volume\|max_volume\|discontinu\|non monotonic\|error" | head -8 >> $out
+          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af silencedetect=n=-45dB:d=0.05 -f null - 2>&1 | grep -c silence_start | sed 's/^/short gaps: /' >> $out
           echo '```' >> $out
           sed -i "s/$K/***/g" $out
           gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
