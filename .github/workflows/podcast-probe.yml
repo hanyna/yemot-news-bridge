@@ -1,0 +1,54 @@
+name: Podcast probe (temporary)
+on:
+  workflow_dispatch: {}
+  push:
+    paths: [".github/workflows/podcast-probe.yml"]
+permissions:
+  issues: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+        run: |
+          set +e
+          out=/tmp/probe.md
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          echo "# בדיקת פודקאסטים — $(date -u)" > $out
+          echo '```' >> $out
+          echo "== YouTube playlist feed (הפטריוטים)" >> $out
+          r=$(curl -s -m 30 -A "yemot-news-bridge (playlist feed reader)" -o /tmp/yt.xml -w "%{http_code}" "https://www.youtube.com/feeds/videos.xml?playlist_id=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4")
+          echo "status $r, bytes $(wc -c < /tmp/yt.xml)" >> $out
+          grep -o '<title>[^<]*</title>\|<published>[^<]*' /tmp/yt.xml | head -24 >> $out
+          echo >> $out
+          echo "== CDN ערוץ 14 (קטעים מהשידור)" >> $out
+          for t in "2026-10-08T18:30:00Z" "2026-10-08T19:15:00Z" "$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:00Z)"; do
+            u=$(date -u -d "$t" +%s); ms=$(( (u-978307200)/4*4*1000 ))
+            r=$(curl -s -m 20 -A "$UA" -o /tmp/f.ts -w "%{http_code} %{size_download}B %{time_total}s" "https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/fragment.ts?audioId=1&startTime=$ms")
+            echo "$t → $r" >> $out
+          done
+          r=$(curl -s -m 20 -A "$UA" -o /tmp/m.m3u8 -w "%{http_code}" "https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8")
+          echo "playlist.m3u8 → $r" >> $out; head -c 400 /tmp/m.m3u8 >> $out; echo >> $out
+          echo "== Spreaker (חושבים בקול)" >> $out
+          r=$(curl -sL -m 30 -A "yemot-news-bridge (podcast feed reader)" -o /tmp/sp.xml -w "%{http_code}" "https://www.spreaker.com/show/4524009/episodes/feed")
+          echo "feed status $r" >> $out
+          grep -o '<pubDate>[^<]*' /tmp/sp.xml | head -3 >> $out
+          r=$(curl -s -m 30 -o /tmp/sp.json -w "%{http_code}" "https://api.spreaker.com/v2/shows/4524009/episodes?sorting=newest&limit=4")
+          echo "api status $r" >> $out
+          python3 -c "import json;d=json.load(open('/tmp/sp.json'));[print(e.get('published_at'),e.get('title')) for e in d['response']['items']]" >> $out 2>&1
+          echo >> $out
+          echo "== הקו: שלוחות 3/1, 3/3" >> $out
+          for e in 3/1 3/3; do
+            echo "-- $e" >> $out
+            curl -s -m 30 -H "Authorization: $YEMOT_API_KEY" --data-urlencode "path=ivr2:/$e" https://www.call2all.co.il/ym/api/GetIVR2Dir \
+              | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('responseStatus'),d.get('message',''));[print(f.get('name'),f.get('mtime'),f.get('size')) for f in (d.get('files') or [])]" >> $out 2>&1
+            curl -s -m 30 -H "Authorization: $YEMOT_API_KEY" --data-urlencode "what=ivr2:/$e/podcast.txt" https://www.call2all.co.il/ym/api/GetTextFile \
+              | python3 -c "import json,sys;print(json.load(sys.stdin).get('contents',''))" >> $out 2>&1
+          done
+          echo '```' >> $out
+          sed -i "s/$YEMOT_API_KEY/***/g" $out
+          gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
