@@ -18,22 +18,17 @@ jobs:
           set +e
           out=/tmp/probe.md
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          echo "# בדיקת פודקאסטים 3 — $(date -u)" > $out
+          echo "# בדיקת הקו אחרי התיקון — $(date -u)" > $out
           echo '```' >> $out
-          PL=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
-          curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html "https://www.youtube.com/playlist?list=$PL"
-          python3 - >> $out 2>&1 <<'PY'
-          import re,datetime
-          s=open('/tmp/pl.html',encoding='utf-8').read()
-          ts=re.findall(r'"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"',s)
-          print('titles', len(ts))
-          for t in ts[:40]:
-              m=re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})',t)
-              wd=datetime.date(int(m[3]),int(m[2]),int(m[1])).strftime('%a') if m else ''
-              print(wd, t)
-          PY
-          curl -s -m 30 -o /tmp/e.json "https://api.spreaker.com/v2/shows/4489948/episodes?sorting=newest&limit=3"
-          python3 -c "import json;[print(e['published_at'],e['title'],e['episode_id']) for e in json.load(open('/tmp/e.json'))['response']['items']]" >> $out 2>&1
+          K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
+          for e in 3 3/1 3/3 3/4; do
+            echo "-- $e" >> $out
+            curl -s -m 30 -H "Authorization: $K" --data-urlencode "path=ivr2:/$e" https://www.call2all.co.il/ym/api/GetIVR2Dir > /tmp/d.json
+            python3 -c "import json;d=json.load(open('/tmp/d.json'));print(d.get('responseStatus'),d.get('message',''));[print(f.get('name'),f.get('mtime'),f.get('size')) for f in (d.get('files') or [])][-12:]" >> $out 2>&1
+            for f in podcast.txt M1000.tts; do
+              curl -s -m 30 -H "Authorization: $K" --data-urlencode "what=ivr2:/$e/$f" https://www.call2all.co.il/ym/api/GetTextFile | python3 -c "import json,sys;c=json.load(sys.stdin).get('contents','');print('$f:',c[:600]) if c else None" >> $out 2>&1
+            done
+          done
           echo '```' >> $out
-          sed -i "s/$YEMOT_API_KEY/***/g" $out
+          sed -i "s/$K/***/g" $out
           gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
