@@ -693,7 +693,7 @@ func (st *state) finishPodcasts(cfg *config) bool {
 		if p.ready() == 0 {
 			continue // עוד אין מה לשמוע
 		}
-		st.ensureTitle(cfg, p.ext, p.name()+". "+podcastNavHint)
+		st.removeTitle(cfg, p.ext) // בלי הקדמה בכניסה — ישר לפרק
 		opts = append(opts, fmt.Sprintf("ל%s הקישו %d.", p.name(), i+1))
 	}
 	if !loaded && (len(opts) == 0 || st.podActive) {
@@ -704,7 +704,7 @@ func (st *state) finishPodcasts(cfg *config) bool {
 	st.podActive = len(opts) > 0
 	text := "שלוחה זו אינה פעילה כרגע."
 	if len(opts) > 0 {
-		text = "פודקאסטים. " + strings.Join(opts, " ")
+		text = strings.Join(opts, " ")
 	}
 	if text != st.podMenuText {
 		if err := uploadSpoken(cfg, cfg.podcastExt, "M1000.tts", text); err != nil {

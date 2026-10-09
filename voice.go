@@ -636,6 +636,9 @@ func asWav(data []byte, mime string) []byte {
 	return b.Bytes()
 }
 
+// speechTempo: מהירות ההקראה בקול המוכן (1 = כמו שהמודל אמר; SPEECH_SPEED).
+var speechTempo = 1.0
+
 // prepareSpeech: מוריד שקט בהתחלה ובסוף (שלא יהיו הפסקות מיותרות בין הודעות),
 // ומכין WAV של טלפון (8000 הרץ, מונו). משתנה — לבדיקות.
 var prepareSpeech = func(wav []byte) ([]byte, error) {
@@ -649,11 +652,15 @@ var prepareSpeech = func(wav []byte) ([]byte, error) {
 		return nil, err
 	}
 	trim := "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.1"
+	af := trim + ",areverse," + trim + ",areverse"
+	if speechTempo != 1 {
+		af += fmt.Sprintf(",atempo=%.2f", speechTempo) // מהיר יותר בלי לשנות את גובה הקול
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	var buf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", in,
-		"-af", trim+",areverse,"+trim+",areverse", "-ar", "8000", "-ac", "1", "-sample_fmt", "s16", out)
+		"-af", af, "-ar", "8000", "-ac", "1", "-sample_fmt", "s16", out)
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("ffmpeg: %v: %.200s", err, strings.TrimSpace(buf.String()))
@@ -781,7 +788,7 @@ const spokenSuffix = "-spoken.txt"
 
 // spokenVersion: גרסת הקול של התפריטים והכותרות. שינוי שלה = כל התפריטים
 // והכותרות נוצרים מחדש פעם אחת (he-IL: עד אז הקול ניחש את השפה ולפעמים טעה).
-const spokenVersion = "he-IL"
+const spokenVersion = "he-IL-fast"
 
 // spokenRecord: מה שנשמר בקובץ -spoken.txt — הנוסח וגרסת הקול.
 func spokenRecord(text string) string { return text + "\n#voice=" + spokenVersion }

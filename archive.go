@@ -866,6 +866,32 @@ func (st *state) ensureTitle(cfg *config, ext, text string) {
 	st.titleSet[ext] = text
 }
 
+// removeTitle: בלי הקדמה בכניסה לשלוחה ("עדכוני אלישע ירד", שם הפודקאסט) —
+// מוחקים את קובץ הכותרת אם נשאר מגרסה קודמת. פעם אחת לכל שלוחה בהפעלה.
+func (st *state) removeTitle(cfg *config, ext string) {
+	if st.titleSet[ext] == "-" {
+		return
+	}
+	info, err := cfg.y.dir(ext)
+	if err != nil {
+		return // ננסה בסבב הבא
+	}
+	var paths []string
+	for _, n := range []string{titleFile, strings.TrimSuffix(titleFile, ".tts") + ".wav", spokenFile(titleFile)} {
+		if hasName(info.Files, n) {
+			paths = append(paths, ivrPath(ext, n))
+		}
+	}
+	if len(paths) > 0 {
+		if err := cfg.y.remove(paths); err != nil {
+			log.Printf("הערה: מחיקת ההקדמה בשלוחה %s נכשלה: %v", ext, err)
+			return
+		}
+		log.Printf("שלוחה %s: ההקדמה בכניסה נמחקה.", ext)
+	}
+	st.titleSet[ext] = "-"
+}
+
 // ensureDigits: שמות הקבצים בארכיון בני 5 ספרות (file_amount_digits=5). עד
 // שההגדרה בטוח במקום — לא עוברים לארכיון (ולא מוחקים את הקבצים הישנים).
 func (st *state) ensureDigits(cfg *config, ext string) error {

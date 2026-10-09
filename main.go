@@ -208,6 +208,9 @@ func main() {
 	} else {
 		log.Println("ניתוח תמונות: כבוי (אין GEMINI_API_KEY ב-Secrets, או VISION=off).")
 	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("SPEECH_SPEED")), 64); err == nil && v >= 0.8 && v <= 1.6 {
+		speechTempo = v
+	}
 	cfg.speech = newSpeakerKeys(speechKeys(os.Getenv), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH_MENU_VOICE"), os.Getenv("SPEECH"))
 	if cfg.speech != nil {
 		log.Printf("קול מוכן מראש (Gemini, קול %s, %d מפתחות): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice, len(cfg.speech.keys))
@@ -465,7 +468,7 @@ func syncOnce(cfg *config, st *state) error {
 				log.Printf("הערה: הארכיון של שלוחה %s (%s) לא נטען: %v", ext, name, err)
 				continue
 			}
-			st.ensureTitle(cfg, ext, updatesOf(name)+".")
+			st.removeTitle(cfg, ext) // בלי הקדמה בכניסה — ישר להודעות
 			var mine []FeedItem
 			for _, it := range clean {
 				if it.Channel == ch.Name {
@@ -504,7 +507,7 @@ func syncOnce(cfg *config, st *state) error {
 	// התפריט הראשי: אילו שלוחות פעילות.
 	var menu []string
 	if len(chooser) > 0 && setupSpecial(cfg, st, chooseExt, "type=menu\ndigits=1") {
-		text := "בחירת כתב. " + strings.Join(chooser, " ")
+		text := strings.Join(chooser, " ")
 		if r := []rune(text); len(r) > maxPerFile {
 			text = cutAtWord(r[:maxPerFile])
 		}
@@ -563,7 +566,7 @@ func syncOnce(cfg *config, st *state) error {
 			// בתפריט, ומי שמגיע אליה מהזיכרון שומע שהיא לא פעילה, ולא תפריט של אפשרויות מתות.
 			text := "שלוחה זו אינה פעילה כרגע."
 			if len(opts) > 0 {
-				text = "צינתוקים ותזכורות. " + strings.Join(opts, " ")
+				text = strings.Join(opts, " ")
 				menu = append(menu, "לצינתוקים ותזכורות, הקישו "+listExt+".")
 			}
 			if text != st.listMenuText {

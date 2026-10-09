@@ -382,14 +382,14 @@ func TestNewMenuStructure(t *testing.T) {
 	if fl["ivr2:/2/ext.ini"] != "type=menu\ndigits=1" {
 		t.Fatalf("ext2 ini: %q", fl["ivr2:/2/ext.ini"])
 	}
-	if fl["ivr2:/2/M1000.tts"] != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2." {
+	if fl["ivr2:/2/M1000.tts"] != "לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2." {
 		t.Fatalf("chooser: %q", fl["ivr2:/2/M1000.tts"])
 	}
-	if fl["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/2/1/99999.tts"] != "עדכוני אלישע ירד." ||
+	if fl["ivr2:/2/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/2/1/99999.tts"] != "" ||
 		!strings.Contains(fl["ivr2:/2/1/10001.tts"], "ביהודה ושומרון") || strings.HasPrefix(fl["ivr2:/2/1/10001.tts"], "אלישע ירד") {
 		t.Fatalf("2/1: %q %q %q", fl["ivr2:/2/1/ext.ini"], fl["ivr2:/2/1/99999.tts"], fl["ivr2:/2/1/10001.tts"])
 	}
-	if fl["ivr2:/2/2/99999.tts"] != "עדכוני הקול היהודי." || !strings.HasSuffix(fl["ivr2:/2/2/10001.tts"], "מהקול") {
+	if fl["ivr2:/2/2/99999.tts"] != "" || !strings.HasSuffix(fl["ivr2:/2/2/10001.tts"], "מהקול") {
 		t.Fatalf("2/2: %q %q", fl["ivr2:/2/2/99999.tts"], fl["ivr2:/2/2/10001.tts"])
 	}
 	if !strings.Contains(fl["ivr2:/2/1/archive.txt"], "channel=elisha_yered") {
@@ -456,7 +456,7 @@ func TestListExt(t *testing.T) {
 		f.files["ivr2:/8/2/ext.ini"] != "type=telezchor\ntelezchor_end=hangup\ntelezchor_target_number=0772263731" {
 		t.Fatalf("ext8: %q | %q | %q", f.files["ivr2:/8/ext.ini"], f.files["ivr2:/8/1/ext.ini"], f.files["ivr2:/8/2/ext.ini"])
 	}
-	if f.files["ivr2:/8/M1000.tts"] != "צינתוקים ותזכורות. להרשמה או הסרה מרשימת הצינתוקים, הקישו 1. לתזכורת קבועה לחייג לקו, בימים ובשעות שתבחרו, הקישו 2." {
+	if f.files["ivr2:/8/M1000.tts"] != "להרשמה או הסרה מרשימת הצינתוקים, הקישו 1. לתזכורת קבועה לחייג לקו, בימים ובשעות שתבחרו, הקישו 2." {
 		t.Fatalf("ext8 menu: %q", f.files["ivr2:/8/M1000.tts"])
 	}
 	if !strings.HasSuffix(f.files["ivr2:/M1000.tts"], "לצינתוקים ותזכורות, הקישו 8.") {
@@ -481,7 +481,7 @@ func TestCallbackExt(t *testing.T) {
 	if f.files["ivr2:/8/3/ext.ini"] != "type=system_sharing\nsystem_sharing_custom_did=real_did\nsystem_sharing_to_myself=yes" {
 		t.Fatalf("ext8/3: %q", f.files["ivr2:/8/3/ext.ini"])
 	}
-	if f.files["ivr2:/8/M1000.tts"] != "צינתוקים ותזכורות. לשיחה חוזרת מהמערכת, כדי לחסוך בדקות השיחה שלכם, הקישו 3." {
+	if f.files["ivr2:/8/M1000.tts"] != "לשיחה חוזרת מהמערכת, כדי לחסוך בדקות השיחה שלכם, הקישו 3." {
 		t.Fatalf("ext8 menu: %q", f.files["ivr2:/8/M1000.tts"])
 	}
 	if !strings.HasSuffix(f.files["ivr2:/M1000.tts"], "לצינתוקים ותזכורות, הקישו 8.") {
@@ -632,11 +632,11 @@ func TestCreatesMissingSubExtensions(t *testing.T) {
 			t.Errorf("extension %s was not created", ext)
 		}
 	}
-	if f.files["ivr2:/2/3/ext.ini"] != "type=playfile\nfile_amount_digits=5" || f.files["ivr2:/2/3/99999.tts"] != "עדכוני השומרון." ||
+	if f.files["ivr2:/2/3/ext.ini"] != "type=playfile\nfile_amount_digits=5" || f.files["ivr2:/2/3/99999.tts"] != "" ||
 		!strings.HasSuffix(f.files["ivr2:/2/3/10001.tts"], "שלישית") {
 		t.Errorf("2/3: %q %q %q", f.files["ivr2:/2/3/ext.ini"], f.files["ivr2:/2/3/99999.tts"], f.files["ivr2:/2/3/10001.tts"])
 	}
-	if got := f.files["ivr2:/2/M1000.tts"]; got != "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2. לעדכוני השומרון הקישו 3." {
+	if got := f.files["ivr2:/2/M1000.tts"]; got != "לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2. לעדכוני השומרון הקישו 3." {
 		t.Errorf("chooser: %q", got)
 	}
 	if f.files["ivr2:/8/1/ext.ini"] != "type=tzintuk\nlist_tzintuk=800" {
@@ -881,10 +881,10 @@ func TestReporterMappingStable(t *testing.T) {
 	if err := syncOnce(&cfg, &state{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(f.files["ivr2:/2/1/10003.tts"], "עוד של א") || f.files["ivr2:/2/3/99999.tts"] != "עדכוני ערוץ חדש." {
+	if !strings.HasSuffix(f.files["ivr2:/2/1/10003.tts"], "עוד של א") || f.files["ivr2:/2/3/ext.ini"] == "" {
 		t.Fatalf("mapping moved: 2/1=%q 2/3=%q", f.files["ivr2:/2/1/10003.tts"], f.files["ivr2:/2/3/99999.tts"])
 	}
-	want := "בחירת כתב. לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2. לעדכוני ערוץ חדש הקישו 3."
+	want := "לעדכוני אלישע ירד הקישו 1. לעדכוני הקול היהודי הקישו 2. לעדכוני ערוץ חדש הקישו 3."
 	if f.files["ivr2:/2/M1000.tts"] != want {
 		t.Fatalf("chooser: %q", f.files["ivr2:/2/M1000.tts"])
 	}
@@ -1321,7 +1321,7 @@ func TestExcludeChannel(t *testing.T) {
 		if len(archiveFiles(f.dirs["ivr2:/2/2"])) != 0 || f.has("ivr2:/2/2", "99999.tts") || f.files["ivr2:/2/2/archive.txt"] != "" {
 			t.Fatalf("run %d, 2/2 not cleared: %v", run, f.dirs["ivr2:/2/2"])
 		}
-		if f.files["ivr2:/2/M1000.tts"] != "בחירת כתב. לעדכוני אלישע ירד הקישו 1." {
+		if f.files["ivr2:/2/M1000.tts"] != "לעדכוני אלישע ירד הקישו 1." {
 			t.Fatalf("run %d, chooser: %q", run, f.files["ivr2:/2/M1000.tts"])
 		}
 	}
@@ -1563,10 +1563,10 @@ func TestPodcasts(t *testing.T) {
 		t.Fatal(err)
 	}
 	fl := f.files
-	if fl["ivr2:/3/ext.ini"] != "type=menu\ndigits=1" || fl["ivr2:/3/M1000.tts"] != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1." {
+	if fl["ivr2:/3/ext.ini"] != "type=menu\ndigits=1" || fl["ivr2:/3/M1000.tts"] != "לחושבים בקול של הקול היהודי הקישו 1." {
 		t.Fatalf("ext 3: %q | %q", fl["ivr2:/3/ext.ini"], fl["ivr2:/3/M1000.tts"])
 	}
-	if fl["ivr2:/3/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/3/1/99999.tts"] != "חושבים בקול של הקול היהודי. "+podcastNavHint {
+	if fl["ivr2:/3/1/ext.ini"] != "type=playfile\nfile_amount_digits=5" || fl["ivr2:/3/1/99999.tts"] != "" {
 		t.Fatalf("3/1: %q | %q", fl["ivr2:/3/1/ext.ini"], fl["ivr2:/3/1/99999.tts"])
 	}
 	// שני הפרקים האחרונים (2 ו-3), הישן לפני החדש; הראשון — לא.
@@ -1729,7 +1729,7 @@ func TestPodcastMenuSurvivesLoadFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := f.files["ivr2:/3/M1000.tts"]
-	if !strings.HasPrefix(active, "פודקאסטים.") {
+	if !strings.HasPrefix(active, "לחושבים בקול") {
 		t.Fatalf("setup: %q", active)
 	}
 	// הפעלה מחדש, וקריאת האינדקס של הפודקאסט נכשלת
@@ -1765,7 +1765,7 @@ func TestPodcastWithRatingFile(t *testing.T) {
 	if err := syncOnce(&cfg, &state{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.files["ivr2:/3/M1000.tts"]; got != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1." {
+	if got := f.files["ivr2:/3/M1000.tts"]; got != "לחושבים בקול של הקול היהודי הקישו 1." {
 		t.Fatalf("menu: %q", got)
 	}
 }
@@ -1790,7 +1790,7 @@ func TestEpisodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	fl := f.files
-	if fl["ivr2:/3/M1000.tts"] != "פודקאסטים. לחושבים בקול של הקול היהודי הקישו 1. לפרקים נבחרים הקישו 2." {
+	if fl["ivr2:/3/M1000.tts"] != "לחושבים בקול של הקול היהודי הקישו 1. לפרקים נבחרים הקישו 2." {
 		t.Fatalf("menu: %q", fl["ivr2:/3/M1000.tts"])
 	}
 	if fl["ivr2:/3/2/10000.wav"] != "AUDIO:MP3:EP-8.mp3;convert=1" || fl["ivr2:/3/2/10002.wav"] != "AUDIO:MP3:EP-7.mp3;convert=1" {
@@ -1825,5 +1825,26 @@ func TestEpisodes(t *testing.T) {
 	}
 	if got := withEpisodes(parsePodcasts("https://a/feed"), nil, "", 2); len(got) != 1 || got[0].static != nil {
 		t.Fatal("no episodes")
+	}
+}
+
+// TestOldTitlesRemoved: הקדמה שנשארה מגרסה קודמת ("עדכוני אלישע ירד.") נמחקת מהשלוחה.
+func TestOldTitlesRemoved(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{{ID: 1, Channel: "a", TS: now - 100, Text: "של א"}},
+		`{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	f.files["ivr2:/2/1/99999.tts"] = "עדכוני אלישע ירד."
+	f.dirs["ivr2:/2/1"] = append(f.dirs["ivr2:/2/1"], "99999.tts", "99999.wav")
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if f.has("ivr2:/2/1", "99999.tts") || f.has("ivr2:/2/1", "99999.wav") {
+		t.Fatalf("title still there: %v", f.dirs["ivr2:/2/1"])
 	}
 }

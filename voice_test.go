@@ -207,7 +207,7 @@ func TestSpeechMenus(t *testing.T) {
 	if welcome == "" || f.files["ivr2:/M1000.wav"] != "AUDIO:PHONE:"+welcome+";convert=1" {
 		t.Fatalf("welcome wav: %q (tts %q)", f.files["ivr2:/M1000.wav"], welcome)
 	}
-	if f.files["ivr2:/2/M1000.wav"] == "" || f.files["ivr2:/2/1/99999.wav"] != "AUDIO:PHONE:עדכוני אלישע ירד.;convert=1" {
+	if f.files["ivr2:/2/M1000.wav"] == "" || f.files["ivr2:/2/1/99999.wav"] != "" {
 		t.Fatalf("chooser/title wav: %q | %q", f.files["ivr2:/2/M1000.wav"], f.files["ivr2:/2/1/99999.wav"])
 	}
 	// הפעלה מחדש, אותו טקסט — לא מוחקים ולא יוצרים שוב
