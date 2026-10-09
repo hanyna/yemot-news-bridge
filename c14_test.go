@@ -390,3 +390,9 @@ func TestC14NoFriday(t *testing.T) {
 		}
 	}
 }
+
+func TestFeedKeyC14(t *testing.T) {
+	if feedKey("c14://playlist/A?start=21:00") != feedKey("c14://playlist/A?days=0-4&wait=6") || feedKey("c14://playlist/A") == feedKey("c14://playlist/B") {
+		t.Fatal("feedKey")
+	}
+}

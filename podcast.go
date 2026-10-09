@@ -266,7 +266,7 @@ func loadPodcast(cfg *config, ext string, src podcastSource, now time.Time) (*po
 	files := archiveFiles(info.Files)
 	if exists {
 		feed, next, last, eps := parsePodcastIndex(txt)
-		if feed != "" && feed != src.url {
+		if feed != "" && feedKey(feed) != feedKey(src.url) {
 			log.Printf("שלוחה %s: הפודקאסט בה הוחלף (%s ← %s) — הפרקים הקודמים נמחקים.", ext, feed, src.url)
 			var paths []string
 			for _, f := range files {
@@ -303,6 +303,16 @@ func loadPodcast(cfg *config, ext string, src podcastSource, now time.Time) (*po
 		}
 	}
 	return p, nil
+}
+
+// feedKey: לזיהוי "אותו פודקאסט" — בקישור c14 ההגדרות (?start=...&days=...) לא משנות.
+func feedKey(u string) string {
+	if isC14(u) {
+		if i := strings.IndexByte(u, '?'); i >= 0 {
+			return u[:i]
+		}
+	}
+	return u
 }
 
 // podcastFor: הפודקאסט של שלוחה — נטען פעם אחת בכל הפעלה.
