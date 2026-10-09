@@ -18,21 +18,14 @@ jobs:
           set +e
           out=/tmp/probe.md
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          echo "# איכות ההקלטה מערוץ 14 — $(date -u)" > $out
+          echo "# בדיקת הקדמות — $(date -u)" > $out
           echo '```' >> $out
-          K=x
-          sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
-          B=https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx
-          u=$(date -u -d "2026-10-08T18:40:00Z" +%s)
-          rm -f /tmp/all.ts
-          for i in $(seq 0 14); do ms=$(( ((u-978307200)/4*4 + i*4)*1000 )); curl -sL -m 20 -A "$UA" -o /tmp/f$i.ts "$B/fragment.ts?audioId=1&startTime=$ms"; cat /tmp/f$i.ts >> /tmp/all.ts; done
-          for i in 0 1 2; do ffprobe -v error -select_streams a:0 -show_entries stream=start_time,duration -of csv=p=0 /tmp/f$i.ts | tr '\n' ' ' >> $out; echo " (f$i)" >> $out; done
-          echo "-- gaps (plain concat), seconds:" >> $out
-          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af silencedetect=n=-50dB:d=0.02 -f null - 2>&1 | grep -o "silence_start: [0-9.]*\|silence_duration: [0-9.]*" | paste - - | head -20 >> $out
-          echo "-- gaps (async by timestamps):" >> $out
-          ffmpeg -hide_banner -nostdin -i /tmp/all.ts -vn -af aresample=async=1000,silencedetect=n=-50dB:d=0.02 -f null - 2>&1 | grep -o "silence_start: [0-9.]*\|silence_duration: [0-9.]*" | paste - - | head -20 >> $out
-          echo "-- decode warnings:" >> $out
-          ffmpeg -hide_banner -nostdin -loglevel warning -i /tmp/all.ts -vn -f null - 2>&1 | sort | uniq -c | head -8 >> $out
+          K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
+          for e in 2 2/1 2/2 3 3/1 3/3 3/4 8; do
+            curl -s -m 30 -H "Authorization: $K" --data-urlencode "path=ivr2:/$e" https://www.call2all.co.il/ym/api/GetIVR2Dir > /tmp/d.json
+            echo "-- $e: $(python3 -c "import json;d=json.load(open('/tmp/d.json'));print(' '.join(f['name'] for f in (d.get('files') or []) if f['name'].startswith(('99999','M1000'))))")" >> $out
+            curl -s -m 30 -H "Authorization: $K" --data-urlencode "what=ivr2:/$e/M1000-spoken.txt" https://www.call2all.co.il/ym/api/GetTextFile | python3 -c "import json,sys;c=json.load(sys.stdin).get('contents','');print('   ',c[:200]) if c else None" >> $out 2>&1
+          done
           echo '```' >> $out
           sed -i "s/$K/***/g" $out
           gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
