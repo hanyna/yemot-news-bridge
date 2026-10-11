@@ -200,10 +200,8 @@ func fetchC14(link string, loc *time.Location, now time.Time) (string, []*podEpi
 			return // כבר יש, יצא מחלון החזרה, או שהשידור עוד לא הסתיים
 		}
 		seen[day] = true
-		h := fnv.New64a()
-		fmt.Fprintf(h, "c14:%s:%s", src.playlist, day)
 		eps = append(eps, &podEpisode{
-			id:    fmt.Sprintf("%016x", h.Sum64()),
+			id:    c14EpisodeID(src.playlist, day),
 			ts:    start.Unix(),
 			title: title,
 			secs:  int(src.length.Seconds()),
@@ -307,7 +305,55 @@ var (
 	reYTLockup = regexp.MustCompile(`"lockupMetadataViewModel":\{"title":\{"content":("(?:[^"\\]|\\.)*")`)
 	reYTOld    = regexp.MustCompile(`"playlistVideoRenderer":\{"videoId":"[^"]*".*?"title":\{"runs":\[\{"text":("(?:[^"\\]|\\.)*")`)
 	reYTName   = regexp.MustCompile(`<meta property="og:title" content="([^"]*)"`)
+	// reYTVideo: לכל סרטון בעמוד — המזהה (contentId) ואחריו הכותרת, באותו בלוק lockup.
+	reYTVideo    = regexp.MustCompile(`"contentId":"([A-Za-z0-9_-]{11})"(?:[^{}]|\{[^{}]*\})*?"lockupMetadataViewModel":\{"title":\{"content":("(?:[^"\\]|\\.)*")`)
+	reYTVideoOld = regexp.MustCompile(`"playlistVideoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})".*?"title":\{"runs":\[\{"text":("(?:[^"\\]|\\.)*")`)
 )
+
+// c14EpisodeID: מזהה קבוע של פרק לפי רשימת ההשמעה והתאריך (YYYY-MM-DD) —
+// זהה בגשר (ההקלטה) ובכלי המחשב (הגרסה המוכנה), כדי שימצאו אותו פרק בשלוחה.
+func c14EpisodeID(playlist, day string) string {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "c14:%s:%s", playlist, day)
+	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// c14Video: סרטון ברשימת ההשמעה — מזהה היוטיוב וכותרתו.
+type c14Video struct {
+	id, title string
+}
+
+// c14PageVideos קורא את עמוד רשימת ההשמעה ומחזיר את הסרטונים (מזהה + כותרת),
+// מהחדש לישן. משמש את כלי המחשב כדי להוריד את התוכנית המלאה המוכנה מיוטיוב.
+func c14PageVideos(playlist string) (string, []c14Video, error) {
+	body, err := c14Get(c14PageBase+playlist, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+	if err != nil {
+		return "", nil, err
+	}
+	page := string(body)
+	ms := reYTVideo.FindAllStringSubmatch(page, -1)
+	if len(ms) == 0 {
+		ms = reYTVideoOld.FindAllStringSubmatch(page, -1)
+	}
+	var vids []c14Video
+	seen := map[string]bool{}
+	for _, m := range ms {
+		var t string
+		if json.Unmarshal([]byte(m[2]), &t) != nil || seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		vids = append(vids, c14Video{id: m[1], title: t})
+	}
+	if len(vids) == 0 {
+		return "", nil, errors.New("לא נמצאו סרטונים בעמוד (יוטיוב שינה את המבנה?)")
+	}
+	name := ""
+	if m := reYTName.FindStringSubmatch(page); m != nil {
+		name = strings.TrimSpace(html.UnescapeString(m[1]))
+	}
+	return name, vids, nil
+}
 
 func c14PageTitles(playlist string) (string, []string, error) {
 	body, err := c14Get(c14PageBase+playlist, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")

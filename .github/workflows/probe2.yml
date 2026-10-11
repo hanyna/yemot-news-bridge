@@ -18,18 +18,23 @@ jobs:
           out=/tmp/probe.md
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
           K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
-          echo "# VOD ערוץ 14 — $(date -u)" > $out
+          echo "# מבנה עמוד היוטיוב — $(date -u)" > $out
           echo '```' >> $out
-          T=https://tv.c14.co.il
-          for u in "/series,14683/hptrywtym-bhg-ynwn-mgl-odcinki,985753" "/api/products/vods/serials/985753?platform=BROWSER&lang=he" "/api/products/vods/serials/985753/seasons?platform=BROWSER&lang=he" "/api/products/vods/serials/985753/seasons/with-episodes?platform=BROWSER&lang=he" "/api/products/vods?platform=BROWSER&lang=he&maxResults=5&sort=CREATED_AT&order=desc"; do
-            r=$(curl -sL -m 30 -A "$UA" -H "Accept: application/json, text/html" -o /tmp/r.out -w "%{http_code} %{size_download}" "$T$u"); echo "== $u → $r" >> $out
-            head -c 1500 /tmp/r.out | tr '\n' ' ' >> $out; echo >> $out
-          done
-          curl -sL -m 30 -A "$UA" -o /tmp/p.html "$T/series,14683/hptrywtym-bhg-ynwn-mgl-odcinki,985753"
-          echo "-- api/ids in page:" >> $out
-          grep -o '/api/[a-zA-Z0-9/_?=&.,-]*' /tmp/p.html | sort -u | head -30 >> $out
-          grep -o '"id":[0-9]*' /tmp/p.html | sort | uniq -c | sort -rn | head -10 >> $out
-          grep -o 'src="[^"]*\.js"' /tmp/p.html | head -5 >> $out
+          curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
+          python3 - >> $out 2>&1 <<'PY'
+          s=open('/tmp/pl.html',encoding='utf-8').read()
+          parts=s.split('"lockupViewModel":{')
+          print('lockup blocks:', len(parts)-1)
+          import re
+          ok=0
+          for seg in parts[1:]:
+              cid=re.search(r'"contentId":"([A-Za-z0-9_-]{11})"',seg)
+              tit=re.search(r'"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"',seg)
+              if cid and tit and 'התוכנית המלאה' in tit.group(1):
+                  ok+=1
+                  if ok<=4: print(cid.group(1), tit.group(1))
+          print('full-episode lockups matched:', ok)
+          PY
           echo '```' >> $out
           sed -i "s/$K/***/g" $out
           gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out

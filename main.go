@@ -142,6 +142,13 @@ type state struct {
 }
 
 func main() {
+	// מצב "patriots": כלי נפרד שרץ על המחשב של בעל הקו ומעלה את התוכנית המלאה
+	// המוכנה מיוטיוב במקום ההקלטה (patriots.go). שאר הקוד הוא הגשר הרגיל.
+	if len(os.Args) > 1 && os.Args[1] == "patriots" {
+		patriotsMain()
+		return
+	}
+
 	statusLoc, err := time.LoadLocation("Asia/Jerusalem")
 	if err != nil {
 		statusLoc = time.FixedZone("IL", 3*3600)
