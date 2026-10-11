@@ -18,25 +18,18 @@ jobs:
           out=/tmp/probe.md
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
           K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
-          echo "# הפטריוטים — יוטיוב וקול — $(date -u)" > $out
+          echo "# VOD ערוץ 14 — $(date -u)" > $out
           echo '```' >> $out
-          sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
-          curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
-          python3 - >> $out 2>&1 <<'PY'
-          import re,datetime
-          s=open('/tmp/pl.html',encoding='utf-8').read()
-          for t in re.findall(r'"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"',s)[:14]:
-              m=re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})',t)
-              print(datetime.date(int(m[3]),int(m[2]),int(m[1])).strftime('%a') if m else '   ', t)
-          PY
-          curl -s -m 60 "https://www.call2all.co.il/ym/api/DownloadFile?token=$K&path=ivr2:/3/3/10004.wav" -o /tmp/t.bin; head -c 200 /tmp/t.bin | tr -c '[:print:]' '.' >> $out; echo >> $out
-          for f in 10000 10002 10004; do
-            curl -s -m 300 "https://www.call2all.co.il/ym/api/DownloadFile?token=$K&path=ivr2:/3/3/$f.wav" -o /tmp/$f.wav
-            echo "-- $f: $(wc -c </tmp/$f.wav) bytes, $(ffprobe -v error -show_entries format=duration:stream=sample_rate,codec_name -of csv=p=0 /tmp/$f.wav | tr '\n' ' ')" >> $out
-            for ss in 30 1200 3000 5400; do
-              echo "   @$ss: $(ffmpeg -hide_banner -nostdin -ss $ss -t 60 -i /tmp/$f.wav -af volumedetect -f null - 2>&1 | grep -o 'mean_volume: [^ ]* dB' )" >> $out
-            done
+          T=https://tv.c14.co.il
+          for u in "/series,14683/hptrywtym-bhg-ynwn-mgl-odcinki,985753" "/api/products/vods/serials/985753?platform=BROWSER&lang=he" "/api/products/vods/serials/985753/seasons?platform=BROWSER&lang=he" "/api/products/vods/serials/985753/seasons/with-episodes?platform=BROWSER&lang=he" "/api/products/vods?platform=BROWSER&lang=he&maxResults=5&sort=CREATED_AT&order=desc"; do
+            r=$(curl -sL -m 30 -A "$UA" -H "Accept: application/json, text/html" -o /tmp/r.out -w "%{http_code} %{size_download}" "$T$u"); echo "== $u → $r" >> $out
+            head -c 1500 /tmp/r.out | tr '\n' ' ' >> $out; echo >> $out
           done
+          curl -sL -m 30 -A "$UA" -o /tmp/p.html "$T/series,14683/hptrywtym-bhg-ynwn-mgl-odcinki,985753"
+          echo "-- api/ids in page:" >> $out
+          grep -o '/api/[a-zA-Z0-9/_?=&.,-]*' /tmp/p.html | sort -u | head -30 >> $out
+          grep -o '"id":[0-9]*' /tmp/p.html | sort | uniq -c | sort -rn | head -10 >> $out
+          grep -o 'src="[^"]*\.js"' /tmp/p.html | head -5 >> $out
           echo '```' >> $out
           sed -i "s/$K/***/g" $out
           gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
