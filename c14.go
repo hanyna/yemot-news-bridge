@@ -200,10 +200,8 @@ func fetchC14(link string, loc *time.Location, now time.Time) (string, []*podEpi
 			return // כבר יש, יצא מחלון החזרה, או שהשידור עוד לא הסתיים
 		}
 		seen[day] = true
-		h := fnv.New64a()
-		fmt.Fprintf(h, "c14:%s:%s", src.playlist, day)
 		eps = append(eps, &podEpisode{
-			id:    fmt.Sprintf("%016x", h.Sum64()),
+			id:    c14EpisodeID(src.playlist, day),
 			ts:    start.Unix(),
 			title: title,
 			secs:  int(src.length.Seconds()),
@@ -304,10 +302,70 @@ func c14FeedTitles(playlist string) (string, []string, error) {
 }
 
 var (
-	reYTLockup = regexp.MustCompile(`"lockupMetadataViewModel":\{"title":\{"content":("(?:[^"\\]|\\.)*")`)
-	reYTOld    = regexp.MustCompile(`"playlistVideoRenderer":\{"videoId":"[^"]*".*?"title":\{"runs":\[\{"text":("(?:[^"\\]|\\.)*")`)
-	reYTName   = regexp.MustCompile(`<meta property="og:title" content="([^"]*)"`)
+	reYTLockup  = regexp.MustCompile(`"lockupMetadataViewModel":\{"title":\{"content":("(?:[^"\\]|\\.)*")`)
+	reYTOld     = regexp.MustCompile(`"playlistVideoRenderer":\{"videoId":"[^"]*".*?"title":\{"runs":\[\{"text":("(?:[^"\\]|\\.)*")`)
+	reYTName    = regexp.MustCompile(`<meta property="og:title" content="([^"]*)"`)
+	reYTContent = regexp.MustCompile(`"contentId":"([A-Za-z0-9_-]{11})"`)
+	reYTVideoID = regexp.MustCompile(`"videoId":"([A-Za-z0-9_-]{11})"`)
+	reYTRunText = regexp.MustCompile(`"title":\{"runs":\[\{"text":("(?:[^"\\]|\\.)*")`)
 )
+
+// c14EpisodeID: מזהה קבוע של פרק לפי רשימת ההשמעה והתאריך (YYYY-MM-DD) —
+// זהה בגשר (ההקלטה) ובכלי המחשב (הגרסה המוכנה), כדי שימצאו אותו פרק בשלוחה.
+func c14EpisodeID(playlist, day string) string {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "c14:%s:%s", playlist, day)
+	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// c14Video: סרטון ברשימת ההשמעה — מזהה היוטיוב וכותרתו.
+type c14Video struct {
+	id, title string
+}
+
+// c14PageVideos קורא את עמוד רשימת ההשמעה ומחזיר את הסרטונים (מזהה + כותרת),
+// מהחדש לישן. משמש את כלי המחשב כדי להוריד את התוכנית המלאה המוכנה מיוטיוב.
+// הניתוח מפצל לפי בלוק של כל סרטון (lockupViewModel / playlistVideoRenderer)
+// ומוצא בתוך כל בלוק את המזהה ואת הכותרת — עמיד לקינון של JSON ביניהם.
+func c14PageVideos(playlist string) (string, []c14Video, error) {
+	body, err := c14Get(c14PageBase+playlist, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+	if err != nil {
+		return "", nil, err
+	}
+	page := string(body)
+	var vids []c14Video
+	seen := map[string]bool{}
+	add := func(seg string, idRe, titleRe *regexp.Regexp) {
+		cid := idRe.FindStringSubmatch(seg)
+		tit := titleRe.FindStringSubmatch(seg)
+		if cid == nil || tit == nil || seen[cid[1]] {
+			return
+		}
+		var t string
+		if json.Unmarshal([]byte(tit[1]), &t) != nil {
+			return
+		}
+		seen[cid[1]] = true
+		vids = append(vids, c14Video{id: cid[1], title: t})
+	}
+	segs := strings.Split(page, `"lockupViewModel":{`)
+	for _, seg := range segs[1:] {
+		add(seg, reYTContent, reYTLockup)
+	}
+	if len(vids) == 0 { // מבנה ישן
+		for _, seg := range strings.Split(page, `"playlistVideoRenderer":{`)[1:] {
+			add(seg, reYTVideoID, reYTRunText)
+		}
+	}
+	if len(vids) == 0 {
+		return "", nil, errors.New("לא נמצאו סרטונים בעמוד (יוטיוב שינה את המבנה?)")
+	}
+	name := ""
+	if m := reYTName.FindStringSubmatch(page); m != nil {
+		name = strings.TrimSpace(html.UnescapeString(m[1]))
+	}
+	return name, vids, nil
+}
 
 func c14PageTitles(playlist string) (string, []string, error) {
 	body, err := c14Get(c14PageBase+playlist, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
