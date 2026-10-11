@@ -36,8 +36,13 @@ const (
 // podcastEvery: כל כמה זמן בודקים אם יצא פרק חדש. (משתנה — לבדיקות.)
 var podcastEvery = 30 * time.Minute
 
-// podcastNavHint: הודעה קבועה בכניסה לפודקאסט, לפני שהפרק מתחיל להתנגן.
-const podcastNavHint = "למעבר לפרק הבא, הקישו 8."
+// withLamed: "ל" לפני השם — "הפטריוטים" → "לפטריוטים" (ה' הידיעה נבלעת).
+func withLamed(name string) string {
+	if strings.HasPrefix(name, "ה") && len([]rune(name)) > 2 {
+		return "ל" + strings.TrimPrefix(name, "ה")
+	}
+	return "ל" + name
+}
 
 // מצב של פרק.
 const (
@@ -694,7 +699,7 @@ func (st *state) finishPodcasts(cfg *config) bool {
 			continue // עוד אין מה לשמוע
 		}
 		st.removeTitle(cfg, p.ext) // בלי הקדמה בכניסה — ישר לפרק
-		opts = append(opts, fmt.Sprintf("ל%s הקישו %d.", p.name(), i+1))
+		opts = append(opts, fmt.Sprintf("%s הקישו %d.", withLamed(p.name()), i+1))
 	}
 	if !loaded && (len(opts) == 0 || st.podActive) {
 		// תקלה זמנית בטעינה: לא מורידים את התפריט ל"אינה פעילה" ולא מקצרים אותו —
