@@ -18,15 +18,21 @@ jobs:
           out=/tmp/probe.md
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
           K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
-          echo "# הפטריוטים בקו — $(date -u)" > $out
+          echo "# הפטריוטים — יוטיוב וקול — $(date -u)" > $out
           echo '```' >> $out
-          for e in 3 3/3; do
-            curl -s -m 30 -H "Authorization: $K" --data-urlencode "path=ivr2:/$e" https://www.call2all.co.il/ym/api/GetIVR2Dir > /tmp/d.json
-            echo "-- $e" >> $out
-            python3 -c "import json;d=json.load(open('/tmp/d.json'));print(d.get('responseStatus'));[print(f.get('name'),f.get('mtime'),f.get('size')) for f in (d.get('files') or [])]" >> $out 2>&1
-            for f in podcast.txt ext.ini M1000-spoken.txt 10001.tts 10003.tts 10005.tts 10007.tts; do
-              curl -s -m 30 -H "Authorization: $K" --data-urlencode "what=ivr2:/$e/$f" https://www.call2all.co.il/ym/api/GetTextFile | python3 -c "import json,sys;c=json.load(sys.stdin).get('contents','');print('$f:',c[:500]) if c else None" >> $out 2>&1
-            done
+          sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
+          curl -sL -m 30 -A "$UA" -H "Accept-Language: he" -b "CONSENT=YES+1" -o /tmp/pl.html "https://www.youtube.com/playlist?list=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
+          python3 - >> $out 2>&1 <<'PY'
+          import re,datetime
+          s=open('/tmp/pl.html',encoding='utf-8').read()
+          for t in re.findall(r'"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"',s)[:14]:
+              m=re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})',t)
+              print(datetime.date(int(m[3]),int(m[2]),int(m[1])).strftime('%a') if m else '   ', t)
+          PY
+          for f in 10000 10002 10004; do
+            curl -s -m 120 -H "Authorization: $K" --data-urlencode "path=ivr2:/3/3/$f.wav" -o /tmp/$f.wav https://www.call2all.co.il/ym/api/DownloadFile
+            echo "-- $f: $(wc -c </tmp/$f.wav) bytes, $(ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/$f.wav)s" >> $out
+            ffmpeg -hide_banner -nostdin -ss 600 -t 600 -i /tmp/$f.wav -af volumedetect -f null - 2>&1 | grep -o "mean_volume.*\|max_volume.*" >> $out
           done
           echo '```' >> $out
           sed -i "s/$K/***/g" $out
