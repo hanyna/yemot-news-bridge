@@ -40,7 +40,8 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
-	keepSystemAwake() // שלא יחזור לשינה באמצע (windows; no-op בשאר)
+	loadEnvFile(filepath.Join(exeDir(), "patriots.env")) // הגדרות ליד ה-exe
+	keepSystemAwake()                                    // שלא יחזור לשינה באמצע (windows; no-op בשאר)
 
 	loc, err := time.LoadLocation("Asia/Jerusalem")
 	if err != nil {
@@ -69,12 +70,8 @@ func patriotsMain() {
 
 	y := &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: apiKey}
 
-	name, vids, err := c14PageVideos(playlist)
-	if err != nil {
-		log.Fatalf("קריאת רשימת ההשמעה ביוטיוב נכשלה: %v", err)
-	}
-	log.Printf("רשימת ההשמעה %q: %d סרטונים.", name, len(vids))
-
+	// קוראים קודם את podcast.txt של הגשר: משם שולפים את מזהה רשימת ההשמעה
+	// ואת הפרקים שהגשר כבר יצר — כך המזהים תמיד תואמים לגשר.
 	txt, exists, err := y.read(ext, podcastIndex)
 	if err != nil {
 		log.Fatalf("קריאת %s בשלוחה %s נכשלה: %v", podcastIndex, ext, err)
@@ -86,6 +83,15 @@ func patriotsMain() {
 	if !isC14(feed) {
 		log.Fatalf("שלוחה %s אינה פודקאסט של ערוץ 14 (feed=%s).", ext, feed)
 	}
+	if src, err := parseC14(feed); err == nil && src.playlist != "" {
+		playlist = src.playlist
+	}
+
+	name, vids, err := c14PageVideos(playlist)
+	if err != nil {
+		log.Fatalf("קריאת רשימת ההשמעה ביוטיוב נכשלה: %v", err)
+	}
+	log.Printf("רשימת ההשמעה %q: %d סרטונים.", name, len(vids))
 
 	now := time.Now().In(loc)
 	done, skipped, failed := 0, 0, 0
@@ -238,6 +244,32 @@ func ffprobeSeconds(path string) int {
 	}
 	f, _ := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
 	return int(f)
+}
+
+// loadEnvFile טוען קובץ הגדרות פשוט (KEY=VALUE בכל שורה; # הערה) לתוך משתני
+// הסביבה — רק מה שעוד לא הוגדר, כך שאפשר גם לדרוס דרך הסביבה. חסר — לא נורא.
+func loadEnvFile(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		v = strings.Trim(v, `"'`)
+		if k != "" {
+			if _, set := os.LookupEnv(k); !set {
+				os.Setenv(k, v)
+			}
+		}
+	}
 }
 
 func exeDir() string {
