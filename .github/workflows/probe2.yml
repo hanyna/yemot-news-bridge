@@ -29,10 +29,13 @@ jobs:
               m=re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})',t)
               print(datetime.date(int(m[3]),int(m[2]),int(m[1])).strftime('%a') if m else '   ', t)
           PY
+          curl -s -m 60 "https://www.call2all.co.il/ym/api/DownloadFile?token=$K&path=ivr2:/3/3/10004.wav" -o /tmp/t.bin; head -c 200 /tmp/t.bin | tr -c '[:print:]' '.' >> $out; echo >> $out
           for f in 10000 10002 10004; do
-            curl -s -m 120 -H "Authorization: $K" --data-urlencode "path=ivr2:/3/3/$f.wav" -o /tmp/$f.wav https://www.call2all.co.il/ym/api/DownloadFile
-            echo "-- $f: $(wc -c </tmp/$f.wav) bytes, $(ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/$f.wav)s" >> $out
-            ffmpeg -hide_banner -nostdin -ss 600 -t 600 -i /tmp/$f.wav -af volumedetect -f null - 2>&1 | grep -o "mean_volume.*\|max_volume.*" >> $out
+            curl -s -m 300 "https://www.call2all.co.il/ym/api/DownloadFile?token=$K&path=ivr2:/3/3/$f.wav" -o /tmp/$f.wav
+            echo "-- $f: $(wc -c </tmp/$f.wav) bytes, $(ffprobe -v error -show_entries format=duration:stream=sample_rate,codec_name -of csv=p=0 /tmp/$f.wav | tr '\n' ' ')" >> $out
+            for ss in 30 1200 3000 5400; do
+              echo "   @$ss: $(ffmpeg -hide_banner -nostdin -ss $ss -t 60 -i /tmp/$f.wav -af volumedetect -f null - 2>&1 | grep -o 'mean_volume: [^ ]* dB' )" >> $out
+            done
           done
           echo '```' >> $out
           sed -i "s/$K/***/g" $out
