@@ -1,0 +1,33 @@
+name: Patriots probe (temporary)
+on:
+  push:
+    branches: [probe2]
+permissions:
+  issues: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+        run: |
+          set +e
+          out=/tmp/probe.md
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
+          echo "# הפטריוטים בקו — $(date -u)" > $out
+          echo '```' >> $out
+          for e in 3 3/3; do
+            curl -s -m 30 -H "Authorization: $K" --data-urlencode "path=ivr2:/$e" https://www.call2all.co.il/ym/api/GetIVR2Dir > /tmp/d.json
+            echo "-- $e" >> $out
+            python3 -c "import json;d=json.load(open('/tmp/d.json'));print(d.get('responseStatus'));[print(f.get('name'),f.get('mtime'),f.get('size')) for f in (d.get('files') or [])]" >> $out 2>&1
+            for f in podcast.txt ext.ini M1000-spoken.txt 10001.tts 10003.tts 10005.tts 10007.tts; do
+              curl -s -m 30 -H "Authorization: $K" --data-urlencode "what=ivr2:/$e/$f" https://www.call2all.co.il/ym/api/GetTextFile | python3 -c "import json,sys;c=json.load(sys.stdin).get('contents','');print('$f:',c[:500]) if c else None" >> $out 2>&1
+            done
+          done
+          echo '```' >> $out
+          sed -i "s/$K/***/g" $out
+          gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
