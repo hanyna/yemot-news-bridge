@@ -1,0 +1,42 @@
+name: Patriots diag (temporary)
+on:
+  push:
+    branches: [diag-patriots]
+permissions:
+  issues: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - name: Diag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+        run: |
+          set +e
+          out=/tmp/o.md
+          K=$(printf %s "$YEMOT_API_KEY" | tr -d '[:space:]')
+          echo "# אבחון פטריוטים — $(date -u)" > $out
+          echo '```' >> $out
+          curl -s -m 30 -H "Authorization: $K" --data-urlencode "what=ivr2:/3/3/podcast.txt" https://www.call2all.co.il/ym/api/GetTextFile | python3 -c "import json,sys;print(json.load(sys.stdin).get('contents',''))" > /tmp/pod.txt
+          cat /tmp/pod.txt >> $out
+          echo "--- פענוח: תאריך לכל פרק (ts → שעון ישראל) ומצב ---" >> $out
+          python3 - >> $out 2>&1 <<'PY'
+          import datetime,zoneinfo
+          il=zoneinfo.ZoneInfo("Asia/Jerusalem")
+          now=datetime.datetime.now(il)
+          print("now:", now.isoformat())
+          for l in open('/tmp/pod.txt',encoding='utf-8'):
+              l=l.strip()
+              if l.startswith('p '):
+                  f=l.split()
+                  ts=int(f[3]); st=f[4]
+                  d=datetime.datetime.fromtimestamp(ts,il)
+                  age=(now-d).total_seconds()/3600
+                  print(f"base {f[2]}  {d.strftime('%Y-%m-%d %H:%M %a')}  מצב={st}  גיל={age:.1f}ש  id={f[1]}")
+          PY
+          echo '```' >> $out
+          sed -i "s/$K/***/g" $out
+          gh issue comment 3 -R "$GITHUB_REPOSITORY" -F $out
