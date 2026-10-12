@@ -108,13 +108,38 @@ func patriotsMain() {
 		playlist = src.playlist
 	}
 
-	name, vids, err := c14PageVideos(playlist)
-	if err != nil {
+	// מביאים את רשימת הסרטונים דרך yt-dlp (אמין, מטפל באזור/הסכמה) ולא בגירוד
+	// HTML שמשתנה ממחשב למחשב. אם yt-dlp נכשל — ניסיון גיבוי דרך העמוד.
+	vids, err := ytdlpPlaylist(ytdlp, playlist)
+	if err != nil || len(vids) == 0 {
+		log.Printf("הערה: רשימת ההשמעה דרך yt-dlp לא נקראה (%v) — מנסה דרך עמוד היוטיוב.", err)
+		if _, v2, e2 := c14PageVideos(playlist); e2 == nil {
+			vids = v2
+		} else if err == nil {
+			err = e2
+		}
+	}
+	if len(vids) == 0 {
 		log.Fatalf("קריאת רשימת ההשמעה ביוטיוב נכשלה: %v", err)
 	}
-	log.Printf("רשימת ההשמעה %q: %d סרטונים.", name, len(vids))
+	log.Printf("רשימת ההשמעה: %d סרטונים.", len(vids))
 
 	now := time.Now().In(loc)
+	// לוג עזר: כמה "תוכנית מלאה" נמצאו ומה התאריך האחרון — כדי שאפשר יהיה לראות
+	// מיד אם הבעיה בקריאת היוטיוב או בהתאמה לקו.
+	var fullDates []string
+	for _, v := range vids {
+		if strings.Contains(v.title, c14Full) {
+			if m := reC14Date.FindStringSubmatch(v.title); m != nil {
+				fullDates = append(fullDates, fmt.Sprintf("%s.%s", m[1], m[2]))
+			}
+		}
+	}
+	if len(fullDates) > 3 {
+		fullDates = fullDates[:3]
+	}
+	log.Printf("נמצאו תוכניות מלאות ביוטיוב (אחרונות): %s", strings.Join(fullDates, ", "))
+
 	done, skipped, failed := 0, 0, 0
 	seen := map[string]bool{}
 	for _, v := range vids {
@@ -270,6 +295,37 @@ func findMoridTools() (ytdlp, ffdir string) {
 		}
 	}
 	return ytdlp, ffdir
+}
+
+// ytdlpPlaylist מביא את רשימת הסרטונים (מזהה + כותרת) של רשימת השמעה ביוטיוב,
+// דרך yt-dlp — אמין יותר מגירוד העמוד. מהחדש לישן.
+func ytdlpPlaylist(ytdlp, playlist string) ([]c14Video, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	args := []string{"--flat-playlist", "--no-warnings", "--no-progress",
+		"--print", "%(id)s|%(title)s"}
+	if patriotsInsecure {
+		args = append(args, "--no-check-certificate")
+	}
+	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
+		args = append(args, "--cookies-from-browser", b)
+	}
+	args = append(args, "https://www.youtube.com/playlist?list="+playlist)
+	cmd := exec.CommandContext(ctx, ytdlp, args...)
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%v: %.300s", err, strings.TrimSpace(errBuf.String()))
+	}
+	var vids []c14Video
+	for _, line := range strings.Split(outBuf.String(), "\n") {
+		id, title, ok := strings.Cut(strings.TrimSpace(line), "|")
+		if !ok || len(id) != 11 {
+			continue
+		}
+		vids = append(vids, c14Video{id: id, title: title})
+	}
+	return vids, nil
 }
 
 // ytdlpAudio מוריד את הקול של סרטון יוטיוב לקובץ MP3 (דרך yt-dlp + ffmpeg).
