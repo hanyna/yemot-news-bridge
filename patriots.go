@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -62,13 +63,33 @@ func patriotsMain() {
 	ytdlp := envOr("YTDLP", "yt-dlp")
 	stateDir := envOr("PATRIOTS_STATE_DIR", filepath.Join(exeDir(), "state"))
 
-	if dir := strings.TrimSpace(os.Getenv("FFMPEG_DIR")); dir != "" {
-		// כך ש-ffmpeg/ffprobe/yt-dlp יימצאו גם כשאינם ב-PATH.
-		os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// נטפרי/רימון מיירטים את ה-TLS, ולכן yt-dlp וגם קריאות הרשת של Go נכשלות
+	// באימות התעודה. מוריד השירים פותר את זה עם --no-check-certificate; כאן
+	// עושים אותו דבר. אפשר לכבות עם PATRIOTS_INSECURE_TLS=off.
+	patriotsInsecure = envOr("PATRIOTS_INSECURE_TLS", "on") != "off"
+
+	// משתמשים ב-yt-dlp וב-ffmpeg שכבר מותקנים עם מוריד השירים (אותם כלים,
+	// כבר עובדים דרך נטפרי) — אם לא הוגדרו במפורש ולא נמצאים ב-PATH.
+	ffdir := strings.TrimSpace(os.Getenv("FFMPEG_DIR"))
+	if yt, ff := findMoridTools(); yt != "" || ff != "" {
+		if ytdlp == "yt-dlp" && yt != "" {
+			ytdlp = yt
+		}
+		if ffdir == "" && ff != "" {
+			ffdir = ff
+		}
+	}
+	if ffdir != "" {
+		// כך ש-ffmpeg/ffprobe יימצאו גם כשאינם ב-PATH.
+		os.Setenv("PATH", ffdir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	_ = os.MkdirAll(stateDir, 0o755)
 
-	y := &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: apiKey}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: patriotsTransport()}
+	if patriotsInsecure {
+		feedHTTP.Transport = patriotsTransport() // קריאת עמוד היוטיוב (c14Get)
+	}
+	y := &yemot{client: client, apiKey: apiKey}
 
 	// קוראים קודם את podcast.txt של הגשר: משם שולפים את מזהה רשימת ההשמעה
 	// ואת הפרקים שהגשר כבר יצר — כך המזהים תמיד תואמים לגשר.
@@ -203,6 +224,54 @@ func patriotsIntro(showName string, start time.Time, secs int) string {
 	return s
 }
 
+// patriotsInsecure: לדלג על אימות תעודת TLS (נטפרי/רימון). נקבע ב-patriotsMain.
+var patriotsInsecure bool
+
+// patriotsTransport: מעביר HTTP שמדלג על אימות תעודה כשצריך (נטפרי).
+func patriotsTransport() http.RoundTripper {
+	if !patriotsInsecure {
+		return nil
+	}
+	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+}
+
+// findMoridTools מאתר את yt-dlp.exe ו-ffmpeg.exe שמוריד השירים כבר התקין
+// (ברירת מחדל ב-%LOCALAPPDATA%\MoridHashirim). מחזיר נתיב yt-dlp ותיקיית ffmpeg.
+func findMoridTools() (ytdlp, ffdir string) {
+	roots := []string{}
+	if la := os.Getenv("LOCALAPPDATA"); la != "" {
+		roots = append(roots, filepath.Join(la, "MoridHashirim"))
+	}
+	if ad := os.Getenv("APPDATA"); ad != "" {
+		roots = append(roots, filepath.Join(ad, "MoridHashirim"))
+	}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			switch strings.ToLower(d.Name()) {
+			case "yt-dlp.exe":
+				if ytdlp == "" {
+					ytdlp = p
+				}
+			case "ffmpeg.exe":
+				if ffdir == "" {
+					ffdir = filepath.Dir(p)
+				}
+			}
+			return nil
+		})
+		if ytdlp != "" && ffdir != "" {
+			break
+		}
+	}
+	return ytdlp, ffdir
+}
+
 // ytdlpAudio מוריד את הקול של סרטון יוטיוב לקובץ MP3 (דרך yt-dlp + ffmpeg).
 func ytdlpAudio(ytdlp, videoID, out string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -212,6 +281,9 @@ func ytdlpAudio(ytdlp, videoID, out string) error {
 		"-f", "bestaudio/best",
 		"-x", "--audio-format", "mp3", "--audio-quality", "0",
 		"-o", strings.TrimSuffix(out, ".mp3") + ".%(ext)s",
+	}
+	if patriotsInsecure {
+		args = append(args, "--no-check-certificate") // נטפרי/רימון
 	}
 	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
 		args = append(args, "--cookies-from-browser", b)

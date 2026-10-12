@@ -59,16 +59,28 @@ function Ensure-Tool($name, $url, $isZip, $pickNames) {
     return $dir
 }
 
-$ytDir = Ensure-Tool "yt-dlp.exe" "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" $false @()
-$ffDir = $dir
-if (-not (Test-Path (Join-Path $dir "ffmpeg.exe")) -and -not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-    $ffDir = Ensure-Tool "ffmpeg.exe" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" $true @("ffmpeg.exe","ffprobe.exe")
-} elseif (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
-    $ffDir = Split-Path (Get-Command ffmpeg).Source
+# הכלי משתמש ב-yt-dlp וב-ffmpeg שמוריד השירים כבר התקין (אותם כלים, כבר
+# עובדים דרך נטפרי). מאתרים אותם; רק אם לא קיימים — מורידים כגיבוי.
+$moridDir = Join-Path $env:LOCALAPPDATA "MoridHashirim"
+$ytFound = $null; $ffFound = $null
+if (Test-Path $moridDir) {
+    $ytFound = Get-ChildItem -Path $moridDir -Recurse -Filter "yt-dlp.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    $ffFound = Get-ChildItem -Path $moridDir -Recurse -Filter "ffmpeg.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 }
-$ytdlpPath = Join-Path $ytDir "yt-dlp.exe"
-Write-Host "✓ yt-dlp: $ytdlpPath"
-Write-Host "✓ ffmpeg: $ffDir"
+$ytLine = "# YTDLP=        # ריק = הכלי מאתר לבד את זה של מוריד השירים"
+$ffLine = "# FFMPEG_DIR=   # ריק = הכלי מאתר לבד את זה של מוריד השירים"
+if ($ytFound -and $ffFound) {
+    Write-Host "✓ נמצאו הכלים של מוריד השירים — נשתמש בהם (yt-dlp + ffmpeg)." -ForegroundColor Green
+} else {
+    Write-Host "לא נמצאו הכלים של מוריד השירים — מוריד yt-dlp ו-ffmpeg כגיבוי..." -ForegroundColor Yellow
+    $ytDir = Ensure-Tool "yt-dlp.exe" "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" $false @()
+    $ffDir = $dir
+    if (-not (Test-Path (Join-Path $dir "ffmpeg.exe"))) {
+        $ffDir = Ensure-Tool "ffmpeg.exe" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" $true @("ffmpeg.exe","ffprobe.exe")
+    }
+    $ytLine = "YTDLP=" + (Join-Path $ytDir "yt-dlp.exe")
+    $ffLine = "FFMPEG_DIR=$ffDir"
+}
 
 # 4) קובץ ההגדרות
 @"
@@ -78,8 +90,10 @@ PATRIOTS_PLAYLIST=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
 PATRIOTS_EXT=3/3
 PATRIOTS_START=21:00
 PATRIOTS_DAYS_BACK=2
-YTDLP=$ytdlpPath
-FFMPEG_DIR=$ffDir
+$ytLine
+$ffLine
+# נטפרי/רימון: on = לדלג על אימות תעודה (ברירת מחדל). off = לכבות.
+PATRIOTS_INSECURE_TLS=on
 # אם יוטיוב מבקש אימות ('Sign in to confirm') — כתבו כאן את הדפדפן: chrome / edge / firefox
 YT_COOKIES_BROWSER=
 "@ | Set-Content -Path $env1 -Encoding UTF8
