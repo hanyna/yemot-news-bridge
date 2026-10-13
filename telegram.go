@@ -403,7 +403,7 @@ type tgSource struct {
 	allOKAt  time.Time // מתי לאחרונה ערוץ כלשהו נקרא בהצלחה
 	usingSrv bool
 	lastLog  time.Time
-	lastWake time.Time // מתי לאחרונה הוער שרת ערוץ חי (ראו wakeDue)
+	lastWake time.Time  // מתי לאחרונה הוער שרת ערוץ חי (ראו wakeDue)
 	dataMu   sync.Mutex // chans[*].videos — נקרא גם מה-worker של הקול
 }
 
