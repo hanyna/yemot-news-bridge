@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -428,5 +429,71 @@ func TestHebrewTitle(t *testing.T) {
 		if got := hebrewTitle(in); got != want {
 			t.Errorf("%q → %q (want %q)", in, got, want)
 		}
+	}
+}
+
+// טלגרם לא עונים (החיבור נתקע): הסבב לא נתקע על כל הערוצים — אחרי התקלה
+// הראשונה שאר הערוצים נדחים, ההמתנה קצרה וקבועה (לא 5-20 דקות כמו בחסימה),
+// וכשטלגרם חוזרים — כל הערוצים נבדקים מיד.
+func TestTgNetworkHangSkipsRestAndRecoversFast(t *testing.T) {
+	g := &fakeTelegram{posts: map[string][]int{"a": {1, 2, 3}, "b": {1, 2, 3}, "c": {1, 2, 3}}}
+	var hang atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hang.Load() {
+			time.Sleep(300 * time.Millisecond)
+			return
+		}
+		g.handler(w, r)
+	}))
+	oldBase, oldGap := tgBase, tgGap
+	tgBase, tgGap = srv.URL, 0
+	t.Cleanup(func() { srv.Close(); tgBase, tgGap = oldBase, oldGap })
+
+	s := newTgSource("a,b,c", "")
+	s.client.Timeout = 100 * time.Millisecond
+	now := time.Now()
+	s.poll(now)
+	hang.Store(true)
+	for i := 0; i < 6; i++ { // דקה ויותר של תקלה — ההמתנה לא גדלה
+		now = now.Add(time.Minute)
+		g.mu.Lock()
+		g.hits = nil
+		g.mu.Unlock()
+		start := time.Now()
+		s.poll(now)
+		if d := time.Since(start); d > 250*time.Millisecond {
+			t.Fatalf("round %d: poll blocked %v — should stop after the first hung channel", i, d)
+		}
+		for _, c := range s.chans {
+			if w := c.nextTry.Sub(now); w > tgNetRetry {
+				t.Fatalf("round %d: channel %s waits %v (network error should retry in %v)", i, c.name, w, tgNetRetry)
+			}
+		}
+	}
+	hang.Store(false)
+	now = now.Add(time.Minute)
+	g.mu.Lock()
+	g.hits = nil
+	g.mu.Unlock()
+	s.poll(now)
+	for _, c := range s.chans {
+		if c.fails != 0 || !c.lastOK.Equal(now) {
+			t.Fatalf("channel %s not read right after recovery (fails=%d, hits %v)", c.name, c.fails, g.hits)
+		}
+	}
+}
+
+// 429 אמיתי מטלגרם — עדיין המתנה מדורגת.
+func TestTgRateLimitStillBacksOff(t *testing.T) {
+	g := &fakeTelegram{status: 429}
+	withFakeTelegram(t, g)
+	s := newTgSource("a", "")
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		now = s.chans[0].nextTry.Add(time.Second)
+		s.poll(now)
+	}
+	if w := s.chans[0].nextTry.Sub(now); w != tgBackoff[2] {
+		t.Fatalf("after 3 x 429 wait %v, want %v", w, tgBackoff[2])
 	}
 }

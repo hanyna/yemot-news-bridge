@@ -8,6 +8,8 @@ package main
 //   - קצב מנומס: הפסקה של לפחות 2 שניות בין בקשות לטלגרם, כל ערוץ נבדק
 //     בערך פעם ב-(מספר הערוצים × 6) שניות, ואחרי חסימה — המתנה מדורגת
 //     (30 שניות → 20 דקות). אותו מנגנון שבערוץ חי.
+//   - תקלת רשת (טלגרם לא עונים, החיבור נתקע) היא לא חסימה: שאר הערוצים
+//     בסבב נדחים, ומנסים שוב כל 20 שניות — וכשטלגרם חוזרים, כל הערוצים מיד.
 //   - הודעות שנשמרו בזיכרון נשארות לכל ההפעלה; אם פורסמו הרבה הודעות בין
 //     בדיקה לבדיקה — נקרא גם הדף הקודם, כדי לא לפספס.
 //   - גיבוי: אם טלגרם חוסמים את כל הערוצים יותר מ-10 דקות ויש TGPOPUP_KEY,
@@ -15,11 +17,13 @@ package main
 //   - SOURCE: "server" ב-bridge.yml מחזיר את הדרך הישנה (רק דרך ערוץ חי).
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -37,6 +41,9 @@ var (
 	tgMinEvery   = 30 * time.Second // ולא יותר מפעם בזה
 	tgFallback   = 10 * time.Minute // כל הערוצים חסומים יותר מזה → שרת ערוץ חי
 	tgBackoff    = []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 20 * time.Minute}
+	// tgNetRetry: תקלת רשת (טלגרם לא עונים / החיבור נתקע) — זו לא חסימה, אז
+	// לא מחכים 5-20 דקות כמו אחרי 429, אלא מנסים שוב אחרי זמן קצר וקבוע.
+	tgNetRetry = 20 * time.Second
 )
 
 const (
@@ -400,7 +407,7 @@ func newTgSource(channels, mode string) *tgSource {
 	if strings.EqualFold(strings.TrimSpace(mode), "server") {
 		return nil
 	}
-	s := &tgSource{client: &http.Client{Timeout: 25 * time.Second}, started: time.Now()}
+	s := &tgSource{client: newTgClient(), started: time.Now()}
 	seen := map[string]bool{}
 	for _, f := range strings.FieldsFunc(channels, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
 		name := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(f, "https://t.me/s/"), "https://t.me/"), "@")
@@ -414,6 +421,25 @@ func newTgSource(channels, mode string) *tgSource {
 		return nil
 	}
 	return s
+}
+
+// newTgClient: HTTP/1.1 (לא HTTP/2) — ב-HTTP/2 כל הבקשות לטלגרם עוברות בחיבור
+// אחד, וכשהוא נתקע כל הערוצים נכשלים יחד ("awaiting headers") עד שהחיבור
+// מת. כאן חיבור תקוע פוגע רק בבקשה אחת, ואחרי תקלה סוגרים את החיבורים.
+func newTgClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ForceAttemptHTTP2 = false
+	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	tr.ResponseHeaderTimeout = 12 * time.Second
+	tr.IdleConnTimeout = 30 * time.Second
+	tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 15 * time.Second}).DialContext
+	return &http.Client{Timeout: 25 * time.Second, Transport: tr}
+}
+
+// tgNetErr: תקלת רשת (לא תשובה של טלגרם) — זמן המתנה נגמר, החיבור נפל וכו'.
+func tgNetErr(err error) bool {
+	var se *tgStatusError
+	return err != nil && !errors.As(err, &se) && !errors.Is(err, errTgEmpty) && !errors.Is(err, errTgTooBig)
 }
 
 // every: כל כמה זמן כל ערוץ נבדק.
@@ -532,8 +558,13 @@ func nonEmptyStr(a, b string) string {
 // לקחת את ההודעות משרת ערוץ חי (אם יש מפתח).
 func (s *tgSource) poll(now time.Time) (items []FeedItem, chans []Channel, fallback bool) {
 	every := s.every()
+	netDown := false // תקלת רשת בסבב הזה — שאר הערוצים נדחים (אחרת כל ערוץ תוקע את הסבב 25 שניות)
 	for _, c := range s.chans {
 		if now.Before(c.nextTry) {
+			continue
+		}
+		if netDown {
+			c.nextTry = now.Add(tgNetRetry)
 			continue
 		}
 		if err := s.fetch(c); err != nil {
@@ -541,6 +572,11 @@ func (s *tgSource) poll(now time.Time) (items []FeedItem, chans []Channel, fallb
 				c.fails++
 			}
 			wait := tgBackoff[c.fails-1]
+			if tgNetErr(err) {
+				wait = tgNetRetry
+				netDown = true
+				s.client.CloseIdleConnections() // חיבור תקוע — הבקשה הבאה תפתח חיבור חדש
+			}
 			c.nextTry = now.Add(wait)
 			if c.lastErr != err.Error() || c.fails == 1 {
 				log.Printf("טלגרם: ערוץ %s — %v. מנסה שוב בעוד %v.", c.name, err, wait)
@@ -550,10 +586,19 @@ func (s *tgSource) poll(now time.Time) (items []FeedItem, chans []Channel, fallb
 		}
 		if c.fails > 0 {
 			log.Printf("טלגרם: ערוץ %s חזר לעבוד.", c.name)
+			// טלגרם עונים שוב — ערוצים שנדחו בגלל תקלת רשת נבדקים מיד, לא אחרי ההמתנה
+			for _, o := range s.chans {
+				if o != c && o.fails > 0 && tgNetErrText(o.lastErr) && o.nextTry.After(now) {
+					o.nextTry = now
+				}
+			}
 		}
 		c.ok, c.fails, c.lastErr, c.lastOK = true, 0, "", now
 		c.nextTry = now.Add(every)
 		s.allOKAt = now
+	}
+	if netDown {
+		log.Printf("טלגרם: לא עונים (תקלת רשת) — שאר הערוצים נדחו, מנסה שוב בעוד %v.", tgNetRetry)
 	}
 	for _, c := range s.chans {
 		chans = append(chans, Channel{Name: c.name, Title: c.title})
@@ -566,6 +611,11 @@ func (s *tgSource) poll(now time.Time) (items []FeedItem, chans []Channel, fallb
 		since = s.started
 	}
 	return items, chans, now.Sub(since) > tgFallback
+}
+
+// tgNetErrText: lastErr של ערוץ — האם זו הייתה תקלת רשת (ולא חסימה של טלגרם).
+func tgNetErrText(msg string) bool {
+	return msg != "" && !strings.Contains(msg, "טלגרם") && !strings.Contains(msg, "הדף נטען") && !strings.Contains(msg, "הערוץ לא נמצא")
 }
 
 // anyOK: ערוץ כלשהו כבר נקרא בהצלחה בהפעלה הזו.
