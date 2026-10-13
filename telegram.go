@@ -12,8 +12,10 @@ package main
 //     בסבב נדחים, ומנסים שוב כל 20 שניות — וכשטלגרם חוזרים, כל הערוצים מיד.
 //   - הודעות שנשמרו בזיכרון נשארות לכל ההפעלה; אם פורסמו הרבה הודעות בין
 //     בדיקה לבדיקה — נקרא גם הדף הקודם, כדי לא לפספס.
-//   - גיבוי: אם טלגרם חוסמים את כל הערוצים יותר מ-10 דקות ויש TGPOPUP_KEY,
-//     הגשר לוקח את ההודעות משרת ערוץ חי עד שטלגרם חוזרים.
+//   - גיבוי: אם טלגרם חוסמים את כל הערוצים יותר מ-5 דקות ויש TGPOPUP_KEY,
+//     הגשר לוקח את ההודעות משרת ערוץ חי עד שטלגרם חוזרים. השרת (Render) נרדם
+//     כשאין בו שימוש, ולכן כבר אחרי דקה וחצי בלי טלגרם הגשר מעיר אותו — כדי
+//     שכשמגיעים לגיבוי, השרת כבר ער וקרא את הערוצים בעצמו.
 //   - SOURCE: "server" ב-bridge.yml מחזיר את הדרך הישנה (רק דרך ערוץ חי).
 
 import (
@@ -39,7 +41,8 @@ var (
 	tgGap        = 2 * time.Second  // הפסקה מינימלית בין שתי בקשות לטלגרם
 	tgPerChannel = 6 * time.Second  // כל ערוץ נבדק פעם ב-(ערוצים × זה)
 	tgMinEvery   = 30 * time.Second // ולא יותר מפעם בזה
-	tgFallback   = 10 * time.Minute // כל הערוצים חסומים יותר מזה → שרת ערוץ חי
+	tgFallback   = 5 * time.Minute  // כל הערוצים חסומים יותר מזה → שרת ערוץ חי
+	tgWakeAfter  = 90 * time.Second // אף ערוץ לא נקרא כבר זמן כזה → מעירים את שרת ערוץ חי מראש
 	tgBackoff    = []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 20 * time.Minute}
 	// tgNetRetry: תקלת רשת (טלגרם לא עונים / החיבור נתקע) — זו לא חסימה, אז
 	// לא מחכים 5-20 דקות כמו אחרי 429, אלא מנסים שוב אחרי זמן קצר וקבוע.
@@ -382,6 +385,7 @@ type tgChan struct {
 	items   map[int]FeedItem
 	videos  map[int]string // כתובות mp4 שנמצאו בדף (טריות — הן פגות אחרי זמן)
 	ok      bool           // נקרא בהצלחה לפחות פעם אחת בהפעלה הזו
+	firstOK time.Time      // הקריאה המוצלחת הראשונה בהפעלה (לפני זה — הודעות ישנות, לא עיכוב)
 	lastOK  time.Time
 	nextTry time.Time
 	fails   int
@@ -399,6 +403,7 @@ type tgSource struct {
 	allOKAt  time.Time // מתי לאחרונה ערוץ כלשהו נקרא בהצלחה
 	usingSrv bool
 	lastLog  time.Time
+	lastWake time.Time // מתי לאחרונה הוער שרת ערוץ חי (ראו wakeDue)
 	dataMu   sync.Mutex // chans[*].videos — נקרא גם מה-worker של הקול
 }
 
@@ -593,6 +598,9 @@ func (s *tgSource) poll(now time.Time) (items []FeedItem, chans []Channel, fallb
 				}
 			}
 		}
+		if c.firstOK.IsZero() {
+			c.firstOK = now
+		}
 		c.ok, c.fails, c.lastErr, c.lastOK = true, 0, "", now
 		c.nextTry = now.Add(every)
 		s.allOKAt = now
@@ -616,6 +624,33 @@ func (s *tgSource) poll(now time.Time) (items []FeedItem, chans []Channel, fallb
 // tgNetErrText: lastErr של ערוץ — האם זו הייתה תקלת רשת (ולא חסימה של טלגרם).
 func tgNetErrText(msg string) bool {
 	return msg != "" && !strings.Contains(msg, "טלגרם") && !strings.Contains(msg, "הדף נטען") && !strings.Contains(msg, "הערוץ לא נמצא")
+}
+
+// wakeDue: אף ערוץ לא נקרא כבר tgWakeAfter — הגיע הזמן להעיר את שרת הגיבוי
+// (לכל היותר פעם ב-10 דקות).
+func (s *tgSource) wakeDue(now time.Time) bool {
+	since := s.allOKAt
+	if since.IsZero() {
+		since = s.started
+	}
+	if now.Sub(since) < tgWakeAfter || now.Sub(s.lastWake) < 10*time.Minute {
+		return false
+	}
+	s.lastWake = now
+	return true
+}
+
+// firstRead: מתי הערוץ נקרא בהצלחה לראשונה בהפעלה הזו (אפס = לא ידוע).
+func (s *tgSource) firstRead(channel string) time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	for _, c := range s.chans {
+		if strings.EqualFold(c.name, channel) {
+			return c.firstOK
+		}
+	}
+	return time.Time{}
 }
 
 // anyOK: ערוץ כלשהו כבר נקרא בהצלחה בהפעלה הזו.

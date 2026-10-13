@@ -456,3 +456,41 @@ func TestXFixedName(t *testing.T) {
 		t.Fatalf("%+v", a)
 	}
 }
+
+// "לא נמצא" רגעי על חשבון שכבר נקרא: ניסיון נוסף מיד, ואם עדיין — תקלה זמנית
+// עם ניסיון חוזר בעוד דקה (לא "בדקו את השם" ולא המתנה שגדלה ל-30 דקות).
+func TestXGlitchNotFound(t *testing.T) {
+	old := xGlitchPause
+	xGlitchPause = 0
+	t.Cleanup(func() { xGlitchPause = old })
+	f := &fakeX{statuses: map[string]string{"ariel__danino": danioStatuses("https://x/p.jpg")}}
+	withFakeX(t, f)
+	s := newXSource("ariel__danino", "")
+	now := time.Now()
+	s.poll(now)
+	a := s.accts[0]
+	if !a.ok {
+		t.Fatal("first read")
+	}
+	f.mu.Lock()
+	saved := f.statuses
+	f.statuses = map[string]string{}
+	f.mu.Unlock()
+	for i := 1; i <= 4; i++ {
+		now = a.nextTry.Add(time.Second)
+		items, _ := s.poll(now)
+		if a.lastErr != errXGlitch.Error() || a.nextTry.Sub(now) != xGlitchRetry {
+			t.Fatalf("round %d: err %q wait %v", i, a.lastErr, a.nextTry.Sub(now))
+		}
+		if len(items) != 6 {
+			t.Fatalf("round %d: kept tweets lost: %d", i, len(items))
+		}
+	}
+	f.mu.Lock()
+	f.statuses = saved
+	f.mu.Unlock()
+	s.poll(a.nextTry.Add(time.Second))
+	if a.fails != 0 {
+		t.Fatalf("recovery: %+v", a)
+	}
+}

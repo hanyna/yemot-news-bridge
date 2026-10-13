@@ -37,7 +37,7 @@ const (
 	visionMaxAge    = 6 * time.Hour    // הודעה ישנה מזה (ייבוא ראשון) — בלי ניתוח
 	visionPause     = 10 * time.Minute // אחרי "חרגת מהמכסה" / מפתח לא תקין — הפסקה
 	visionTries     = 5                // ניסיונות לכל הודעה (תקלה שאינה מכסה)
-	visionRetry     = 2 * time.Minute  // אחרי תקלה זמנית — מתי לנסות שוב את אותה הודעה
+	visionRetry     = time.Minute      // אחרי תקלה זמנית — מתי לנסות שוב את אותה הודעה
 	visionTextMax   = 400              // אורך מקסימלי לטקסט שבתמונה (תווים)
 )
 
@@ -270,11 +270,13 @@ func (v *visionClient) run(key string, urls []string, msgText string, ch chan st
 			v.warnOnce("pause:"+pe.why, "ניתוח תמונות: "+pe.why+" — ממשיך בלי תיאור, ומנסה שוב בעוד "+visionPause.String()+" (התיאור יתווסף להודעות שחיכו).")
 			return
 		}
-		log.Printf("ניתוח תמונה %s נכשל (%d/%d): %v", key, v.tries[key], visionTries, err)
 		if v.tries[key] >= visionTries {
+			log.Printf("ניתוח תמונה %s נכשל סופית (%d ניסיונות) — נשארה בלי תיאור: %v", key, visionTries, err)
 			v.cache[key] = ""
 			return
 		}
+		// תקלה זמנית: ההודעה כבר בקו (או תעלה) בלי תיאור, והתיאור יתווסף בניסיון הבא.
+		log.Printf("ניתוח תמונה %s — ניסיון %d/%d לא הצליח, ינסה שוב בעוד %v: %v", key, v.tries[key], visionTries, visionRetry, err)
 		v.retryAt[key] = time.Now().Add(visionRetry)
 		return
 	}
@@ -346,7 +348,7 @@ func (v *visionClient) analyze(urls []string, msgText string) (desc, text string
 	for _, u := range urls {
 		data, mime, err := v.fetchImage(u)
 		if err != nil {
-			log.Printf("ניתוח תמונה: הורדת %s נכשלה: %v", shortURL(u), err)
+			log.Printf("ניתוח תמונה: לא הצלחתי להוריד את %s: %v", shortURL(u), err)
 			continue
 		}
 		parts = append(parts, geminiPart{InlineData: &geminiInlineData{MimeType: mime, Data: base64.StdEncoding.EncodeToString(data)}})

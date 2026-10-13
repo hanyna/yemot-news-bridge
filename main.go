@@ -1209,6 +1209,9 @@ const defaultChannels = "elisha_yered,hakolhayehudi,realelchangr,ayeletlash,Sama
 func fetchItems(cfg *config) (items []FeedItem, chans []Channel, fromServer bool, err error) {
 	if cfg.tg != nil {
 		items, chans, blocked := cfg.tg.poll(time.Now())
+		if cfg.feedKey != "" && cfg.tg.wakeDue(time.Now()) {
+			go wakeServer(cfg)
+		}
 		if !blocked {
 			if cfg.tg.usingSrv {
 				cfg.tg.usingSrv = false
@@ -1240,6 +1243,21 @@ func fetchItems(cfg *config) (items []FeedItem, chans []Channel, fromServer bool
 }
 
 var errTgNotYet = errors.New("טלגרם עוד לא ענו")
+
+// wakeServer: בקשה קטנה לשרת ערוץ חי, כדי שיתעורר (Render מרדים אותו כשאין
+// שימוש) ויתחיל לקרוא את הערוצים בעצמו — לפני שהגשר צריך אותו כגיבוי.
+func wakeServer(cfg *config) {
+	u, err := url.Parse(cfg.feedURL)
+	if err != nil {
+		return
+	}
+	u.Path = "/api/status"
+	if _, err := getJSON(cfg.feedClient, u.String(), cfg.feedKey); err != nil {
+		log.Printf("גיבוי: לא הצלחתי להעיר את שרת ערוץ חי: %v", err)
+		return
+	}
+	log.Println("גיבוי: טלגרם לא עונים — הערתי את שרת ערוץ חי מראש, למקרה שיהיה צריך אותו.")
+}
 
 // fetchFeed שולף את רשימת ההודעות מה-API של Telegram Popup.
 func fetchFeed(client *http.Client, feedURL, key string) ([]FeedItem, error) {

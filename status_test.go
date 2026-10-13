@@ -175,8 +175,9 @@ func TestStatusQuality(t *testing.T) {
 		"הערה: יצירת קול מושהית ל-10m0s (quota). בינתיים ההודעות מושמעות כטקסט.",
 		"הערה: הקול של a/3 לא עלה (נשאר טקסט): boom",
 		"ניתוח תמונה a/4: בתמונה: רכבים.",
-		"ניתוח תמונה a/5 נכשל (1/2): boom",
-		"ניתוח תמונה: הורדת c/x.jpg נכשלה: HTTP 404",
+		"ניתוח תמונה a/5 — ניסיון 1/5 לא הצליח, ינסה שוב בעוד 1m0s: נכשל boom",
+		"ניתוח תמונה a/5 נכשל סופית (5 ניסיונות) — נשארה בלי תיאור: boom",
+		"ניתוח תמונה: לא הצלחתי להוריד את c/x.jpg: HTTP 404",
 		"קול הועלה: a/6 (סרטון) ← 1, 2/1",
 		"הערה: הקול של a/7 (סרטון) נכשל (ניסיון 1) — ננסה שוב בעוד 3m0s: boom",
 		"הערה: הקול של a/8 (סרטון) לא יועלה — 3 ניסיונות נכשלו: boom",
@@ -187,7 +188,7 @@ func TestStatusQuality(t *testing.T) {
 	for _, l := range lines {
 		r.Write([]byte("2026/10/05 03:00:00 " + l + "\n"))
 	}
-	want := map[string]int{"voiced": 2, "voice_paused": 1, "voice_failed": 1, "photo_ok": 1, "photo_failed": 1,
+	want := map[string]int{"voiced": 2, "voice_paused": 1, "voice_failed": 1, "photo_ok": 1, "photo_retry": 1, "photo_failed": 1,
 		"media_ok": 1, "media_retry": 1, "media_failed": 1, "tg_blocked": 1, "skipped": 1, "trimmed": 1}
 	for k, n := range want {
 		if r.quality[k] != n {
@@ -228,5 +229,27 @@ func TestStatusNoFalseAlarms(t *testing.T) {
 		if !reProblem.MatchString(l) {
 			t.Errorf("missed: %s", l)
 		}
+	}
+}
+
+// עיכוב: הודעה שפורסמה לפני שהגשר התחיל לעקוב אחרי הערוץ (השלמה אחרי הפעלה
+// מחדש, חשבון טוויטר שנקרא לראשונה) לא נספרת כעיכוב.
+func TestWatchedSince(t *testing.T) {
+	old := lineStatus
+	t.Cleanup(func() { lineStatus = old })
+	start := time.Now().Add(-time.Hour)
+	lineStatus = &statusReport{started: start}
+	cfg := &config{tg: newTgSource("a", ""), x: newXSource("ariel__danino", "")}
+	cfg.tg.chans[0].firstOK = start.Add(10 * time.Minute)
+	cfg.x.accts[0].firstOK = start.Add(30 * time.Minute)
+	if w := watchedSince(cfg, "a"); !w.Equal(start.Add(10 * time.Minute)) {
+		t.Fatalf("tg: %v", w)
+	}
+	if w := watchedSince(cfg, "x-ariel__danino"); !w.Equal(start.Add(30 * time.Minute)) {
+		t.Fatalf("x: %v", w)
+	}
+	cfg.tg.usingSrv = true
+	if w := watchedSince(cfg, "a"); !w.Equal(start) {
+		t.Fatalf("server: %v", w)
 	}
 }

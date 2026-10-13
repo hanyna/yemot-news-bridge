@@ -47,6 +47,17 @@ var xBackoff = []time.Duration{time.Minute, 3 * time.Minute, 10 * time.Minute, 3
 
 var errXNotFound = errors.New("החשבון לא נמצא בטוויטר (בדקו את השם ב-X_ACCOUNTS)")
 
+// errXGlitch: השירות ענה "לא נמצא" על חשבון שכבר נקרא בהצלחה — זו תקלה זמנית
+// אצלם (קורה כמה פעמים ביום), לא שם שגוי. מנסים שוב אחרי xGlitchRetry, בלי
+// המתנה שהולכת וגדלה.
+var errXGlitch = errors.New("השירות לא החזיר את הציוצים (תקלה זמנית אצלם — החשבון קיים)")
+
+// xGlitchRetry / xGlitchPause: אחרי תקלה זמנית — מתי לנסות שוב (ובתוך אותה בדיקה, אחרי כמה שניות).
+var (
+	xGlitchRetry = time.Minute
+	xGlitchPause = 5 * time.Second
+)
+
 type xAcct struct {
 	handle  string // כמו שנכתב ב-X_ACCOUNTS
 	title   string // השם שמוצג בטוויטר (העברי)
@@ -57,6 +68,7 @@ type xAcct struct {
 	lastErr string
 	lastOK  time.Time
 	ok      bool
+	firstOK time.Time // הקריאה המוצלחת הראשונה בהפעלה (ציוצים מלפני — לא נספרים כעיכוב)
 }
 
 func (a *xAcct) channel() string { return xPrefix + strings.ToLower(a.handle) }
@@ -300,6 +312,13 @@ func (s *xSource) fetch(a *xAcct) error {
 	if err != nil {
 		return err
 	}
+	if code == http.StatusNotFound && (a.ok || len(a.items) > 0) {
+		// חשבון שכבר נקרא — "לא נמצא" כמעט תמיד תקלה רגעית של השירות: עוד ניסיון אחד מיד
+		time.Sleep(xGlitchPause)
+		if b2, c2, err2 := s.get("/2/profile/" + url.PathEscape(a.handle) + "/statuses"); err2 == nil {
+			body, code = b2, c2
+		}
+	}
 	var r struct {
 		Code    int       `json:"code"`
 		Message string    `json:"message"`
@@ -317,6 +336,9 @@ func (s *xSource) fetch(a *xAcct) error {
 				a.title = hebrewTitle(p.User.Name)
 			}
 			return nil // קיים, פשוט אין ציוצים כרגע
+		}
+		if a.ok || len(a.items) > 0 {
+			return errXGlitch
 		}
 		return errXNotFound
 	case code != http.StatusOK:
@@ -392,6 +414,9 @@ func (s *xSource) poll(now time.Time) (items []FeedItem, chans []Channel) {
 			// גם "לא נמצא" — המתנה רגילה שהולכת וגדלה (דקה, 3, 10, 30): השירות עונה
 			// כך לפעמים בטעות על חשבון קיים. שם שגוי באמת — מגיע ל-30 דקות לבד.
 			wait := xBackoff[a.fails-1]
+			if errors.Is(err, errXGlitch) {
+				wait = xGlitchRetry
+			}
 			a.nextTry = now.Add(wait)
 			if a.lastErr != err.Error() || a.fails == 1 {
 				log.Printf("טוויטר: %s — %v. מנסה שוב בעוד %v.", a.handle, err, wait)
@@ -404,6 +429,9 @@ func (s *xSource) poll(now time.Time) (items []FeedItem, chans []Channel) {
 		}
 		if !a.ok {
 			log.Printf("טוויטר: %s (%s) — נקרא, %d ציוצים.", a.handle, a.title, len(a.items))
+		}
+		if a.firstOK.IsZero() {
+			a.firstOK = now
 		}
 		a.ok, a.fails, a.lastErr, a.lastOK = true, 0, "", now
 		a.nextTry = now.Add(s.every)
@@ -434,6 +462,19 @@ func (s *xSource) logStatus(now time.Time) {
 		}
 		log.Printf("טוויטר: %s — %s, נקרא לאחרונה %s, %d ציוצים בזיכרון.", a.handle, state, last, len(a.items))
 	}
+}
+
+// firstRead: מתי החשבון נקרא בהצלחה לראשונה בהפעלה הזו (אפס = לא ידוע).
+func (s *xSource) firstRead(channel string) time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	for _, a := range s.accts {
+		if a.channel() == channel {
+			return a.firstOK
+		}
+	}
+	return time.Time{}
 }
 
 // videoURL: כתובת הסרטון של ציוץ שבזיכרון ("" = לא נמצא).

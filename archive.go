@@ -642,7 +642,9 @@ func (a *archive) add(cfg *config, st *state, it FeedItem, titles map[string]str
 	}
 	log.Printf("שלוחה %s / %s%s (%d תווים): %.80s", a.ext, introFile(b), where, len([]rune(text)), text)
 	if a.ext == cfg.ext {
-		lineStatus.latency(now.Sub(time.Unix(it.TS, 0))) // דוח מצב: עיכוב עד שעלה לקו (status.go)
+		if watching := watchedSince(cfg, it.Channel); !watching.IsZero() && time.Unix(it.TS, 0).After(watching) {
+			lineStatus.latency(now.Sub(time.Unix(it.TS, 0))) // דוח מצב: עיכוב עד שעלה לקו (status.go)
+		}
 	}
 	a.trim(cfg) // בשלוחה מלאה — ההודעה החדשה מוציאה את הישנה ביותר
 	return nil
@@ -965,4 +967,23 @@ func (a *archive) slotFor(ts int64) (int, bool) {
 		return 0, false
 	}
 	return b, true
+}
+
+// watchedSince: מאז מתי הגשר עוקב אחרי הערוץ בהפעלה הזו. הודעה שפורסמה לפני
+// זה (השלמה אחרי הפעלה מחדש, חשבון שנקרא לראשונה) היא לא עיכוב של הקו — היא
+// לא נספרת בדוח. אפס = עוד לא נקרא (לא סופרים).
+func watchedSince(cfg *config, channel string) time.Time {
+	var first time.Time
+	if isXChannel(channel) {
+		first = cfg.x.firstRead(channel)
+	} else if cfg.tg != nil && !cfg.tg.usingSrv {
+		first = cfg.tg.firstRead(channel)
+	}
+	if first.IsZero() && lineStatus != nil {
+		first = lineStatus.started // מהשרת של ערוץ חי — לפחות לא הודעות מלפני ההפעלה
+	}
+	if lineStatus != nil && first.Before(lineStatus.started) {
+		first = lineStatus.started
+	}
+	return first
 }
