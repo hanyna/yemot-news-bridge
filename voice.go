@@ -120,6 +120,7 @@ type speaker struct {
 	results    []speechResult
 	modelPause map[[2]int]time.Time // [מפתח, מודל] → עד מתי במכסה
 	noLang     map[string]bool      // מודלים שלא מקבלים languageCode
+	noSys      map[string]bool      // מודלים שלא מקבלים systemInstruction (ההנחיות לקריין)
 	pausedTil  time.Time
 	bg         bool
 	warned     map[string]bool
@@ -170,7 +171,7 @@ func newSpeakerKeys(keys []string, voice, menuVoice, mode string) *speaker {
 		menuVoice = "Puck"
 	}
 	return &speaker{keys: ks, voice: voice, menuVoice: menuVoice, client: &http.Client{Timeout: speechTimeout},
-		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, noLang: map[string]bool{}, warned: map[string]bool{}}
+		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, noLang: map[string]bool{}, noSys: map[string]bool{}, warned: map[string]bool{}}
 }
 
 // add: קול להודעה בשלוחה. אותה הודעה בכמה שלוחות (1 ושלוחת הכתב) — קובץ קול
@@ -434,24 +435,28 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 	if voice == "" {
 		voice = s.voice
 	}
-	mk := func(lang bool) []byte {
+	spoken := voiceText(text) // שמות הכתבים מנוקדים (anchor.go)
+	mk := func(lang, sys bool) []byte {
 		sc := map[string]any{"voiceConfig": map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": voice}}}
 		if lang {
 			// בלי שפה מוגדרת, המודל מנחש לפי הטקסט — ובטקסט קצר (כותרת, תפריט)
 			// הוא טועה ומקריא עברית במבטא זר.
 			sc["languageCode"] = speechLanguage
 		}
-		b, _ := json.Marshal(map[string]any{
-			// בלי הוראות לפני הטקסט — המודל מקריא אותן בקול.
-			"contents": []any{map[string]any{"parts": []any{map[string]any{"text": text}}}},
+		req := map[string]any{
+			// בלי הוראות לפני הטקסט — המודל מקריא אותן בקול. ההנחיות לקריין — בשדה נפרד.
+			"contents": []any{map[string]any{"parts": []any{map[string]any{"text": spoken}}}},
 			"generationConfig": map[string]any{
 				"responseModalities": []string{"AUDIO"},
 				"speechConfig":       sc,
 			},
-		})
+		}
+		if sys {
+			req["systemInstruction"] = map[string]any{"parts": []any{map[string]any{"text": anchorPrompt}}}
+		}
+		b, _ := json.Marshal(req)
 		return b
 	}
-	withLang, noLang := mk(true), mk(false)
 	var lastErr error
 	var soonest time.Time // מתי המודל הראשון שבמכסה משתחרר
 	allQuota := true
@@ -469,20 +474,21 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 				continue
 			}
 			s.mu.Lock()
-			langOK := !s.noLang[model]
+			langOK, sysOK := !s.noLang[model], !s.noSys[model]
 			s.mu.Unlock()
-			body := noLang
-			if langOK {
-				body = withLang
-			}
-			data, status, err := s.callKey(key, model, body)
-			if langOK && status == http.StatusBadRequest {
-				// המודל לא מקבל הגדרת שפה — בלעדיה (ונזכור לפעם הבאה)
+			data, status, err := s.callKey(key, model, mk(langOK, sysOK))
+			for status == http.StatusBadRequest && (langOK || sysOK) {
+				// המודל לא מקבל את ההנחיות לקריין / את הגדרת השפה — בלעדיהן (ונזכור לפעם הבאה)
 				s.mu.Lock()
-				s.noLang[model] = true
+				if sysOK && (!langOK || strings.Contains(strings.ToLower(err.Error()), "system")) {
+					sysOK, s.noSys[model] = false, true
+					log.Printf("הערה: %s לא מקבל הנחיות לקריין (%v) — ממשיך בלעדיהן.", model, err)
+				} else {
+					langOK, s.noLang[model] = false, true
+					log.Printf("הערה: %s לא מקבל הגדרת שפה (%v) — ממשיך בלעדיה.", model, err)
+				}
 				s.mu.Unlock()
-				log.Printf("הערה: %s לא מקבל הגדרת שפה (%v) — ממשיך בלעדיה.", model, err)
-				data, status, err = s.callKey(key, model, noLang)
+				data, status, err = s.callKey(key, model, mk(langOK, sysOK))
 			}
 			if err == nil {
 				err = speechLengthCheck(text, data)
@@ -788,7 +794,7 @@ const spokenSuffix = "-spoken.txt"
 
 // spokenVersion: גרסת הקול של התפריטים והכותרות. שינוי שלה = כל התפריטים
 // והכותרות נוצרים מחדש פעם אחת (he-IL: עד אז הקול ניחש את השפה ולפעמים טעה).
-const spokenVersion = "he-IL-fast"
+const spokenVersion = "he-IL-anchor"
 
 // spokenRecord: מה שנשמר בקובץ -spoken.txt — הנוסח וגרסת הקול.
 func spokenRecord(text string) string { return text + "\n#voice=" + spokenVersion }

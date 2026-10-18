@@ -156,7 +156,8 @@ func cleanForSpeech(s string) string {
 			b.WriteRune(' ')
 		}
 	}
-	s = reSpaces.ReplaceAllString(b.String(), " ")
+	s = dropLaugh(b.String()) // "חחח" — המנוע מקריא כצחוק (anchor.go)
+	s = reSpaces.ReplaceAllString(s, " ")
 	s = applyPronunciation(s)
 	s = reSpaces.ReplaceAllString(s, " ")
 	s = strings.ReplaceAll(s, " .", ".")

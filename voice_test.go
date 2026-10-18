@@ -97,7 +97,7 @@ func TestSpeechUploadsWav(t *testing.T) {
 		t.Fatal(err)
 	}
 	// קובץ קול אחד — לשלוחה 1 ולשלוחת הכתב, עם שם הכתב והשעה (בלי יום ותאריך)
-	if got := f.files["ivr2:/1/10001.wav"]; got != "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב. הודעה חדשה;convert=1" {
+	if got := f.files["ivr2:/1/10001.wav"]; got != "AUDIO:PHONE:"+voiceText("אלישע ירד")+", בשעה 7 בערב. הודעה חדשה;convert=1" {
 		t.Fatalf("ext 1 wav: %q", got)
 	}
 	if got := f.files["ivr2:/2/1/10001.wav"]; got != f.files["ivr2:/1/10001.wav"] {
@@ -146,7 +146,7 @@ func TestSpeechUploadsWav(t *testing.T) {
 		if err := syncOnce(&cfg, &state{}); err != nil {
 			t.Fatal(err)
 		}
-		if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, בשעה 7 בערב. הודעה חדשה" || !strings.Contains(f.files["ivr2:/1/10001.wav"], "אלישע ירד, בשעה 7 בערב.") || len(g.texts) != n {
+		if f.files["ivr2:/1/10001.tts"] != "אלישע ירד, בשעה 7 בערב. הודעה חדשה" || !strings.Contains(f.files["ivr2:/1/10001.wav"], voiceText("אלישע ירד")+", בשעה 7 בערב.") || len(g.texts) != n {
 			t.Fatalf("after %v: tts=%q wav=%q synth=%q", later, f.files["ivr2:/1/10001.tts"], f.files["ivr2:/1/10001.wav"], g.texts[n:])
 		}
 	}
@@ -266,7 +266,7 @@ func TestSpeechLongMessageFull(t *testing.T) {
 		t.Fatalf("tts should be cut: %q", f.files["ivr2:/1/10001.tts"][len(f.files["ivr2:/1/10001.tts"])-80:])
 	}
 	wav := f.files["ivr2:/1/10001.wav"]
-	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:אלישע ירד, בשעה 7 בערב.") || strings.Contains(wav, "ביום") {
+	if !strings.Contains(wav, "סוף ההודעה") || strings.Contains(wav, "לא הוקרא") || !strings.HasPrefix(wav, "AUDIO:PHONE:"+voiceText("אלישע ירד")+", בשעה 7 בערב.") || strings.Contains(wav, "ביום") {
 		t.Fatalf("wav should be full: len=%d", len(wav))
 	}
 }
@@ -401,7 +401,7 @@ func TestSpeechKeepsPhotoDescription(t *testing.T) {
 			t.Fatalf("%s after description: %q", p, got)
 		}
 	}
-	if !strings.Contains(f.files["ivr2:/1/10001.wav"], "אלישע ירד, ") {
+	if !strings.Contains(f.files["ivr2:/1/10001.wav"], voiceText("אלישע ירד")+", ") {
 		t.Fatalf("ext 1 wav lost the reporter name: %q", f.files["ivr2:/1/10001.wav"])
 	}
 
@@ -427,7 +427,7 @@ func TestSpeechKeepsPhotoDescription(t *testing.T) {
 		t.Fatal(err)
 	}
 	st2.speechTick(&cfg)
-	if got := f.files["ivr2:/1/10003.wav"]; !strings.Contains(got, "בתמונה: רכבי צבא בכניסה ליישוב") || strings.Contains(got, "ביום") || !strings.Contains(got, "אלישע ירד, בשעה") {
+	if got := f.files["ivr2:/1/10003.wav"]; !strings.Contains(got, "בתמונה: רכבי צבא בכניסה ליישוב") || strings.Contains(got, "ביום") || !strings.Contains(got, voiceText("אלישע ירד")+", בשעה") {
 		t.Fatalf("after restart: %q", got)
 	}
 }
