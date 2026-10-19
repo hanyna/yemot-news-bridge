@@ -101,3 +101,15 @@ func TestAnchorInstructions(t *testing.T) {
 		}
 	}
 }
+
+func TestStoneThrowing(t *testing.T) {
+	for in, want := range map[string]string{
+		`ז"א לעבר רכב ישראלי`: "זריקת אבנים לעבר רכב ישראלי",
+		`דיווח על ז״א בכביש`:  "דיווח על זריקת אבנים בכביש",
+		`בעקבות הז"א`:         "בעקבות הזריקת אבנים",
+	} {
+		if got := cleanForSpeech(in); got != want {
+			t.Errorf("%q → %q (want %q)", in, got, want)
+		}
+	}
+}
