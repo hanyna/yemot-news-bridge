@@ -218,6 +218,13 @@ func main() {
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("SPEECH_SPEED")), 64); err == nil && v >= 0.8 && v <= 1.6 {
 		speechTempo = v
 	}
+	// SPEECH_STYLE: הנחיית הסגנון לקריין (style.go); "off" — בלי (הדרך הרגילה בלבד)
+	switch v := strings.TrimSpace(os.Getenv("SPEECH_STYLE")); {
+	case strings.EqualFold(v, "off"):
+		speechStyleEndpoint = ""
+	case v != "":
+		speechStyle = v
+	}
 	cfg.speech = newSpeakerKeys(speechKeys(os.Getenv), os.Getenv("SPEECH_VOICE"), os.Getenv("SPEECH_MENU_VOICE"), os.Getenv("SPEECH"))
 	if cfg.speech != nil {
 		log.Printf("קול מוכן מראש (Gemini, קול %s, %d מפתחות): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice, len(cfg.speech.keys))

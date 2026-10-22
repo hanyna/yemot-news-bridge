@@ -47,6 +47,13 @@ var speechLanguage = "he-IL"
 
 var speechEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 
+// הנחיית סגנון לקריין (style.go): במודלים החדשים systemInstruction חסום, וההנחיה
+// נשלחת בממשק Interactions בשדה style — לצד הטקסט, בלי שתוקרא.
+var (
+	speechStyleEndpoint = "https://generativelanguage.googleapis.com/v1beta/interactions" // ריק = כבוי
+	speechStyleModels   = map[string]bool{"gemini-3.8-flash-tts": true, "gemini-3.8-flash-lite-tts": true, "gemini-3.1-flash-tts-preview": true}
+)
+
 const (
 	speechTries      = 3                   // ניסיונות לכל קובץ
 	speechDayPause   = time.Hour           // מודל שהגיע למכסה היומית — לא מנסים אותו לפני כן
@@ -121,6 +128,8 @@ type speaker struct {
 	modelPause map[[2]int]time.Time // [מפתח, מודל] → עד מתי במכסה
 	noLang     map[string]bool      // מודלים שלא מקבלים languageCode
 	noSys      map[string]bool      // מודלים שלא מקבלים systemInstruction (ההנחיות לקריין)
+	noStyle    map[string]bool      // מודלים שהקראה עם הנחיית סגנון (Interactions) לא עבדה בהם — הדרך הרגילה
+	styleOK    map[string]bool      // מודלים שכבר הקריאו עם הנחיית סגנון (לרישום בלוג פעם אחת)
 	pausedTil  time.Time
 	bg         bool
 	warned     map[string]bool
@@ -171,7 +180,7 @@ func newSpeakerKeys(keys []string, voice, menuVoice, mode string) *speaker {
 		menuVoice = "Puck"
 	}
 	return &speaker{keys: ks, voice: voice, menuVoice: menuVoice, client: &http.Client{Timeout: speechTimeout},
-		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, noLang: map[string]bool{}, noSys: map[string]bool{}, warned: map[string]bool{}}
+		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, noLang: map[string]bool{}, noSys: map[string]bool{}, noStyle: map[string]bool{}, styleOK: map[string]bool{}, warned: map[string]bool{}}
 }
 
 // add: קול להודעה בשלוחה. אותה הודעה בכמה שלוחות (1 ושלוחת הכתב) — קובץ קול
@@ -475,9 +484,33 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 			}
 			s.mu.Lock()
 			langOK, sysOK := !s.noLang[model], !s.noSys[model]
+			styleOn := speechStyleEndpoint != "" && speechStyleModels[model] && !s.noStyle[model]
 			s.mu.Unlock()
-			data, status, err := s.callKey(key, model, mk(langOK, sysOK))
-			for status == http.StatusBadRequest && (langOK || sysOK) {
+			var data []byte
+			var status int
+			var err error
+			if styleOn {
+				// קודם עם הנחיית הסגנון (style.go); אם הדרך הזו לא עובדת במודל — הדרך הרגילה
+				data, status, err = s.callStyle(key, model, spoken, voice)
+				if styleBroken(status, err) {
+					s.mu.Lock()
+					s.noStyle[model] = true
+					s.mu.Unlock()
+					log.Printf("הערה: %s — הקראה עם הנחיית סגנון נכשלה (%v) — ממשיך בדרך הרגילה, בלי הנחיות.", model, err)
+					styleOn = false
+				} else if err == nil {
+					s.mu.Lock()
+					if !s.styleOK[model] {
+						s.styleOK[model] = true
+						log.Printf("קול: %s מקריא עם הנחיית סגנון לקריין.", model)
+					}
+					s.mu.Unlock()
+				}
+			}
+			if !styleOn {
+				data, status, err = s.callKey(key, model, mk(langOK, sysOK))
+			}
+			for !styleOn && status == http.StatusBadRequest && (langOK || sysOK) {
 				// המודל לא מקבל את ההנחיות לקריין / את הגדרת השפה — בלעדיהן (ונזכור לפעם הבאה).
 				// Google כותבים "Developer instruction is not enabled for this model" (בלי
 				// "system") — ולפי זה מורידים את ההנחיות, לא את השפה.
@@ -558,13 +591,51 @@ func (s *speaker) call(model string, body []byte) ([]byte, int, error) {
 }
 
 func (s *speaker) callKey(key, model string, body []byte) ([]byte, int, error) {
-	u := fmt.Sprintf(speechEndpoint, url.PathEscape(model))
+	raw, status, err := s.post(fmt.Sprintf(speechEndpoint, url.PathEscape(model)), key, model, body, nil)
+	if err != nil {
+		return nil, status, err
+	}
+	var r struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					InlineData struct {
+						MimeType string `json:"mimeType"`
+						Data     string `json:"data"`
+					} `json:"inlineData"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, status, fmt.Errorf("%s: תשובה לא תקינה: %v", model, err)
+	}
+	for _, c := range r.Candidates {
+		for _, p := range c.Content.Parts {
+			if p.InlineData.Data == "" {
+				continue
+			}
+			data, err := base64.StdEncoding.DecodeString(p.InlineData.Data)
+			if err != nil {
+				return nil, status, err
+			}
+			return asWav(data, p.InlineData.MimeType), status, nil
+		}
+	}
+	return nil, http.StatusBadRequest, fmt.Errorf("%s: בלי קול בתשובה", model)
+}
+
+// post: בקשה ל-Google. תשובה שאינה 200 — שגיאה (429 — quotaErr עם זמן ההמתנה).
+func (s *speaker) post(u, key, model string, body []byte, hdr map[string]string) ([]byte, int, error) {
 	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-goog-api-key", key)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, 0, errors.New(strings.ReplaceAll(err.Error(), key, "***"))
@@ -590,34 +661,7 @@ func (s *speaker) callKey(key, model string, body []byte) ([]byte, int, error) {
 		}
 		return nil, resp.StatusCode, err
 	}
-	var r struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					InlineData struct {
-						MimeType string `json:"mimeType"`
-						Data     string `json:"data"`
-					} `json:"inlineData"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("%s: תשובה לא תקינה: %v", model, err)
-	}
-	for _, c := range r.Candidates {
-		for _, p := range c.Content.Parts {
-			if p.InlineData.Data == "" {
-				continue
-			}
-			data, err := base64.StdEncoding.DecodeString(p.InlineData.Data)
-			if err != nil {
-				return nil, resp.StatusCode, err
-			}
-			return asWav(data, p.InlineData.MimeType), resp.StatusCode, nil
-		}
-	}
-	return nil, http.StatusBadRequest, fmt.Errorf("%s: בלי קול בתשובה", model)
+	return raw, resp.StatusCode, nil
 }
 
 // asWav: Gemini מחזיר WAV, או PCM גולמי (audio/L16; rate=24000) — שעוטפים בכותרת WAV.

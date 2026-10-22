@@ -10,6 +10,7 @@ import (
 func TestMain(m *testing.M) {
 	speechLengthCheck = func(string, []byte) error { return nil } // הקול המזויף בבדיקות קצר מאוד
 	archStride = 2
+	speechStyleEndpoint = "" // הממשק עם הנחיית הסגנון — רק בבדיקות שמגדירות אותו (style_test.go)
 	os.Exit(m.Run())
 }
 
