@@ -71,6 +71,7 @@ const (
 	resumeExt   = "5"  // המשך מהמקום שהפסקתם
 	recordExt   = "6"  // הודעה למנהל המערכת
 	listExt     = "8"  // צינתוקים וטלזכור
+	geminiExt   = "7"  // קו ג'מיני — שלוחת API (Cloudflare Worker), מוגדרת ידנית; הגשר לא נוגע בה
 	registerExt = "7"  // הרשמה זמנית של בעל הקו לצינתוקי המנהל (ADMIN_TZINTUK_REGISTER=on)
 	maxPerFile  = 1000 // ימות המשיח: קובץ TTS מוגבל לכ-1,300 תווים — משאירים מרווח
 	failLimit   = 10   // כמה סבבים כושלים ברצף עד שמכשילים את הריצה (= מייל מ-GitHub)
@@ -549,6 +550,10 @@ func syncOnce(cfg *config, st *state) error {
 	if setupSpecial(cfg, st, recordExt, recordIni) {
 		menu = append(menu, "להשארת הודעה למנהל המערכת, הקישו "+recordExt+".")
 	}
+	// שלוחה 7: קו ג'מיני — שלוחת API שהוגדרה ידנית. מוכרזת רק כשהיא באמת מוגדרת כ-API.
+	if geminiReady(cfg, st) {
+		menu = append(menu, "לשאלות לעוזר החכם ג'מיני, הקישו "+geminiExt+".")
+	}
 	// שלוחה 8: צינתוקים, טלזכור, ושיחה חוזרת.
 	//   8/1 — הרשמה/הסרה מרשימת הצינתוקים הכללית (type=tzintuk)
 	//   8/2 — טלזכור: תזכורת קבועה לחייג לקו בימים ובשעות שהמאזין בוחר
@@ -625,6 +630,9 @@ func syncOnce(cfg *config, st *state) error {
 		}
 		if old == registerExt && cfg.adminRegister {
 			continue
+		}
+		if old == geminiExt {
+			continue // קו ג'מיני — לא מחזירים לתפריט
 		}
 		retireExt(cfg, st, old)
 	}
@@ -1021,6 +1029,22 @@ func removeStaleTTS(cfg *config, ext string, files []string) {
 
 // retireExt: שלוחת כתב מהמבנה הקודם — אם היא של הגשר, מפנה אותה חזרה
 // לתפריט הראשי, כדי שלא יושמעו בה הודעות ישנות.
+// geminiReady: האם שלוחת קו ג'מיני מוגדרת כ-API (בודק פעם אחת בכל הפעלה).
+func geminiReady(cfg *config, st *state) bool {
+	st.ensureMaps()
+	key := "gemini:" + geminiExt
+	if v, ok := st.special[key]; ok {
+		return v
+	}
+	info, err := cfg.y.dir(geminiExt)
+	if err != nil {
+		return false // לא נשמר — ננסה שוב בסבב הבא
+	}
+	ok := info.Exists && info.Ini["type"] == "api" && info.Ini["api_link"] != ""
+	st.special[key] = ok
+	return ok
+}
+
 func retireExt(cfg *config, st *state, ext string) {
 	st.ensureMaps()
 	key := "retired:" + ext

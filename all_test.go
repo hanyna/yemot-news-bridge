@@ -595,8 +595,30 @@ func TestAdminRegisterExt(t *testing.T) {
 	if err := syncOnce(&cfg, st2); err != nil {
 		t.Fatal(err)
 	}
-	if f.files["ivr2:/7/ext.ini"] != "type=go_to_folder\ngo_to_folder=/" {
+	// שלוחה 7 היא עכשיו קו ג'מיני — הגשר לא מחזיר אותה לתפריט הראשי.
+	if f.files["ivr2:/7/ext.ini"] != "type=tzintuk\nlist_tzintuk=606" {
 		t.Fatalf("ext7 after: %q", f.files["ivr2:/7/ext.ini"])
+	}
+}
+
+// TestGeminiExtInMenu: שלוחה 7 מוגדרת כ-API (קו ג'מיני) — מוכרזת בתפריט ולא נדרסת.
+func TestGeminiExtInMenu(t *testing.T) {
+	ini := "type=api\napi_link=https://example.workers.dev"
+	f := &fakeYemotServer{getText: true, files: map[string]string{"ivr2:/7/ext.ini": ini},
+		dirs:  map[string][]string{"ivr2:/": {"ext.ini"}, "ivr2:/7": {"ext.ini"}},
+		items: []FeedItem{{Channel: "a", TS: time.Now().Unix(), Text: "שלום"}}, channels: `{"channels":[]}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	st := &state{files: map[string][]string{}, known: map[string]bool{}, chExt: map[string]string{}, blocked: map[string]bool{}}
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if f.files["ivr2:/7/ext.ini"] != ini {
+		t.Fatalf("ext7 overwritten: %q", f.files["ivr2:/7/ext.ini"])
+	}
+	if !strings.Contains(f.files["ivr2:/M1000.tts"], "ג'מיני, הקישו 7") {
+		t.Fatalf("menu missing gemini: %q", f.files["ivr2:/M1000.tts"])
 	}
 }
 
