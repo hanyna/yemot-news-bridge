@@ -186,9 +186,18 @@ func TestXUnknownAndEmpty(t *testing.T) {
 	f := &fakeX{profiles: map[string]string{"quiet_one": `{"code":200,"user":{"screen_name":"quiet_one","name":"שקט"}}`}}
 	withFakeX(t, f)
 	s := newXSource("nosuchuser_x, quiet_one", "")
-	_, chans := s.poll(time.Now())
-	if s.accts[0].lastErr != errXNotFound.Error() || s.accts[0].nextTry.Sub(time.Now()) > 2*time.Minute {
-		t.Fatalf("unknown: %+v", s.accts[0])
+	now := time.Now()
+	_, chans := s.poll(now)
+	// בפעמים הראשונות — "תקלה זמנית" (השירות עונה כך לפעמים גם על חשבון קיים), בלי אזהרה על השם
+	if a := s.accts[0]; !strings.HasPrefix(a.lastErr, errXGlitch.Error()) || a.nextTry.Sub(now) != xGlitchRetry {
+		t.Fatalf("unknown, first try: %+v", a)
+	}
+	for i := 1; i < xNotFoundAfter; i++ {
+		now = now.Add(xGlitchRetry + time.Second)
+		s.poll(now)
+	}
+	if a := s.accts[0]; a.lastErr != errXNotFound.Error() || a.nextTry.Sub(now) > 15*time.Minute {
+		t.Fatalf("unknown after %d tries: %+v", xNotFoundAfter, a)
 	}
 	if s.accts[1].fails != 0 || chans[1].Title != "שקט" {
 		t.Fatalf("empty: %+v %+v", s.accts[1], chans)

@@ -478,9 +478,14 @@ func (s *speaker) synthesize(text, voice string) ([]byte, string, error) {
 			s.mu.Unlock()
 			data, status, err := s.callKey(key, model, mk(langOK, sysOK))
 			for status == http.StatusBadRequest && (langOK || sysOK) {
-				// המודל לא מקבל את ההנחיות לקריין / את הגדרת השפה — בלעדיהן (ונזכור לפעם הבאה)
+				// המודל לא מקבל את ההנחיות לקריין / את הגדרת השפה — בלעדיהן (ונזכור לפעם הבאה).
+				// Google כותבים "Developer instruction is not enabled for this model" (בלי
+				// "system") — ולפי זה מורידים את ההנחיות, לא את השפה.
+				msg := strings.ToLower(err.Error())
+				aboutSys := strings.Contains(msg, "system") || strings.Contains(msg, "instruction")
+				aboutLang := strings.Contains(msg, "language")
 				s.mu.Lock()
-				if sysOK && (!langOK || strings.Contains(strings.ToLower(err.Error()), "system")) {
+				if sysOK && (!langOK || aboutSys || !aboutLang) {
 					sysOK, s.noSys[model] = false, true
 					log.Printf("הערה: %s לא מקבל הנחיות לקריין (%v) — ממשיך בלעדיהן.", model, err)
 				} else {

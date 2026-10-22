@@ -58,6 +58,10 @@ var (
 	xGlitchPause = 5 * time.Second
 )
 
+// xNotFoundAfter: חשבון שעוד לא נקרא אף פעם — רק אחרי כך וכך "לא נמצא" רצופים
+// מזהירים שהשם אולי שגוי (לפני כן זו כנראה תקלה רגעית של השירות).
+const xNotFoundAfter = 3
+
 type xAcct struct {
 	handle  string // כמו שנכתב ב-X_ACCOUNTS
 	title   string // השם שמוצג בטוויטר (העברי)
@@ -414,6 +418,11 @@ func (s *xSource) poll(now time.Time) (items []FeedItem, chans []Channel) {
 			// גם "לא נמצא" — המתנה רגילה שהולכת וגדלה (דקה, 3, 10, 30): השירות עונה
 			// כך לפעמים בטעות על חשבון קיים. שם שגוי באמת — מגיע ל-30 דקות לבד.
 			wait := xBackoff[a.fails-1]
+			if errors.Is(err, errXNotFound) && a.fails < xNotFoundAfter {
+				// חשבון שעוד לא נקרא בהפעלה הזו (למשל מיד אחרי ההפעלה): "לא נמצא" בפעמים
+				// הראשונות הוא בד"כ תקלה רגעית של השירות — לא מזהירים עדיין על השם
+				err = fmt.Errorf("%w (ניסיון %d מתוך %d)", errXGlitch, a.fails, xNotFoundAfter)
+			}
 			if errors.Is(err, errXGlitch) {
 				wait = xGlitchRetry
 			}
@@ -453,7 +462,11 @@ func (s *xSource) logStatus(now time.Time) {
 	s.lastLog = now
 	for _, a := range s.accts {
 		state := "תקין"
-		if a.fails > 0 {
+		switch {
+		case a.fails > 0 && strings.HasPrefix(a.lastErr, errXGlitch.Error()) && len(a.items) > 0:
+			// תקלה רגעית של השירות, והציוצים בזיכרון — לא "נכשל" (זה לא מגיע לדוח הבעיות)
+			state = "תקלה זמנית אצל השירות, ממשיך עם מה שבזיכרון"
+		case a.fails > 0:
 			state = "נכשל: " + a.lastErr
 		}
 		last := "אף פעם"

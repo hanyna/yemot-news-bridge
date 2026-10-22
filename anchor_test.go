@@ -72,7 +72,8 @@ func TestAnchorInstructions(t *testing.T) {
 			sys = append(sys, has)
 			if reject && has {
 				w.WriteHeader(400)
-				io.WriteString(w, `{"error":{"message":"Invalid JSON payload: Unknown name \"systemInstruction\""}}`)
+				// ההודעה האמיתית של מודלי ה-TTS (22.10.2026) — בלי המילה "system"
+				io.WriteString(w, `{"error":{"message":"Developer instruction is not enabled for this model"}}`)
 				return
 			}
 			texts = append(texts, req.Contents[0].Parts[0].Text)
