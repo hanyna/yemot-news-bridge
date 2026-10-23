@@ -27,6 +27,7 @@ jobs:
       - name: Send alert
         env:
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+          YEMOT_TZINTUK_TOKEN: ${{ secrets.YEMOT_TZINTUK_TOKEN }}   # אופציונלי: מספר-מערכת:סיסמה, לצינתוק
         run: python3 scripts/alert.py
       - name: Report as issue
         if: always()
