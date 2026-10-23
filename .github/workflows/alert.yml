@@ -1,0 +1,38 @@
+name: Alert to line
+
+# מבזק לקו: כל שינוי ב-alert/message.txt מעלה את הטקסט כהודעה זמנית (M0000.tts,
+# מושמעת בכניסה לקו לפני התפריט) ושולח צינתוק לרשימה שב-alert/list.txt (ברירת מחדל 800).
+# "#מחק" בשורה הראשונה — מוחק את ההודעה הזמנית. "#בדוק" — רק סופר מנויים.
+# התוצאה נפתחת כ-Issue "מבזק: ..." (ראו scripts/alert.py).
+on:
+  push:
+    paths:
+      - "alert/message.txt"
+      - "alert/list.txt"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+concurrency:
+  group: yemot-alert
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Send alert
+        env:
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+        run: python3 scripts/alert.py
+      - name: Report as issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="מבזק: $(head -c 60 alert/message.txt | tr '\n' ' ') ($(date -u +%H:%M) UTC)"
+          body="$(cat alert/result.md 2>/dev/null || echo '⚠️ הסקריפט נכשל לפני שנכתבה תוצאה — ראו את הלוג של הריצה.')"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
