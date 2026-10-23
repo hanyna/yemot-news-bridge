@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1868,5 +1869,49 @@ func TestOldTitlesRemoved(t *testing.T) {
 	}
 	if f.has("ivr2:/2/1", "99999.tts") || f.has("ivr2:/2/1", "99999.wav") {
 		t.Fatalf("title still there: %v", f.dirs["ivr2:/2/1"])
+	}
+}
+
+// TestArchiveWaitsWhenYemotDown: השרת של ימות המשיח לא עונה (timeout) כמה
+// סבבים ברצף — ההודעה לא נחשבת "תקולה" ולא מדלגים עליה; היא עולה כשהשרת חוזר.
+// (23.10.2026: השרת לא ענה 35 דקות ו-4 הודעות דולגו לחינם.)
+func TestArchiveWaitsWhenYemotDown(t *testing.T) {
+	now := time.Now().Unix()
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: now - 30, Text: "ראשונה"},
+		{ID: 2, Channel: "a", TS: now - 20, Text: "שנייה חשובה"},
+		{ID: 3, Channel: "a", TS: now - 10, Text: "שלישית"},
+	}, `{"channels":[]}`)
+	var down atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() && strings.HasSuffix(r.URL.Path, "UploadTextFile") && strings.Contains(r.FormValue("contents"), "שנייה") {
+			time.Sleep(300 * time.Millisecond) // השרת תקוע — הלקוח מוותר אחרי 50ms
+			return
+		}
+		f.handler(w, r)
+	}))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.y.client = &http.Client{Timeout: 50 * time.Millisecond}
+	st := &state{}
+	down.Store(true)
+	for round := 1; round <= addTries+2; round++ {
+		err := syncOnce(&cfg, st)
+		if err == nil || !transientErr(err) {
+			t.Fatalf("round %d: want a timeout error, got %v", round, err)
+		}
+		if f.has("ivr2:/1", "10003.tts") {
+			t.Fatalf("round %d: a later post jumped the queue", round)
+		}
+	}
+	down.Store(false)
+	if err := syncOnce(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.files["ivr2:/1/10003.tts"], "שנייה חשובה") || !strings.HasSuffix(f.files["ivr2:/1/10005.tts"], "שלישית") {
+		t.Fatalf("10003=%q 10005=%q", f.files["ivr2:/1/10003.tts"], f.files["ivr2:/1/10005.tts"])
+	}
+	if strings.Contains(f.files["ivr2:/1/archive.txt"], " -1 ") {
+		t.Fatalf("post was skipped although the server was only down:\n%s", f.files["ivr2:/1/archive.txt"])
 	}
 }

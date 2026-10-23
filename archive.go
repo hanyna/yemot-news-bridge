@@ -21,10 +21,13 @@ package main
 // לכפול הודעות, ולעדכן בהקראה "היום" ← "אתמול" ← "ביום שני" ← תאריך.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
+	"net"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -386,6 +389,24 @@ func loadArchive(cfg *config, ext, channel string, withName bool, now time.Time)
 	return a, nil
 }
 
+// transientErr: תקלה שלא קשורה להודעה עצמה — השרת של ימות המשיח לא ענה בזמן
+// (timeout), או תקלת רשת. על תקלה כזו לא מדלגים על ההודעה: היא תעלה כשהשרת יחזור.
+// (ב-23.10.2026 השרת של ימות המשיח לא ענה כ-35 דקות, ו-4 הודעות דולגו לחינם.)
+func transientErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	var ue *url.Error // כל תקלה מ-http.Client.Do (רשת, DNS, חיבור שנותק)
+	return errors.As(err, &ue)
+}
+
 // has: האם ההודעה כבר טופלה — בארכיון או דולגה (כפולה / נכשלה שוב ושוב), מלפני
 // הארכיון, או שיצאה מהאינדקס (ישנה מ-9 ימים, וגם 12 שעות לפני החדשה שבארכיון —
 // ראו encode). הודעה שמגיעה באיחור (למשל ערוץ שטלגרם חסמו לכמה שעות) — עדיין
@@ -465,6 +486,9 @@ func (a *archive) sync(cfg *config, st *state, items []FeedItem, titles map[stri
 		}
 		if err := a.add(cfg, st, it, titles, now); err != nil {
 			key := itemKey(it)
+			if transientErr(err) {
+				return err // השרת של ימות המשיח לא עונה (timeout / רשת) — לא אשמת ההודעה. מחכים, בלי לספור ניסיון
+			}
 			a.addFails[key]++
 			if a.addFails[key] < addTries {
 				return err
