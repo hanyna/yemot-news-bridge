@@ -129,7 +129,7 @@ func patriotsMain() {
 	// מיד אם הבעיה בקריאת היוטיוב או בהתאמה לקו.
 	var fullDates []string
 	for _, v := range vids {
-		if strings.Contains(v.title, c14Full) {
+		if c14IsFull(v.title) {
 			if m := reC14Date.FindStringSubmatch(v.title); m != nil {
 				fullDates = append(fullDates, fmt.Sprintf("%s.%s", m[1], m[2]))
 			}
@@ -143,7 +143,7 @@ func patriotsMain() {
 	done, skipped, failed := 0, 0, 0
 	seen := map[string]bool{}
 	for _, v := range vids {
-		if !strings.Contains(v.title, c14Full) {
+		if !c14IsFull(v.title) {
 			continue
 		}
 		m := reC14Date.FindStringSubmatch(v.title)
@@ -180,10 +180,7 @@ func patriotsMain() {
 		if _, err := os.Stat(marker); err == nil {
 			continue // כבר הוחלף בגרסה המוכנה
 		}
-		showName := v.title
-		if i := strings.IndexByte(showName, '|'); i > 0 {
-			showName = strings.TrimSpace(showName[:i])
-		}
+		showName := c14ShowName(v.title)
 		if err := patriotsUpgrade(y, ext, ytdlp, v.id, ep.base, showName, start, loc); err != nil {
 			log.Printf("%s: ההחלפה בגרסה המוכנה נכשלה (נשארת ההקלטה): %v", day, err)
 			failed++
@@ -260,6 +257,13 @@ func patriotsTransport() http.RoundTripper {
 	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 }
 
+// utf8Env: מכריח את yt-dlp (פייתון) להוציא UTF-8 ל-pipe. בלי זה, בווינדוס
+// פייתון פולט ל-pipe בקידוד החלון (cp1255) ולא ב-UTF-8, הכותרות בעברית מגיעות
+// משובשות ל-exe, וההתאמה ל"התוכנית המלאה" נכשלת (0 נמצאו למרות שהתוכניות שם).
+func utf8Env() []string {
+	return append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
+}
+
 // findMoridTools מאתר את yt-dlp.exe ו-ffmpeg.exe שמוריד השירים כבר התקין
 // (ברירת מחדל ב-%LOCALAPPDATA%\MoridHashirim). מחזיר נתיב yt-dlp ותיקיית ffmpeg.
 func findMoridTools() (ytdlp, ffdir string) {
@@ -312,6 +316,7 @@ func ytdlpPlaylist(ytdlp, playlist string) ([]c14Video, error) {
 	}
 	args = append(args, "https://www.youtube.com/playlist?list="+playlist)
 	cmd := exec.CommandContext(ctx, ytdlp, args...)
+	cmd.Env = utf8Env() // כותרות עברית ב-UTF-8, לא בקידוד החלון
 	var outBuf, errBuf strings.Builder
 	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
 	if err := cmd.Run(); err != nil {
@@ -346,6 +351,7 @@ func ytdlpAudio(ytdlp, videoID, out string) error {
 	}
 	args = append(args, "https://www.youtube.com/watch?v="+videoID)
 	cmd := exec.CommandContext(ctx, ytdlp, args...)
+	cmd.Env = utf8Env()
 	outBuf := &strings.Builder{}
 	cmd.Stdout, cmd.Stderr = outBuf, outBuf
 	if err := cmd.Run(); err != nil {

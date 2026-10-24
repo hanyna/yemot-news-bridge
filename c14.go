@@ -165,6 +165,21 @@ func (s c14Source) anyDay() bool {
 // reC14Date: תאריך בכותרת ביוטיוב — "06.10.2026" או "6.10.2026".
 var reC14Date = regexp.MustCompile(`(\d{1,2})\.(\d{1,2})\.(\d{4})`)
 
+// c14IsFull: האם הכותרת היא של "התוכנית המלאה" — סובלני לאיות (תוכנית/תכנית).
+func c14IsFull(title string) bool {
+	return strings.Contains(title, "התוכנית המלאה") || strings.Contains(title, "התכנית המלאה")
+}
+
+// c14ShowName: שם התוכנית מתוך הכותרת — מה שלפני התאריך, בלי המפריד (| או I).
+// "הפטריוטים עם ינון מגל | 12.10.2026 | התוכנית המלאה" → "הפטריוטים עם ינון מגל".
+func c14ShowName(title string) string {
+	t := strings.TrimSpace(title)
+	if m := reC14Date.FindStringIndex(t); m != nil {
+		t = t[:m[0]]
+	}
+	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(t), "|I"))
+}
+
 type ytFeed struct {
 	Title   string `xml:"title"`
 	Entries []struct {
@@ -210,7 +225,7 @@ func fetchC14(link string, loc *time.Location, now time.Time) (string, []*podEpi
 	}
 	show := "" // שם התוכנית מהסרטון האחרון ("הפטריוטים עם ינון מגל") — לפרקים לפי לוח השידורים
 	for _, t := range titles {
-		if !strings.Contains(t, c14Full) {
+		if !c14IsFull(t) {
 			continue
 		}
 		m := reC14Date.FindStringSubmatch(t)
@@ -223,10 +238,7 @@ func fetchC14(link string, loc *time.Location, now time.Time) (string, []*podEpi
 		if mo < 1 || mo > 12 || d < 1 || d > 31 {
 			continue
 		}
-		title := strings.TrimSpace(t)
-		if i := strings.IndexByte(title, '|'); i > 0 {
-			title = strings.TrimSpace(title[:i]) // "הפטריוטים עם ינון מגל | 6.10 | התוכנית המלאה" → השם בלבד; התאריך מוקרא ממילא
-		}
+		title := c14ShowName(t) // "הפטריוטים עם ינון מגל | 6.10 | התוכנית המלאה" → השם בלבד; התאריך מוקרא ממילא
 		if show == "" {
 			show = title
 		}

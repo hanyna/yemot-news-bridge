@@ -396,3 +396,23 @@ func TestFeedKeyC14(t *testing.T) {
 		t.Fatal("feedKey")
 	}
 }
+
+func TestC14IsFullAndShowName(t *testing.T) {
+	cases := []struct {
+		title, wantName string
+		wantFull        bool
+	}{
+		{"הפטריוטים עם ינון מגל | 12.10.2026 | התוכנית המלאה", "הפטריוטים עם ינון מגל", true},
+		{"הפטריוטים עם ינון מגל I 12.10.2026 I התוכנית המלאה", "הפטריוטים עם ינון מגל", true}, // מפריד I (אפיזודה אחת ביוטיוב)
+		{"הפטריוטים עם ינון מגל | 5.10.2026 | התכנית המלאה", "הפטריוטים עם ינון מגל", true},   // איות חסר
+		{"ריאיון סוער עם מישהו", "ריאיון סוער עם מישהו", false},
+	}
+	for _, c := range cases {
+		if got := c14IsFull(c.title); got != c.wantFull {
+			t.Errorf("c14IsFull(%q)=%v, רצינו %v", c.title, got, c.wantFull)
+		}
+		if got := c14ShowName(c.title); got != c.wantName {
+			t.Errorf("c14ShowName(%q)=%q, רצינו %q", c.title, got, c.wantName)
+		}
+	}
+}
