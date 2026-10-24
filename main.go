@@ -150,6 +150,10 @@ func main() {
 		patriotsMain()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "debug" {
+		patriotsDebug()
+		return
+	}
 
 	statusLoc, err := time.LoadLocation("Asia/Jerusalem")
 	if err != nil {
