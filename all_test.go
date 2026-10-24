@@ -1915,3 +1915,62 @@ func TestArchiveWaitsWhenYemotDown(t *testing.T) {
 		t.Fatalf("post was skipped although the server was only down:\n%s", f.files["ivr2:/1/archive.txt"])
 	}
 }
+
+// TestRootMenuOneDigit: בתפריט הראשי נקבעת קליטת ספרה אחת (digits=1), כדי
+// שהקשה תעביר לשלוחה מיד — אבל לא כשיש בתפריט שלוחה בת יותר מספרה אחת,
+// ולא כשהשלוחה הראשית אינה תפריט.
+func TestRootMenuOneDigit(t *testing.T) {
+	now := time.Now().Unix()
+	items := []FeedItem{{ID: 1, Channel: "a", TS: now - 60, Text: "הודעה"}}
+	channels := `{"channels":[{"name":"a","title":"אלישע ירד"}]}`
+
+	f := archiveServer(items, channels)
+	f.files["ivr2:/ext.ini"] = "type=menu\nvoice=Sivan"
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.files["ivr2:/ext.ini"]; got != "type=menu\nvoice=Sivan\ndigits=1" {
+		t.Fatalf("root ini: %q", got)
+	}
+
+	// הפעלה נוספת — אין העלאה חוזרת של ext.ini.
+	f.uploads = nil
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range f.uploads {
+		if u == "ivr2:/ext.ini" {
+			t.Fatal("root ext.ini uploaded again although digits=1 is already set")
+		}
+	}
+
+	// שלוחה בת שתי ספרות בתפריט — לא נוגעים בהגדרה.
+	f2 := archiveServer(items, channels)
+	f2.files["ivr2:/ext.ini"] = "type=menu"
+	f2.dirs["ivr2:/12"] = []string{"ext.ini", "001.wav"}
+	srv2 := httptest.NewServer(http.HandlerFunc(f2.handler))
+	defer srv2.Close()
+	cfg2 := newTestCfg(srv2)
+	if err := syncOnce(&cfg2, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f2.files["ivr2:/ext.ini"]; got != "type=menu" {
+		t.Fatalf("root ini with 2-digit ext: %q", got)
+	}
+
+	// השלוחה הראשית אינה תפריט — לא נוגעים.
+	f3 := archiveServer(items, channels)
+	f3.files["ivr2:/ext.ini"] = "type=playfile"
+	srv3 := httptest.NewServer(http.HandlerFunc(f3.handler))
+	defer srv3.Close()
+	cfg3 := newTestCfg(srv3)
+	if err := syncOnce(&cfg3, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f3.files["ivr2:/ext.ini"]; got != "type=playfile" {
+		t.Fatalf("root ini not a menu: %q", got)
+	}
+}

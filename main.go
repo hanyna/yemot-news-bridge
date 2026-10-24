@@ -107,14 +107,15 @@ type config struct {
 }
 
 type state struct {
-	files    map[string][]string // לכל שלוחה: תוכן הקבצים שהועלו (001, 002, ...)
-	known    map[string]bool     // האם הקבצים בשלוחה ידועים לנו (אחרי סנכרון מוצלח)
-	channels []Channel           // רשימת הערוצים האחרונה
-	chExt    map[string]string   // ערוץ → שלוחה שהוכנה עבורו
-	blocked  map[string]bool     // שלוחות תפוסות ע"י הגדרה אחרת — לא נוגעים
-	welcome  string              // הודעת הפתיחה שהועלתה
-	voiceSet bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
-	failures int
+	files      map[string][]string // לכל שלוחה: תוכן הקבצים שהועלו (001, 002, ...)
+	known      map[string]bool     // האם הקבצים בשלוחה ידועים לנו (אחרי סנכרון מוצלח)
+	channels   []Channel           // רשימת הערוצים האחרונה
+	chExt      map[string]string   // ערוץ → שלוחה שהוכנה עבורו
+	blocked    map[string]bool     // שלוחות תפוסות ע"י הגדרה אחרת — לא נוגעים
+	welcome    string              // הודעת הפתיחה שהועלתה
+	voiceSet   bool                // קול/מהירות עודכנו בשלוחה הראשית ובשלוחה 1
+	rootDigits bool                // קליטת ספרה אחת (digits=1) נבדקה בתפריט הראשי
+	failures   int
 
 	arch      map[string]*archive // שלוחה → הארכיון שלה (נטען פעם אחת בכל הפעלה)
 	chMap     map[string]string   // ערוץ → שלוחת כתב (קבוע — נשמר באינדקס)
@@ -656,6 +657,16 @@ func syncOnce(cfg *config, st *state) error {
 		}
 	}
 
+	// מעבר מיידי בתפריט הראשי — פעם אחת בכל הפעלה: קליטה של ספרה אחת
+	// (digits=1), כדי שהקשה תעביר לשלוחה מיד, בלי ההמתנה של כמה שניות
+	// ל"אולי תוקש עוד ספרה".
+	if !st.rootDigits {
+		st.rootDigits = true
+		if err := ensureRootDigits(cfg); err != nil {
+			log.Printf("הערה: הגדרת קליטת ספרה אחת בתפריט הראשי נכשלה: %v", err)
+		}
+	}
+
 	// הודעת פתיחה בתפריט הראשי — רק כשהשתנתה.
 	if cfg.welcome != "off" {
 		w := cfg.welcome
@@ -1137,6 +1148,52 @@ func applyVoice(cfg *config, ext string) error {
 	}
 	log.Printf("קול/מהירות עודכנו בשלוחה %q.", ext)
 	return nil
+}
+
+// ensureRootDigits מגדיר בשלוחה הראשית קליטה של ספרה אחת (digits=1), כדי
+// שהקשה בתפריט תעביר מיד לשלוחה — בלי ההמתנה של כמה שניות ל"אולי תוקש עוד
+// ספרה". רק כשהשלוחה הראשית היא תפריט וכל השלוחות שבה בנות ספרה אחת (אחרת
+// digits=1 ימנע להגיע לשלוחה עם יותר מספרה — ואז לא נוגעים, רק מסבירים בלוג).
+func ensureRootDigits(cfg *config) error {
+	info, err := cfg.y.dir("")
+	if err != nil || !info.Exists {
+		return err
+	}
+	for _, d := range info.Dirs {
+		if len(d) > 1 && allDigits(d) {
+			log.Printf("הערה: בתפריט הראשי יש שלוחה %s (יותר מספרה אחת) — משאיר את ההגדרה כמו שהיא, כדי שעדיין יהיה אפשר להקיש אליה. לכן הקשה בתפריט ממתינה כמה שניות.", d)
+			return nil
+		}
+	}
+	ini, exists, err := cfg.y.read("", "ext.ini")
+	if err != nil || !exists {
+		return err // בלי ext.ini אין מה לעדכן (checkRootIsMenu כבר מתריע כשחסר תפריט)
+	}
+	if iniValue(ini, "type") != "menu" {
+		return nil
+	}
+	updated, changed := setIniValues(ini, [][2]string{{"digits", "1"}})
+	if !changed {
+		return nil
+	}
+	if err := cfg.y.upload("", "ext.ini", updated); err != nil {
+		return err
+	}
+	log.Println("התפריט הראשי הוגדר לקליטת ספרה אחת (digits=1) — ההקשה עוברת לשלוחה מיד, בלי המתנה.")
+	return nil
+}
+
+// allDigits: האם המחרוזת כולה ספרות (שם של שלוחה שמגיעים אליה בהקשות).
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // checkRootIsMenu בודק (רק לצורך הלוג) שהשלוחה הראשית מוגדרת כתפריט —
