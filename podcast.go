@@ -31,6 +31,10 @@ const (
 	podcastMaxSecs  = 4 * 3600  // פרק ארוך מזה — נחתך
 	podcastMaxBytes = 600 << 20 // קובץ גדול מזה — לא מורידים
 	podcastTimeout  = 10 * time.Minute
+	// פרק שהקול שלו נכשל (כל הניסיונות) — מנסים שוב כל podcastRetry, כל עוד הוא
+	// צעיר מ-podcastRetryAge. בעבר פרק כזה נמחק ולא חזר לעולם (last כבר התקדם).
+	podcastRetry    = 2 * time.Hour
+	podcastRetryAge = 3 * 24 * time.Hour
 )
 
 // podcastEvery: כל כמה זמן בודקים אם יצא פרק חדש. (משתנה — לבדיקות.)
@@ -177,6 +181,8 @@ type podEpisode struct {
 	src    string
 	text   string // כתבה (EPISODES עם "טקסט:"): מוקראת, בלי קובץ שמע
 	queued bool   // נכנס לתור בהפעלה הזו
+	// retryAt: פרק שהקול שלו נכשל — לא נכנס שוב לתור לפני הזמן הזה (בהפעלה הזו).
+	retryAt time.Time
 }
 
 type podcast struct {
@@ -489,7 +495,7 @@ func (p *podcast) sync(cfg *config, st *state, now time.Time, keep int) {
 		log.Printf("פודקאסט %s: פרק חדש לשלוחה %s (%s): %.80s", p.name(), p.ext, introFile(f.base), f.title)
 	}
 	for _, e := range p.eps {
-		if e.state == podQueued && !e.queued && e.src != "" {
+		if e.state == podQueued && !e.queued && e.src != "" && !time.Now().Before(e.retryAt) {
 			e.queued = true
 			st.aw.add(&audioJob{key: p.jobKey(e.id), kind: "p", src: e.src, ts: e.ts}, audioTarget{ext: p.ext, base: e.base})
 		}
@@ -527,10 +533,17 @@ func (p *podcast) finish(cfg *config, keep int) {
 		log.Printf("פודקאסט %s: הפרק %s בשלוחה %s.", p.name(), introFile(e.base), p.ext)
 	}
 	for id, e := range p.eps {
-		if e.state == podFailed {
-			delete(p.eps, id) // ישן מ-last — לא ייכנס שוב
-			p.dirty = true
+		if e.state != podFailed {
+			continue
 		}
+		if e.src != "" && p.src.static == nil && time.Since(time.Unix(e.ts, 0)) < podcastRetryAge {
+			// נכשל — לא מוותרים: חוזר לתור (עם אותו מספר) אחרי הפסקה.
+			e.state, e.queued, e.retryAt, p.dirty = podQueued, false, time.Now().Add(podcastRetry), true
+			log.Printf("פודקאסט %s: הקול של הפרק %s בשלוחה %s נכשל — ננסה שוב בעוד %v.", p.name(), introFile(e.base), p.ext, podcastRetry)
+			continue
+		}
+		delete(p.eps, id) // ישן מדי (או בלי מקור) — מוותרים
+		p.dirty = true
 	}
 	p.rotate(cfg, keep)
 	if p.dirty {
