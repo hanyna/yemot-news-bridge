@@ -323,13 +323,18 @@ func ytdlpPlaylist(ytdlp, playlist string) ([]c14Video, error) {
 		return nil, fmt.Errorf("%v: %.300s", err, strings.TrimSpace(errBuf.String()))
 	}
 	var vids []c14Video
+	enc := map[string]int{}
 	for _, line := range strings.Split(outBuf.String(), "\n") {
 		id, title, ok := strings.Cut(strings.TrimSpace(line), "|")
 		if !ok || len(id) != 11 {
 			continue
 		}
-		vids = append(vids, c14Video{id: id, title: title})
+		// הכותרת עלולה להגיע בקידוד החלון (cp1255/cp862) ולא UTF-8 — מפענחים.
+		dec, how := decodeTitle(title)
+		enc[how]++
+		vids = append(vids, c14Video{id: id, title: dec})
 	}
+	log.Printf("קידוד הכותרות מ-yt-dlp: %v", enc)
 	return vids, nil
 }
 
