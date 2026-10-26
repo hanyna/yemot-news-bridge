@@ -117,6 +117,10 @@ type statusReport struct {
 	latSum, latMax         time.Duration
 	lastPush               time.Time
 	out                    io.Writer
+
+	// patriotsFn קורא את סטטוס הפטריוטים מהקו (patriots-status.json), אם הוגדר.
+	// הכלי שרץ על המחשב שומר אותו; הגשר רק מצרף אותו לדיווח, לדאשבורד.
+	patriotsFn func() string
 }
 
 // newStatusReport: nil בלי GITHUB_TOKEN או עם STATUS=off.
@@ -247,7 +251,14 @@ func (r *statusReport) push(final string) {
 		return
 	}
 	r.lastPush = time.Now()
-	body := r.render(final)
+	fn := r.patriotsFn
+	r.mu.Unlock()
+	patriots := ""
+	if fn != nil {
+		patriots = fn() // קריאה מהקו — בלי הנעילה (קריאת רשת)
+	}
+	r.mu.Lock()
+	body := r.render(final, patriots)
 	r.mu.Unlock()
 	if err := r.ensureIssue(); err != nil {
 		r.fail("פתיחת Issue", err)
@@ -349,7 +360,7 @@ func (r *statusReport) api(method, path string, in, out any) error {
 }
 
 // render: גוף ה-Issue. השורה הראשונה (הערה נסתרת) — לקריאה אוטומטית.
-func (r *statusReport) render(final string) string {
+func (r *statusReport) render(final, patriots string) string {
 	now := time.Now()
 	t := func(x time.Time) string {
 		if x.IsZero() {
@@ -357,7 +368,7 @@ func (r *statusReport) render(final string) string {
 		}
 		return x.In(r.loc).Format("02.01 15:04")
 	}
-	meta, _ := json.Marshal(map[string]any{
+	metaMap := map[string]any{
 		"updated": now.UTC().Format(time.RFC3339), "run": r.runID, "started": r.started.UTC().Format(time.RFC3339),
 		"cycles": r.cycles, "failed_cycles": r.failed, "fail_streak": r.streak, "problems": r.total,
 		"last_ok": func() string {
@@ -368,7 +379,11 @@ func (r *statusReport) render(final string) string {
 		}(),
 		"final": final, "quality": r.quality,
 		"latency": map[string]any{"messages": r.latN, "avg_sec": r.latAvg().Seconds(), "max_sec": r.latMax.Seconds(), "over_5min": r.latSlow},
-	})
+	}
+	if patriots != "" && json.Valid([]byte(patriots)) {
+		metaMap["patriots"] = json.RawMessage(patriots) // סטטוס הפטריוטים מהקו, לדאשבורד
+	}
+	meta, _ := json.Marshal(metaMap)
 	var b strings.Builder
 	fmt.Fprintf(&b, "<!-- line-status %s -->\n", meta)
 	if final != "" {

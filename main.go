@@ -207,6 +207,11 @@ func main() {
 		log.Fatal("חסר משתנה סביבה YEMOT_API_KEY (המפתח הקבוע מעמוד \"מפתחות גישה\" בימות המשיח)")
 	}
 	cfg.y = &yemot{client: &http.Client{Timeout: 30 * time.Second}, apiKey: apiKey}
+	if rep != nil {
+		// סטטוס הפטריוטים (נשמר על הקו בידי הכלי שרץ על המחשב) מצורף לדיווח — לדאשבורד.
+		y, sExt := cfg.y, envOr("PATRIOTS_STATUS_EXT", "3")
+		rep.patriotsFn = func() string { txt, _, _ := y.read(sExt, "patriots-status.json"); return txt }
+	}
 	vkeys := speechKeys(os.Getenv) // אותם מפתחות כמו הקול המוכן — כשאחד במכסה, הבא
 	if len(vkeys) == 0 {
 		vkeys = []string{""}

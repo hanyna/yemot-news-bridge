@@ -26,6 +26,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -141,6 +142,7 @@ func patriotsMain() {
 	log.Printf("נמצאו תוכניות מלאות ביוטיוב (אחרונות): %s", strings.Join(fullDates, ", "))
 
 	done, skipped, failed := 0, 0, 0
+	lastReplaced := ""
 	seen := map[string]bool{}
 	for _, v := range vids {
 		if !c14IsFull(v.title) {
@@ -189,8 +191,33 @@ func patriotsMain() {
 		_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)+"\n"+v.id+"\n"), 0o644)
 		log.Printf("%s: הפרק הוחלף בגרסה המוכנה מיוטיוב (שלוחה %s, קובץ %s).", day, ext, audioFile(ep.base))
 		done++
+		lastReplaced = day
 	}
 	log.Printf("סיום: %d הוחלפו, %d דילוגים, %d נכשלו.", done, skipped, failed)
+
+	// שומרים סטטוס על הקו כדי שהדאשבורד (דרך הגשר) יראה שהכלי רץ ומתי הוחלף לאחרונה.
+	writePatriotsStatus(y, parentExt(ext), done, skipped, failed, lastReplaced, fullDates)
+}
+
+// parentExt: שלוחת האב ("3/3" → "3"); בלי "/" מחזיר כמו שהוא.
+func parentExt(ext string) string {
+	if i := strings.LastIndex(ext, "/"); i > 0 {
+		return ext[:i]
+	}
+	return ext
+}
+
+// writePatriotsStatus מעלה patriots-status.json לשלוחה — הגשר קורא אותו ומצרף
+// לדיווח המצב ב-GitHub, כדי שיופיע בדאשבורד. כישלון כאן לא נורא (רק הדיווח).
+func writePatriotsStatus(y *yemot, ext string, done, skipped, failed int, lastReplaced string, found []string) {
+	b, _ := json.Marshal(map[string]any{
+		"last_run": time.Now().UTC().Format(time.RFC3339),
+		"last_replaced": lastReplaced, "done": done, "skipped": skipped, "failed": failed,
+		"found": found,
+	})
+	if err := y.upload(ext, "patriots-status.json", string(b)); err != nil {
+		log.Printf("הערה: שמירת סטטוס הפטריוטים לשלוחה %s נכשלה (לא קריטי): %v", ext, err)
+	}
 }
 
 // patriotsUpgrade מוריד את הסרטון מיוטיוב, מנרמל, מחליף את הקול בשלוחה ומעדכן
