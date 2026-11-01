@@ -105,11 +105,14 @@ $t1 = New-ScheduledTaskTrigger -Daily -At 11:40PM
 $t2 = New-ScheduledTaskTrigger -Daily -At 6:30AM
 $set = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -DontStopOnIdleEnd -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
-        -MultipleInstances IgnoreNew
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+        -MultipleInstances IgnoreNew -Hidden
+# S4U = "לרוץ גם אם המשתמש לא מחובר", ברקע ובלי חלון. הכלי לא צריך חלון או
+# התחברות — רק אינטרנט (שלא דורש את סיסמת המשתמש). כך הוא עובד גם כשאין חלון
+# פתוח, גם כשלא מחוברים, וגם כשהמחשב ישן (WakeToRun) — בלי שום CMD.
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
 Register-ScheduledTask -TaskName "YemotPatriots" -Action $action -Trigger @($t1,$t2) `
         -Settings $set -Principal $principal -Description "הפטריוטים המלא: הורדת התוכנית המוכנה מיוטיוב והעלאה לקו" -Force | Out-Null
-Write-Host "✓ נרשמה משימה מתוזמנת 'YemotPatriots' — 23:40 ו-06:30, עם העָרה מהשינה." -ForegroundColor Green
+Write-Host "✓ נרשמה משימה מתוזמנת 'YemotPatriots' — 23:40 ו-06:30, נסתרת, רצה ברקע גם כשלא מחוברים ומעירה את המחשב מהשינה." -ForegroundColor Green
 
 Write-Host ""
 Write-Host "ההתקנה הסתיימה." -ForegroundColor Cyan
