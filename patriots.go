@@ -109,30 +109,52 @@ func patriotsMain() {
 		playlist = src.playlist
 	}
 
-	// מאיפה הסרטונים: קודם הסרטונים האחרונים של *הערוץ* — שם התוכנית המלאה
-	// מופיעה ברגע שהיא עולה. (רשימת ההשמעה של הפטריוטים מתעדכנת באיחור של
-	// כמה ימים — ב-6.11 הכי חדש בה היה 2.11, בזמן שבערוץ 5.11 כבר עלה.)
-	// אם הערוץ לא נקרא — רשימת ההשמעה (yt-dlp), ואם גם זה נכשל — עמוד היוטיוב.
-	channelURL := envOr("PATRIOTS_CHANNEL", "https://www.youtube.com/@c14news/videos")
-	showName := envOr("PATRIOTS_SHOW", "הפטריוטים") // בערוץ יש גם תוכניות אחרות עם "התוכנית המלאה"
-	source := "הערוץ"
-	vids, err := ytdlpList(ytdlp, channelURL, 500) // ~שבוע של העלאות בערוץ עמוס
-	if err != nil || len(vids) == 0 {
-		log.Printf("הערה: הסרטונים האחרונים של הערוץ לא נקראו (%v) — מנסה את רשימת ההשמעה.", err)
-		source = "רשימת ההשמעה"
-		vids, err = ytdlpPlaylist(ytdlp, playlist)
-	}
-	if err != nil || len(vids) == 0 {
-		log.Printf("הערה: רשימת ההשמעה דרך yt-dlp לא נקראה (%v) — מנסה דרך עמוד היוטיוב.", err)
-		source = "עמוד היוטיוב"
-		if _, v2, e2 := c14PageVideos(playlist); e2 == nil {
-			vids = v2
-		} else if err == nil {
-			err = e2
+	// מאיפה הסרטונים. מה שלמדנו ב-6.11: התוכנית המלאה של 5.11 כבר הייתה ביוטיוב,
+	// אבל (א) רשימת ההשמעה של הפטריוטים נעצרה ב-2.11 — ערוץ 14 מכניסים אליה
+	// באיחור של ימים; (ב) בטאב "סרטונים" של הערוץ הכי חדשה הייתה 14.9 — כי
+	// התוכנית משודרת בשידור חי, וההקלטה נכנסת לטאב "שידורים חיים" (streams).
+	// לכן קוראים את שני הטאבים של הערוץ (streams + videos), ואת הרשימה — ומאחדים.
+	// ובנוסף, לכל יום בחלון שעדיין לא נמצא: חיפוש ממוקד ביוטיוב לפי הכותרת
+	// המדויקת ("הפטריוטים 5.11.2026 התוכנית המלאה") — מוצא את התוכנית בכל מקום
+	// שהיא, בלי להסתמך על איך ערוץ 14 מסדרים אותה.
+	channelBase := envOr("PATRIOTS_CHANNEL", "https://www.youtube.com/@c14news")
+	channelBase = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(channelBase, "/"), "/videos"), "/streams")
+	channelName := envOr("PATRIOTS_CHANNEL_NAME", "C14") // שם הערוץ כפי שיוטיוב מציג — לסינון תוצאות חיפוש
+	showName := envOr("PATRIOTS_SHOW", "הפטריוטים")     // בערוץ יש גם תוכניות אחרות עם "התוכנית המלאה"
+
+	var vids []c14Video
+	seenID := map[string]bool{}
+	addAll := func(list []c14Video) (n int) {
+		for _, v := range list {
+			if !seenID[v.id] {
+				seenID[v.id] = true
+				vids = append(vids, v)
+				n++
+			}
 		}
+		return n
+	}
+	var parts []string
+	for _, tab := range []string{"/streams", "/videos"} {
+		l, e := ytdlpList(ytdlp, channelBase+tab, 500) // ~שבוע של העלאות בערוץ עמוס
+		if e != nil {
+			log.Printf("הערה: %s של הערוץ לא נקרא: %v", tab, e)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d", strings.TrimPrefix(tab, "/"), addAll(l)))
+	}
+	if l, e := ytdlpPlaylist(ytdlp, playlist); e == nil {
+		parts = append(parts, fmt.Sprintf("playlist=%d", addAll(l)))
+	} else {
+		log.Printf("הערה: רשימת ההשמעה דרך yt-dlp לא נקראה: %v", e)
 	}
 	if len(vids) == 0 {
-		log.Fatalf("קריאת הסרטונים מיוטיוב נכשלה: %v", err)
+		// הכול נכשל — ניסיון אחרון דרך עמוד היוטיוב של הרשימה.
+		if _, v2, e2 := c14PageVideos(playlist); e2 == nil {
+			parts = append(parts, fmt.Sprintf("page=%d", addAll(v2)))
+		} else {
+			log.Fatalf("קריאת הסרטונים מיוטיוב נכשלה: %v", e2)
+		}
 	}
 	// רק התוכנית שלנו (לפי השם בכותרת); הערוץ מכיל גם תוכניות אחרות.
 	kept := vids[:0]
@@ -141,10 +163,42 @@ func patriotsMain() {
 			kept = append(kept, v)
 		}
 	}
-	log.Printf("מקור: %s — %d סרטונים, מהם %d של %s.", source, len(vids), len(kept), showName)
+	log.Printf("מקורות: %s — סה\"כ %d סרטונים, מהם %d של %s.", strings.Join(parts, ", "), len(vids), len(kept), showName)
 	vids = kept
 
 	now := time.Now().In(loc)
+
+	// חיפוש ממוקד לימים בחלון שאין להם עדיין תוכנית מלאה ברשימה.
+	have := map[string]bool{}
+	for _, v := range vids {
+		if c14IsFull(v.title) {
+			if m := reC14Date.FindStringSubmatch(v.title); m != nil {
+				have[normDate(m)] = true
+			}
+		}
+	}
+	for i := 0; i <= daysBack; i++ {
+		d := now.AddDate(0, 0, -i)
+		if d.Weekday() == time.Friday {
+			continue
+		}
+		start := time.Date(d.Year(), d.Month(), d.Day(), startH, startM, 0, 0, loc)
+		if now.Before(start.Add(90 * time.Minute)) {
+			continue // השידור עוד לא הסתיים — אין מה לחפש
+		}
+		key := fmt.Sprintf("%d.%d.%d", d.Day(), int(d.Month()), d.Year())
+		if have[key] {
+			continue
+		}
+		found := ytdlpSearchDay(ytdlp, showName, channelName, d)
+		if len(found) > 0 {
+			log.Printf("חיפוש ממוקד %s: נמצא — %.80s", key, found[0].title)
+			addAll(found) // מצטרף ל-vids (עם סינון כפילויות)
+			have[key] = true
+		} else {
+			log.Printf("חיפוש ממוקד %s: לא נמצא ביוטיוב (עוד לא עלה).", key)
+		}
+	}
 	// לוג עזר: כמה "תוכנית מלאה" נמצאו ומה התאריך האחרון — כדי שאפשר יהיה לראות
 	// מיד אם הבעיה בקריאת היוטיוב או בהתאמה לקו.
 	var fullDates []string
@@ -370,6 +424,68 @@ func findMoridTools() (ytdlp, ffdir string) {
 		}
 	}
 	return ytdlp, ffdir
+}
+
+// normDate: תאריך מהכותרת כ-"5.11.2026" (בלי אפסים מובילים), להשוואה אחידה.
+func normDate(m []string) string {
+	d, _ := strconv.Atoi(m[1])
+	mo, _ := strconv.Atoi(m[2])
+	y, _ := strconv.Atoi(m[3])
+	return fmt.Sprintf("%d.%d.%d", d, mo, y)
+}
+
+// ytdlpSearchDay מחפש ביוטיוב את התוכנית המלאה של יום מסוים לפי הכותרת —
+// "הפטריוטים 5.11.2026 התוכנית המלאה" — ומחזיר רק תוצאות של הערוץ הנכון,
+// עם אותו תאריך בכותרת. כך מוצאים את התוכנית בכל מקום שערוץ 14 שמו אותה.
+func ytdlpSearchDay(ytdlp, show, channelName string, d time.Time) []c14Video {
+	want := fmt.Sprintf("%d.%d.%d", d.Day(), int(d.Month()), d.Year())
+	q := fmt.Sprintf("%s %s התוכנית המלאה", show, want)
+	args := []string{"--flat-playlist", "--no-warnings", "--no-progress",
+		"--print", "%(id)s|%(channel)s|%(title)s"}
+	if patriotsInsecure {
+		args = append(args, "--no-check-certificate")
+	}
+	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
+		args = append(args, "--cookies-from-browser", b)
+	}
+	args = append(args, "ytsearch10:"+q)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ytdlp, args...)
+	cmd.Env = utf8Env()
+	var out strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		log.Printf("הערה: חיפוש ביוטיוב (%s) נכשל: %v: %.200s", want, err, strings.TrimSpace(out.String()))
+		return nil
+	}
+	return filterSearchLines(out.String(), show, channelName, want)
+}
+
+// filterSearchLines מסנן שורות "id|channel|title" מחיפוש: רק תוכנית מלאה של
+// התוכנית שלנו, מהערוץ הנכון, עם התאריך המבוקש בכותרת.
+func filterSearchLines(out, show, channelName, want string) []c14Video {
+	var res []c14Video
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.SplitN(strings.TrimSpace(line), "|", 3) // הכותרת עצמה מכילה '|'
+		if len(f) != 3 || len(f[0]) != 11 {
+			continue
+		}
+		ch, _ := decodeTitle(f[1])
+		title, _ := decodeTitle(f[2])
+		if !c14IsFull(title) || !strings.Contains(title, show) {
+			continue
+		}
+		m := reC14Date.FindStringSubmatch(title)
+		if m == nil || normDate(m) != want {
+			continue
+		}
+		if channelName != "" && !strings.Contains(strings.ToUpper(ch), strings.ToUpper(channelName)) {
+			continue // העתקה של ערוץ אחר
+		}
+		res = append(res, c14Video{id: f[0], title: title})
+	}
+	return res
 }
 
 // ytdlpPlaylist מביא את כל הסרטונים (מזהה + כותרת) של רשימת השמעה ביוטיוב.

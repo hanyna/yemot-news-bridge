@@ -90,8 +90,10 @@ PATRIOTS_PLAYLIST=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
 PATRIOTS_EXT=3/3
 PATRIOTS_START=21:00
 PATRIOTS_DAYS_BACK=3
-# מאיפה הסרטונים: קודם הסרטונים האחרונים של הערוץ (מופיעים מיד), ואז הרשימה.
-# PATRIOTS_CHANNEL=https://www.youtube.com/@c14news/videos
+# מאיפה הסרטונים: שני הטאבים של הערוץ (שידורים חיים + סרטונים) + הרשימה, ובנוסף חיפוש
+# ממוקד ביוטיוב לפי הכותרת של כל יום. ברירות מחדל: ערוץ 14.
+# PATRIOTS_CHANNEL=https://www.youtube.com/@c14news
+# PATRIOTS_CHANNEL_NAME=C14
 # PATRIOTS_SHOW=הפטריוטים
 $ytLine
 $ffLine

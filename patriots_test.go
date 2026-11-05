@@ -84,3 +84,32 @@ func TestPatriotsIntro(t *testing.T) {
 		t.Fatalf("intro=%q", s)
 	}
 }
+
+func TestFilterSearchLines(t *testing.T) {
+	out := strings.Join([]string{
+		"Z3z0C86j2G0|C14|הפטריוטים עם יונן מגל | 5.11.2026 | התוכנית המלאה", // המטרה (כולל '|' בכותרת)
+		"AAAAAAAAAAA|C14|הפטריוטים עם ינון מגל | 4.11.2026 | התוכנית המלאה", // יום אחר
+		"BBBBBBBBBBB|ערוץ אחר|הפטריוטים עם ינון מגל | 5.11.2026 | התוכנית המלאה", // העתקה מערוץ אחר
+		"CCCCCCCCCCC|C14|הפטריוטים: קטע קצר 5.11.2026",                      // לא תוכנית מלאה
+		"DDDDDDDDDDD|C14|תוכנית אחרת | 5.11.2026 | התוכנית המלאה",            // תוכנית אחרת
+		"bad line",
+	}, "\n")
+	got := filterSearchLines(out, "הפטריוטים", "C14", "5.11.2026")
+	if len(got) != 1 || got[0].id != "Z3z0C86j2G0" {
+		t.Fatalf("ציפיתי בדיוק לתוצאה אחת (Z3z0C86j2G0), קיבלתי %+v", got)
+	}
+	if got[0].title != "הפטריוטים עם יונן מגל | 5.11.2026 | התוכנית המלאה" {
+		t.Errorf("הכותרת נחתכה בטעות ב-'|': %q", got[0].title)
+	}
+	// בלי סינון ערוץ — גם ההעתקה נכנסת.
+	if n := len(filterSearchLines(out, "הפטריוטים", "", "5.11.2026")); n != 2 {
+		t.Errorf("בלי סינון ערוץ ציפיתי ל-2, קיבלתי %d", n)
+	}
+}
+
+func TestNormDate(t *testing.T) {
+	m := reC14Date.FindStringSubmatch("x | 06.10.2026 | y")
+	if got := normDate(m); got != "6.10.2026" {
+		t.Errorf("normDate=%q, רצינו 6.10.2026", got)
+	}
+}
