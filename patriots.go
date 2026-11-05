@@ -42,7 +42,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v8 (6.11.2026) — חיפוש ישיר, מותאם לחיבור איטי"
+const patriotsVersion = "v9 (6.11.2026) — מתייאש מהר מבקשות חסומות (מהיר)"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
@@ -381,6 +381,14 @@ func patriotsTransport() http.RoundTripper {
 	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 }
 
+// ytFastFlags: לא לחכות דקות לבקשה שהסינון (נטפרי) חוסם. ב-6.11 כל הרצת yt-dlp
+// לקחה ~3 דק' *בלי קשר לכמות* (10 סרטונים = 3 דק', 2,500 = 3 דק') — תקורה קבועה
+// של בקשה שלא נענית + ניסיונות חוזרים. מתייאשים אחרי 10 שניות, פחות ניסיונות;
+// הקוד שלנו ממילא מנסה שוב ברמה שלו.
+func ytFastFlags() []string {
+	return []string{"--socket-timeout", "10", "--retries", "2", "--extractor-retries", "1"}
+}
+
 // utf8Env: מכריח את yt-dlp (פייתון) להוציא UTF-8 ל-pipe. בלי זה, בווינדוס
 // פייתון פולט ל-pipe בקידוד החלון (cp1255) ולא ב-UTF-8, הכותרות בעברית מגיעות
 // משובשות ל-exe, וההתאמה ל"התוכנית המלאה" נכשלת (0 נמצאו למרות שהתוכניות שם).
@@ -441,6 +449,7 @@ func ytdlpSearchDay(ytdlp, show, channelName string, d time.Time) []c14Video {
 	q := fmt.Sprintf("%s %s התוכנית המלאה", show, want)
 	args := []string{"--flat-playlist", "--no-warnings", "--no-progress",
 		"--print", "%(id)s|%(channel)s|%(title)s"}
+	args = append(args, ytFastFlags()...)
 	if patriotsInsecure {
 		args = append(args, "--no-check-certificate")
 	}
@@ -448,19 +457,24 @@ func ytdlpSearchDay(ytdlp, show, channelName string, d time.Time) []c14Video {
 		args = append(args, "--cookies-from-browser", b)
 	}
 	args = append(args, "ytsearch5:"+q)
-	// על חיבור מסונן כל קריאת yt-dlp לוקחת 2–4 דקות (ב-6.11 חיפוש נהרג בדיוק
-	// אחרי 2:00 דק' — timeout, לא כישלון). נותנים 6 דקות.
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, ytdlp, args...)
-	cmd.Env = utf8Env()
-	var out strings.Builder
-	cmd.Stdout, cmd.Stderr = &out, &out
-	if err := cmd.Run(); err != nil {
-		log.Printf("הערה: חיפוש ביוטיוב (%s) נכשל: %v: %.200s", want, err, strings.TrimSpace(out.String()))
-		return nil
+	// עד 2 ניסיונות; לכל אחד 6 דקות (ב-6.11 חיפוש נהרג בדיוק אחרי 2:00 — timeout).
+	for try := 1; try <= 2; try++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		cmd := exec.CommandContext(ctx, ytdlp, args...)
+		cmd.Env = utf8Env()
+		var out strings.Builder
+		cmd.Stdout, cmd.Stderr = &out, &out
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			return filterSearchLines(out.String(), show, channelName, want)
+		}
+		log.Printf("הערה: חיפוש ביוטיוב (%s) נכשל (ניסיון %d): %v: %.200s", want, try, err, strings.TrimSpace(out.String()))
+		if try < 2 {
+			time.Sleep(5 * time.Second)
+		}
 	}
-	return filterSearchLines(out.String(), show, channelName, want)
+	return nil
 }
 
 // filterSearchLines מסנן שורות "id|channel|title" מחיפוש: רק תוכנית מלאה של
@@ -500,6 +514,7 @@ func ytdlpPlaylist(ytdlp, playlist string) ([]c14Video, error) {
 func ytdlpList(ytdlp, url string, limit int) ([]c14Video, error) {
 	args := []string{"--flat-playlist", "--no-warnings", "--no-progress",
 		"--print", "%(id)s|%(title)s"}
+	args = append(args, ytFastFlags()...)
 	if limit > 0 {
 		args = append(args, "--playlist-end", strconv.Itoa(limit))
 	}
@@ -569,6 +584,7 @@ func ytdlpAudio(ytdlp, videoID, out string) error {
 		"-f", "bestaudio/best",
 		"-x", "--audio-format", "mp3", "--audio-quality", "0",
 		"-o", strings.TrimSuffix(out, ".mp3") + ".%(ext)s",
+		"--socket-timeout", "15", "--retries", "3", "--fragment-retries", "3",
 	}
 	if patriotsInsecure {
 		args = append(args, "--no-check-certificate") // נטפרי/רימון
