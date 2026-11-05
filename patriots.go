@@ -109,11 +109,22 @@ func patriotsMain() {
 		playlist = src.playlist
 	}
 
-	// מביאים את רשימת הסרטונים דרך yt-dlp (אמין, מטפל באזור/הסכמה) ולא בגירוד
-	// HTML שמשתנה ממחשב למחשב. אם yt-dlp נכשל — ניסיון גיבוי דרך העמוד.
-	vids, err := ytdlpPlaylist(ytdlp, playlist)
+	// מאיפה הסרטונים: קודם הסרטונים האחרונים של *הערוץ* — שם התוכנית המלאה
+	// מופיעה ברגע שהיא עולה. (רשימת ההשמעה של הפטריוטים מתעדכנת באיחור של
+	// כמה ימים — ב-6.11 הכי חדש בה היה 2.11, בזמן שבערוץ 5.11 כבר עלה.)
+	// אם הערוץ לא נקרא — רשימת ההשמעה (yt-dlp), ואם גם זה נכשל — עמוד היוטיוב.
+	channelURL := envOr("PATRIOTS_CHANNEL", "https://www.youtube.com/@c14news/videos")
+	showName := envOr("PATRIOTS_SHOW", "הפטריוטים") // בערוץ יש גם תוכניות אחרות עם "התוכנית המלאה"
+	source := "הערוץ"
+	vids, err := ytdlpList(ytdlp, channelURL, 500) // ~שבוע של העלאות בערוץ עמוס
+	if err != nil || len(vids) == 0 {
+		log.Printf("הערה: הסרטונים האחרונים של הערוץ לא נקראו (%v) — מנסה את רשימת ההשמעה.", err)
+		source = "רשימת ההשמעה"
+		vids, err = ytdlpPlaylist(ytdlp, playlist)
+	}
 	if err != nil || len(vids) == 0 {
 		log.Printf("הערה: רשימת ההשמעה דרך yt-dlp לא נקראה (%v) — מנסה דרך עמוד היוטיוב.", err)
+		source = "עמוד היוטיוב"
 		if _, v2, e2 := c14PageVideos(playlist); e2 == nil {
 			vids = v2
 		} else if err == nil {
@@ -121,9 +132,17 @@ func patriotsMain() {
 		}
 	}
 	if len(vids) == 0 {
-		log.Fatalf("קריאת רשימת ההשמעה ביוטיוב נכשלה: %v", err)
+		log.Fatalf("קריאת הסרטונים מיוטיוב נכשלה: %v", err)
 	}
-	log.Printf("רשימת ההשמעה: %d סרטונים.", len(vids))
+	// רק התוכנית שלנו (לפי השם בכותרת); הערוץ מכיל גם תוכניות אחרות.
+	kept := vids[:0]
+	for _, v := range vids {
+		if strings.Contains(v.title, showName) {
+			kept = append(kept, v)
+		}
+	}
+	log.Printf("מקור: %s — %d סרטונים, מהם %d של %s.", source, len(vids), len(kept), showName)
+	vids = kept
 
 	now := time.Now().In(loc)
 	// לוג עזר: כמה "תוכנית מלאה" נמצאו ומה התאריך האחרון — כדי שאפשר יהיה לראות
@@ -353,18 +372,27 @@ func findMoridTools() (ytdlp, ffdir string) {
 	return ytdlp, ffdir
 }
 
-// ytdlpPlaylist מביא את רשימת הסרטונים (מזהה + כותרת) של רשימת השמעה ביוטיוב,
-// דרך yt-dlp — אמין יותר מגירוד העמוד. מהחדש לישן.
+// ytdlpPlaylist מביא את כל הסרטונים (מזהה + כותרת) של רשימת השמעה ביוטיוב.
 func ytdlpPlaylist(ytdlp, playlist string) ([]c14Video, error) {
+	return ytdlpList(ytdlp, "https://www.youtube.com/playlist?list="+playlist, 0)
+}
+
+// ytdlpList מביא סרטונים (מזהה + כותרת) מכתובת ביוטיוב — רשימת השמעה או עמוד
+// הסרטונים של ערוץ — דרך yt-dlp (אמין יותר מגירוד העמוד). limit > 0 = רק
+// ה-N הראשונים (בערוץ: החדשים ביותר) — מהיר, ומספיק לחלון של כמה ימים.
+func ytdlpList(ytdlp, url string, limit int) ([]c14Video, error) {
 	args := []string{"--flat-playlist", "--no-warnings", "--no-progress",
 		"--print", "%(id)s|%(title)s"}
+	if limit > 0 {
+		args = append(args, "--playlist-end", strconv.Itoa(limit))
+	}
 	if patriotsInsecure {
 		args = append(args, "--no-check-certificate")
 	}
 	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
 		args = append(args, "--cookies-from-browser", b)
 	}
-	args = append(args, "https://www.youtube.com/playlist?list="+playlist)
+	args = append(args, url)
 
 	// קריאת 2600+ סרטונים על חיבור מסונן יכולה לקחת זמן — נותנים 6 דקות, ועד 3
 	// ניסיונות. כישלון מחזיר גם stdout וגם stderr, כדי שהשגיאה האמיתית תירשם בלוג.

@@ -90,6 +90,9 @@ PATRIOTS_PLAYLIST=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
 PATRIOTS_EXT=3/3
 PATRIOTS_START=21:00
 PATRIOTS_DAYS_BACK=3
+# מאיפה הסרטונים: קודם הסרטונים האחרונים של הערוץ (מופיעים מיד), ואז הרשימה.
+# PATRIOTS_CHANNEL=https://www.youtube.com/@c14news/videos
+# PATRIOTS_SHOW=הפטריוטים
 $ytLine
 $ffLine
 # נטפרי/רימון: on = לדלג על אימות תעודה (ברירת מחדל). off = לכבות.
