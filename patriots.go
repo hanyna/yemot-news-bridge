@@ -42,7 +42,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v6 (6.11.2026) — טאב שידורים חיים + חיפוש ממוקד"
+const patriotsVersion = "v7 (6.11.2026) — חיפוש ישיר לפי כותרת, מוריד וזהו"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
@@ -114,18 +114,18 @@ func patriotsMain() {
 		playlist = src.playlist
 	}
 
-	// מאיפה הסרטונים. מה שלמדנו ב-6.11: התוכנית המלאה של 5.11 כבר הייתה ביוטיוב,
-	// אבל (א) רשימת ההשמעה של הפטריוטים נעצרה ב-2.11 — ערוץ 14 מכניסים אליה
-	// באיחור של ימים; (ב) בטאב "סרטונים" של הערוץ הכי חדשה הייתה 14.9 — כי
-	// התוכנית משודרת בשידור חי, וההקלטה נכנסת לטאב "שידורים חיים" (streams).
-	// לכן קוראים את שני הטאבים של הערוץ (streams + videos), ואת הרשימה — ומאחדים.
-	// ובנוסף, לכל יום בחלון שעדיין לא נמצא: חיפוש ממוקד ביוטיוב לפי הכותרת
-	// המדויקת ("הפטריוטים 5.11.2026 התוכנית המלאה") — מוצא את התוכנית בכל מקום
-	// שהיא, בלי להסתמך על איך ערוץ 14 מסדרים אותה.
+	// איך מוצאים את התוכנית. מה שלמדנו ב-6.11: רשימת ההשמעה מתעדכנת באיחור של
+	// ימים, ובטאב "סרטונים" של הערוץ אין את ההקלטות (התוכנית משודרת לייב ונכנסת
+	// לטאב "שידורים חיים"). לכן הדרך הישירה: לכל יום בחלון — *חיפוש ממוקד* ביוטיוב
+	// לפי הכותרת המדויקת ("הפטריוטים 5.11.2026 התוכנית המלאה"), עם סינון ערוץ
+	// (C14) ותאריך. זה מוצא את התוכנית תוך שניות, בכל מקום שערוץ 14 שמו אותה,
+	// בלי לקרוא אלפי סרטונים. קריאת הטאבים/הרשימה נשארת רק כגיבוי אם החיפוש
+	// לא מצא כלום (למשל אם יוטיוב חוסם חיפוש).
 	channelBase := envOr("PATRIOTS_CHANNEL", "https://www.youtube.com/@c14news")
 	channelBase = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(channelBase, "/"), "/videos"), "/streams")
 	channelName := envOr("PATRIOTS_CHANNEL_NAME", "C14") // שם הערוץ כפי שיוטיוב מציג — לסינון תוצאות חיפוש
 	showName := envOr("PATRIOTS_SHOW", "הפטריוטים")     // בערוץ יש גם תוכניות אחרות עם "התוכנית המלאה"
+	now := time.Now().In(loc)
 
 	var vids []c14Video
 	seenID := map[string]bool{}
@@ -139,49 +139,9 @@ func patriotsMain() {
 		}
 		return n
 	}
-	var parts []string
-	for _, tab := range []string{"/streams", "/videos"} {
-		l, e := ytdlpList(ytdlp, channelBase+tab, 500) // ~שבוע של העלאות בערוץ עמוס
-		if e != nil {
-			log.Printf("הערה: %s של הערוץ לא נקרא: %v", tab, e)
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s=%d", strings.TrimPrefix(tab, "/"), addAll(l)))
-	}
-	if l, e := ytdlpPlaylist(ytdlp, playlist); e == nil {
-		parts = append(parts, fmt.Sprintf("playlist=%d", addAll(l)))
-	} else {
-		log.Printf("הערה: רשימת ההשמעה דרך yt-dlp לא נקראה: %v", e)
-	}
-	if len(vids) == 0 {
-		// הכול נכשל — ניסיון אחרון דרך עמוד היוטיוב של הרשימה.
-		if _, v2, e2 := c14PageVideos(playlist); e2 == nil {
-			parts = append(parts, fmt.Sprintf("page=%d", addAll(v2)))
-		} else {
-			log.Fatalf("קריאת הסרטונים מיוטיוב נכשלה: %v", e2)
-		}
-	}
-	// רק התוכנית שלנו (לפי השם בכותרת); הערוץ מכיל גם תוכניות אחרות.
-	kept := vids[:0]
-	for _, v := range vids {
-		if strings.Contains(v.title, showName) {
-			kept = append(kept, v)
-		}
-	}
-	log.Printf("מקורות: %s — סה\"כ %d סרטונים, מהם %d של %s.", strings.Join(parts, ", "), len(vids), len(kept), showName)
-	vids = kept
 
-	now := time.Now().In(loc)
-
-	// חיפוש ממוקד לימים בחלון שאין להם עדיין תוכנית מלאה ברשימה.
-	have := map[string]bool{}
-	for _, v := range vids {
-		if c14IsFull(v.title) {
-			if m := reC14Date.FindStringSubmatch(v.title); m != nil {
-				have[normDate(m)] = true
-			}
-		}
-	}
+	// 1) ישיר ומהיר: חיפוש ממוקד לכל יום בחלון.
+	searched := 0
 	for i := 0; i <= daysBack; i++ {
 		d := now.AddDate(0, 0, -i)
 		if d.Weekday() == time.Friday {
@@ -191,19 +151,53 @@ func patriotsMain() {
 		if now.Before(start.Add(90 * time.Minute)) {
 			continue // השידור עוד לא הסתיים — אין מה לחפש
 		}
+		searched++
 		key := fmt.Sprintf("%d.%d.%d", d.Day(), int(d.Month()), d.Year())
-		if have[key] {
-			continue
-		}
-		found := ytdlpSearchDay(ytdlp, showName, channelName, d)
-		if len(found) > 0 {
+		if found := ytdlpSearchDay(ytdlp, showName, channelName, d); len(found) > 0 {
 			log.Printf("חיפוש ממוקד %s: נמצא — %.80s", key, found[0].title)
-			addAll(found) // מצטרף ל-vids (עם סינון כפילויות)
-			have[key] = true
+			addAll(found)
 		} else {
-			log.Printf("חיפוש ממוקד %s: לא נמצא ביוטיוב (עוד לא עלה).", key)
+			log.Printf("חיפוש ממוקד %s: לא נמצא ביוטיוב (עוד לא עלה, או שאין תוכנית ביום הזה).", key)
 		}
 	}
+
+	// 2) גיבוי איטי — רק אם החיפוש לא מצא אף תוכנית: הטאבים של הערוץ + הרשימה.
+	if len(vids) == 0 && searched > 0 {
+		log.Printf("החיפוש הממוקד לא מצא כלום — קוראים את הערוץ והרשימה כגיבוי (זה לוקח כמה דקות).")
+		var parts []string
+		for _, tab := range []string{"/streams", "/videos"} {
+			l, e := ytdlpList(ytdlp, channelBase+tab, 500)
+			if e != nil {
+				log.Printf("הערה: %s של הערוץ לא נקרא: %v", tab, e)
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s=%d", strings.TrimPrefix(tab, "/"), addAll(l)))
+		}
+		if l, e := ytdlpPlaylist(ytdlp, playlist); e == nil {
+			parts = append(parts, fmt.Sprintf("playlist=%d", addAll(l)))
+		} else {
+			log.Printf("הערה: רשימת ההשמעה דרך yt-dlp לא נקראה: %v", e)
+		}
+		if len(vids) == 0 {
+			if _, v2, e2 := c14PageVideos(playlist); e2 == nil {
+				parts = append(parts, fmt.Sprintf("page=%d", addAll(v2)))
+			} else {
+				log.Fatalf("קריאת הסרטונים מיוטיוב נכשלה: %v", e2)
+			}
+		}
+		kept := vids[:0]
+		for _, v := range vids {
+			if strings.Contains(v.title, showName) {
+				kept = append(kept, v)
+			}
+		}
+		log.Printf("מקורות גיבוי: %s — סה\"כ %d, מהם %d של %s.", strings.Join(parts, ", "), len(vids), len(kept), showName)
+		vids = kept
+	}
+	if len(vids) == 0 {
+		log.Printf("לא נמצאה תוכנית מלאה בחלון של %d הימים האחרונים — אין מה להחליף הפעם.", daysBack)
+	}
+
 	// לוג עזר: כמה "תוכנית מלאה" נמצאו ומה התאריך האחרון — כדי שאפשר יהיה לראות
 	// מיד אם הבעיה בקריאת היוטיוב או בהתאמה לקו.
 	var fullDates []string
