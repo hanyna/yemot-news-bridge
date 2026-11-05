@@ -141,6 +141,31 @@ func patriotsMain() {
 	}
 	log.Printf("נמצאו תוכניות מלאות ביוטיוב (אחרונות): %s", strings.Join(fullDates, ", "))
 
+	// התאריך האמיתי הכי חדש מבין כל התוכניות המלאות ברשימה (אבחון: כך רואים
+	// אם בכלל יש תוכנית מהימים האחרונים, או שהבעיה בחלון הזמן/בזיהוי).
+	var newest time.Time
+	nFull := 0
+	for _, v := range vids {
+		if !c14IsFull(v.title) {
+			continue
+		}
+		if m := reC14Date.FindStringSubmatch(v.title); m != nil {
+			d, _ := strconv.Atoi(m[1])
+			mo, _ := strconv.Atoi(m[2])
+			yr, _ := strconv.Atoi(m[3])
+			if mo >= 1 && mo <= 12 && d >= 1 && d <= 31 {
+				nFull++
+				if t := time.Date(yr, time.Month(mo), d, 0, 0, 0, 0, loc); t.After(newest) {
+					newest = t
+				}
+			}
+		}
+	}
+	if !newest.IsZero() {
+		log.Printf("התוכנית המלאה הכי חדשה ברשימה: %s (מתוך %d תוכניות מלאות). היום: %s.",
+			newest.Format("02.01.2006"), nFull, now.Format("02.01.2006"))
+	}
+
 	done, skipped, failed := 0, 0, 0
 	lastReplaced := ""
 	seen := map[string]bool{}
