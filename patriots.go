@@ -40,8 +40,13 @@ import (
 
 const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
+// patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
+// (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
+const patriotsVersion = "v6 (6.11.2026) — טאב שידורים חיים + חיפוש ממוקד"
+
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
+	log.Printf("הפטריוטים המלא — %s", patriotsVersion)
 	loadEnvFile(filepath.Join(exeDir(), "patriots.env")) // הגדרות ליד ה-exe
 	keepSystemAwake()                                    // שלא יחזור לשינה באמצע (windows; no-op בשאר)
 
