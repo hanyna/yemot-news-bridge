@@ -89,7 +89,7 @@ YEMOT_API_KEY=$k
 PATRIOTS_PLAYLIST=PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4
 PATRIOTS_EXT=3/3
 PATRIOTS_START=21:00
-PATRIOTS_DAYS_BACK=2
+PATRIOTS_DAYS_BACK=3
 $ytLine
 $ffLine
 # נטפרי/רימון: on = לדלג על אימות תעודה (ברירת מחדל). off = לכבות.

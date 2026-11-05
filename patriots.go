@@ -60,7 +60,7 @@ func patriotsMain() {
 		startH, _ = strconv.Atoi(h)
 		startM, _ = strconv.Atoi(m)
 	}
-	daysBack := envInt("PATRIOTS_DAYS_BACK", 2)
+	daysBack := envInt("PATRIOTS_DAYS_BACK", 3)
 	ytdlp := envOr("YTDLP", "yt-dlp")
 	stateDir := envOr("PATRIOTS_STATE_DIR", filepath.Join(exeDir(), "state"))
 
@@ -331,8 +331,6 @@ func findMoridTools() (ytdlp, ffdir string) {
 // ytdlpPlaylist מביא את רשימת הסרטונים (מזהה + כותרת) של רשימת השמעה ביוטיוב,
 // דרך yt-dlp — אמין יותר מגירוד העמוד. מהחדש לישן.
 func ytdlpPlaylist(ytdlp, playlist string) ([]c14Video, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	args := []string{"--flat-playlist", "--no-warnings", "--no-progress",
 		"--print", "%(id)s|%(title)s"}
 	if patriotsInsecure {
@@ -342,16 +340,43 @@ func ytdlpPlaylist(ytdlp, playlist string) ([]c14Video, error) {
 		args = append(args, "--cookies-from-browser", b)
 	}
 	args = append(args, "https://www.youtube.com/playlist?list="+playlist)
-	cmd := exec.CommandContext(ctx, ytdlp, args...)
-	cmd.Env = utf8Env() // כותרות עברית ב-UTF-8, לא בקידוד החלון
-	var outBuf, errBuf strings.Builder
-	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%v: %.300s", err, strings.TrimSpace(errBuf.String()))
+
+	// קריאת 2600+ סרטונים על חיבור מסונן יכולה לקחת זמן — נותנים 6 דקות, ועד 3
+	// ניסיונות. כישלון מחזיר גם stdout וגם stderr, כדי שהשגיאה האמיתית תירשם בלוג.
+	var out string
+	var lastErr error
+	for try := 1; try <= 3; try++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		cmd := exec.CommandContext(ctx, ytdlp, args...)
+		cmd.Env = utf8Env() // כותרות עברית ב-UTF-8, לא בקידוד החלון
+		var outBuf, errBuf strings.Builder
+		cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
+		err := cmd.Run()
+		cancel()
+		if err == nil && strings.TrimSpace(outBuf.String()) != "" {
+			out = outBuf.String()
+			lastErr = nil
+			break
+		}
+		tail := strings.TrimSpace(errBuf.String())
+		if tail == "" {
+			tail = strings.TrimSpace(outBuf.String()) // לפעמים yt-dlp כותב ל-stdout
+		}
+		if err == nil {
+			err = fmt.Errorf("yt-dlp לא החזיר רשימה")
+		}
+		lastErr = fmt.Errorf("ניסיון %d: %v: %.300s", try, err, tail)
+		log.Printf("הערה: yt-dlp נכשל בקריאת הרשימה — %v", lastErr)
+		if try < 3 {
+			time.Sleep(10 * time.Second)
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
 	}
 	var vids []c14Video
 	enc := map[string]int{}
-	for _, line := range strings.Split(outBuf.String(), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		id, title, ok := strings.Cut(strings.TrimSpace(line), "|")
 		if !ok || len(id) != 11 {
 			continue
