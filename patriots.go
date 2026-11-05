@@ -42,7 +42,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v7 (6.11.2026) — חיפוש ישיר לפי כותרת, מוריד וזהו"
+const patriotsVersion = "v8 (6.11.2026) — חיפוש ישיר, מותאם לחיבור איטי"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
@@ -447,8 +447,10 @@ func ytdlpSearchDay(ytdlp, show, channelName string, d time.Time) []c14Video {
 	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
 		args = append(args, "--cookies-from-browser", b)
 	}
-	args = append(args, "ytsearch10:"+q)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	args = append(args, "ytsearch5:"+q)
+	// על חיבור מסונן כל קריאת yt-dlp לוקחת 2–4 דקות (ב-6.11 חיפוש נהרג בדיוק
+	// אחרי 2:00 דק' — timeout, לא כישלון). נותנים 6 דקות.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ytdlp, args...)
 	cmd.Env = utf8Env()
