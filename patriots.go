@@ -42,7 +42,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v11 (7.11.2026) — ffmpeg: נופל לפילטר פשוט אם highpass חסר"
+const patriotsVersion = "v12 (7.11.2026) — מדפיס את אורך התוכנית שעלתה"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
@@ -240,6 +240,7 @@ func patriotsMain() {
 
 	done, skipped, failed := 0, 0, 0
 	lastReplaced := ""
+	lastSecs := 0
 	seen := map[string]bool{}
 	for _, v := range vids {
 		if !c14IsFull(v.title) {
@@ -276,24 +277,34 @@ func patriotsMain() {
 			continue
 		}
 		marker := filepath.Join(stateDir, "done-"+shortPlaylist(playlist)+"-"+day+".txt")
-		if _, err := os.Stat(marker); err == nil {
-			continue // כבר הוחלף בגרסה המוכנה
+		if b, err := os.ReadFile(marker); err == nil {
+			// כבר הוחלף בגרסה המוכנה. שורה 3 בסימון = האורך (שניות), אם נשמר.
+			dur := ""
+			if f := strings.Split(strings.TrimSpace(string(b)), "\n"); len(f) >= 3 {
+				if n, e := strconv.Atoi(strings.TrimSpace(f[2])); e == nil {
+					dur = " (אורך: " + durText(n) + ")"
+				}
+			}
+			log.Printf("%s: כבר הוחלף בגרסה המוכנה%s.", day, dur)
+			continue
 		}
 		showName := c14ShowName(v.title)
-		if err := patriotsUpgrade(y, ext, ytdlp, v.id, ep.base, showName, start, loc); err != nil {
+		secs, err := patriotsUpgrade(y, ext, ytdlp, v.id, ep.base, showName, start, loc)
+		if err != nil {
 			log.Printf("%s: ההחלפה בגרסה המוכנה נכשלה (נשארת ההקלטה): %v", day, err)
 			failed++
 			continue
 		}
-		_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)+"\n"+v.id+"\n"), 0o644)
-		log.Printf("%s: הפרק הוחלף בגרסה המוכנה מיוטיוב (שלוחה %s, קובץ %s).", day, ext, audioFile(ep.base))
+		_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)+"\n"+v.id+"\n"+strconv.Itoa(secs)+"\n"), 0o644)
+		log.Printf("%s: הפרק הוחלף בגרסה המוכנה מיוטיוב (שלוחה %s, קובץ %s). אורך: %s.", day, ext, audioFile(ep.base), durText(secs))
 		done++
 		lastReplaced = day
+		lastSecs = secs
 	}
 	log.Printf("סיום: %d הוחלפו, %d דילוגים, %d נכשלו.", done, skipped, failed)
 
 	// שומרים סטטוס על הקו כדי שהדאשבורד (דרך הגשר) יראה שהכלי רץ ומתי הוחלף לאחרונה.
-	writePatriotsStatus(y, parentExt(ext), done, skipped, failed, lastReplaced, fullDates)
+	writePatriotsStatus(y, parentExt(ext), done, skipped, failed, lastReplaced, lastSecs, fullDates)
 }
 
 // parentExt: שלוחת האב ("3/3" → "3"); בלי "/" מחזיר כמו שהוא.
@@ -306,10 +317,11 @@ func parentExt(ext string) string {
 
 // writePatriotsStatus מעלה patriots-status.json לשלוחה — הגשר קורא אותו ומצרף
 // לדיווח המצב ב-GitHub, כדי שיופיע בדאשבורד. כישלון כאן לא נורא (רק הדיווח).
-func writePatriotsStatus(y *yemot, ext string, done, skipped, failed int, lastReplaced string, found []string) {
+func writePatriotsStatus(y *yemot, ext string, done, skipped, failed int, lastReplaced string, lastSecs int, found []string) {
 	b, _ := json.Marshal(map[string]any{
 		"last_run": time.Now().UTC().Format(time.RFC3339),
-		"last_replaced": lastReplaced, "done": done, "skipped": skipped, "failed": failed,
+		"last_replaced": lastReplaced, "last_duration_sec": lastSecs,
+		"done": done, "skipped": skipped, "failed": failed,
 		"found": found,
 	})
 	if err := y.upload(ext, "patriots-status.json", string(b)); err != nil {
@@ -319,35 +331,54 @@ func writePatriotsStatus(y *yemot, ext string, done, skipped, failed int, lastRe
 
 // patriotsUpgrade מוריד את הסרטון מיוטיוב, מנרמל, מחליף את הקול בשלוחה ומעדכן
 // את ההקראה לאורך האמיתי של הגרסה המוכנה.
-func patriotsUpgrade(y *yemot, ext, ytdlp, videoID string, base int, showName string, start time.Time, loc *time.Location) error {
+func patriotsUpgrade(y *yemot, ext, ytdlp, videoID string, base int, showName string, start time.Time, loc *time.Location) (int, error) {
 	dir, err := os.MkdirTemp("", "patriots")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer os.RemoveAll(dir)
 	src := filepath.Join(dir, "src.mp3")
 	if err := ytdlpAudio(ytdlp, videoID, src); err != nil {
-		return err
+		return 0, err
 	}
 	out := filepath.Join(dir, "out.mp3")
 	if err := transcode(src, out, 0, true); err != nil { // loudnorm + 16k mono, כמו בגשר
-		return fmt.Errorf("עיבוד הקול (ffmpeg): %w", err)
+		return 0, fmt.Errorf("עיבוד הקול (ffmpeg): %w", err)
 	}
 	data, err := os.ReadFile(out)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(data) == 0 {
-		return fmt.Errorf("הקול יצא ריק")
+		return 0, fmt.Errorf("הקול יצא ריק")
 	}
 	if err := y.uploadFile(ext, audioFile(base), "audio.mp3", data, true); err != nil {
-		return fmt.Errorf("העלאה לשלוחה: %w", err)
+		return 0, fmt.Errorf("העלאה לשלוחה: %w", err)
 	}
 	secs := ffprobeSeconds(out)
 	if err := y.upload(ext, introFile(base), patriotsIntro(showName, start, secs)); err != nil {
-		return fmt.Errorf("עדכון ההקראה: %w", err)
+		return secs, fmt.Errorf("עדכון ההקראה: %w", err)
 	}
-	return nil
+	return secs, nil
+}
+
+// durText: "שעה ו-33 דקות" / "47 דקות" — להדפסה.
+func durText(secs int) string {
+	if secs <= 0 {
+		return "לא ידוע"
+	}
+	h, m := secs/3600, (secs%3600)/60
+	switch {
+	case h == 0:
+		return fmt.Sprintf("%d דקות", m)
+	case h == 1 && m == 0:
+		return "שעה"
+	case h == 1:
+		return fmt.Sprintf("שעה ו-%d דקות", m)
+	case m == 0:
+		return fmt.Sprintf("%d שעות", h)
+	}
+	return fmt.Sprintf("%d שעות ו-%d דקות", h, m)
 }
 
 // patriotsIntro: "<שם>. פורסם ב 8 באוקטובר, באורך שעה ו 33 דקות." (כמו podcastIntro).
