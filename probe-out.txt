@@ -1,0 +1,52 @@
+=================== https://www.c14.co.il/archive/3396
+status=403 size=5629 final=https://www.c14.co.il/archive/3396
+-- media urls:
+-- players/cdns:
+-- episode-ish links:
+-- title:
+<title>Just a moment...
+-- json/api hints:
+=================== https://www.c14.co.il/
+status=403 size=5571 final=https://www.c14.co.il/
+-- media urls:
+-- players/cdns:
+-- episode-ish links:
+-- title:
+<title>Just a moment...
+-- json/api hints:
+=================== https://tv.c14.co.il/
+status=403 size=5570 final=https://tv.c14.co.il/
+-- media urls:
+-- players/cdns:
+-- episode-ish links:
+-- title:
+<title>Just a moment...
+-- json/api hints:
+=================== https://www.c14.co.il/vod
+status=403 size=5602 final=https://www.c14.co.il/vod
+-- media urls:
+-- players/cdns:
+-- episode-ish links:
+-- title:
+<title>Just a moment...
+-- json/api hints:
+=================== https://vod.c14.co.il/
+status=403 size=5570 final=https://tv.c14.co.il/
+-- media urls:
+-- players/cdns:
+-- episode-ish links:
+-- title:
+<title>Just a moment...
+-- json/api hints:
+=================== telegram
+c14news status=200 size=109850
+  full-program mentions: 0  patriots: 3
+<title>ערוץ 14 – Telegram
+now14 status=302 size=0
+  full-program mentions: 0  patriots: 0
+ch14news status=302 size=0
+  full-program mentions: 0  patriots: 0
+channel14 status=302 size=0
+  full-program mentions: 0  patriots: 0
+c14 status=302 size=0
+  full-program mentions: 0  patriots: 0
