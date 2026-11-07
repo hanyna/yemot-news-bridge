@@ -710,26 +710,51 @@ var haveFFmpeg = sync.OnceValue(func() bool {
 // כדי שגם פרק של שעתיים יעבור את מגבלת ההעלאה של ימות. משתנה — לבדיקות.
 var transcode = func(in, out string, maxSecs int, podcast bool) error {
 	timeout := 3 * time.Minute
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", in, "-vn", "-map", "0:a:0", "-ac", "1"}
+	base := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", in, "-vn", "-map", "0:a:0", "-ac", "1"}
+	// רשימת שרשראות פילטרים, מהמלאה לפשוטה. ffmpeg מצומצם (למשל זה של "מוריד
+	// השירים" במחשב של בעל הקו) עלול לא לכלול highpass/loudnorm ("No such filter")
+	// — אז נופלים לשרשרה הבאה, ובסוף בלי פילטרים בכלל. ב-GitHub (ffmpeg מלא)
+	// תמיד עובדת הראשונה.
+	var filters []string
+	var tail []string
 	if podcast {
 		timeout = 15 * time.Minute
 		// עוצמה אחידה גם לפרקים: הקלטה מהטלוויזיה (ערוץ 14) מגיעה חלשה (בערך -26dB) ונשמעת רע בטלפון.
 		// highpass — בלי זמזום נמוך שהטלפון ממילא לא מעביר. (פרק של שעה וחצי: כדקה-שתיים של עיבוד.)
-		args = append(args, "-ar", "16000", "-af", "highpass=f=70,loudnorm=I=-16:TP=-1.5:LRA=11", "-b:a", "32k", "-t", strconv.Itoa(podcastMaxSecs))
+		filters = []string{"highpass=f=70,loudnorm=I=-16:TP=-1.5:LRA=11", "loudnorm=I=-16:TP=-1.5:LRA=11", ""}
+		tail = []string{"-ar", "16000", "-b:a", "32k", "-t", strconv.Itoa(podcastMaxSecs)}
 	} else {
-		args = append(args, "-ar", "22050", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-b:a", "48k")
+		filters = []string{"loudnorm=I=-16:TP=-1.5:LRA=11", ""}
+		tail = []string{"-ar", "22050", "-b:a", "48k"}
 		if maxSecs > 0 {
-			args = append(args, "-t", strconv.Itoa(maxSecs))
+			tail = append(tail, "-t", strconv.Itoa(maxSecs))
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	args = append(args, out)
-	var outBuf bytes.Buffer
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	cmd.Stdout, cmd.Stderr = &outBuf, &outBuf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ffmpeg: %v: %.300s", err, strings.TrimSpace(outBuf.String()))
+	var lastErr error
+	for i, af := range filters {
+		args := append([]string{}, base...)
+		if af != "" {
+			args = append(args, "-af", af)
+		}
+		args = append(args, tail...)
+		args = append(args, out)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		var outBuf bytes.Buffer
+		cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+		cmd.Stdout, cmd.Stderr = &outBuf, &outBuf
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			if i > 0 {
+				log.Printf("הערה: ffmpeg כאן בלי הפילטר המלא — עובד בשרשרה פשוטה יותר (%d).", i+1)
+			}
+			return nil
+		}
+		msg := strings.TrimSpace(outBuf.String())
+		lastErr = fmt.Errorf("ffmpeg: %v: %.300s", err, msg)
+		if !strings.Contains(msg, "No such filter") && !strings.Contains(msg, "Filter not found") {
+			return lastErr // שגיאה אמיתית (לא פילטר חסר) — אין טעם לנסות שרשרה אחרת
+		}
 	}
-	return nil
+	return lastErr
 }

@@ -42,7 +42,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v10 (7.11.2026) — הורדה כמו מוריד השירים (force-ipv4) + שרשרת גיבויים"
+const patriotsVersion = "v11 (7.11.2026) — ffmpeg: נופל לפילטר פשוט אם highpass חסר"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
