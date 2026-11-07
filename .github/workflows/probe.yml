@@ -1,0 +1,36 @@
+name: probe-vod
+on:
+  push:
+    branches: [probe-vod]
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - run: |
+          set +e
+          exec > probe-out.txt 2>&1
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          H='Accept-Language: he-IL,he;q=0.9,en;q=0.8'
+          for u in "https://www.c14.co.il/archive/3396" "https://www.c14.co.il/" "https://tv.c14.co.il/" "https://www.c14.co.il/vod" "https://vod.c14.co.il/"; do
+            echo "=================== $u"
+            curl -sS -L -m 30 -A "$UA" -H "$H" -o page.html -w "status=%{http_code} size=%{size_download} final=%{url_effective}\n" "$u"
+            echo "-- media urls:"; grep -oE 'https?://[^"'"'"' <>]+\.(m3u8|mp4|mpd)[^"'"'"' <>]*' page.html | sort -u | head -20
+            echo "-- players/cdns:"; grep -oiE '(redge|cdn-redge|kaltura|jwplayer|jwplatform|brightcove|vimeo|youtube\.com/embed|youtube-nocookie|player\.[a-z0-9.-]+\.[a-z]+|wowza|akamai|cloudfront)[^"'"'"' <>]{0,100}' page.html | sort -u | head -25
+            echo "-- episode-ish links:"; grep -oE 'href="[^"]*(archive|vod|video|item|watch|episode|program)[^"]*"' page.html | sort -u | head -30
+            echo "-- title:"; grep -oE '<title>[^<]*' page.html | head -2
+            echo "-- json/api hints:"; grep -oiE '(api\.[a-z0-9.-]+c14[^"'"'"' <>]{0,80}|/api/[a-zA-Z0-9/_-]{3,60}|__NEXT_DATA__|window\.__[A-Z_]+)' page.html | sort -u | head -20
+          done
+          echo "=================== telegram"
+          for c in c14news now14 ch14news channel14 c14; do
+            curl -sS -m 20 -A "$UA" "https://t.me/s/$c" -o tg.html -w "$c status=%{http_code} size=%{size_download}\n"
+            echo "  full-program mentions: $(grep -c 'התוכנית המלאה' tg.html)  patriots: $(grep -c 'הפטריוטים' tg.html)"
+            grep -oE '<title>[^<]*' tg.html | head -1
+          done
+          exit 0
+      - run: |
+          git config user.name probe && git config user.email probe@none
+          git add probe-out.txt && git commit -qm "probe output [skip ci]" && git push
