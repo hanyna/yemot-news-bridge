@@ -21,6 +21,7 @@ package main
 //   FFMPEG_DIR      תיקיית ffmpeg.exe / ffprobe.exe / yt-dlp.exe (אם לא ב-PATH)
 //   YTDLP           שם/נתיב yt-dlp (ברירת מחדל yt-dlp)
 //   YT_COOKIES_BROWSER  דפדפן לעוגיות (chrome/edge/firefox) אם יוטיוב מבקש אימות
+//   YT_COOKIES      קובץ cookies.txt (לשרת בלי דפדפן; קודם ל-YT_COOKIES_BROWSER)
 //   PATRIOTS_STATE_DIR  איפה נשמר סימון "כבר הועלה" (ברירת מחדל: ליד ה-exe)
 
 import (
@@ -33,6 +34,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +44,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v12 (7.11.2026) — מדפיס את אורך התוכנית שעלתה"
+const patriotsVersion = "v13 (8.11.2026) — רץ גם בשרת לינוקס (ענן), עוגיות מקובץ YT_COOKIES"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
@@ -124,7 +126,7 @@ func patriotsMain() {
 	channelBase := envOr("PATRIOTS_CHANNEL", "https://www.youtube.com/@c14news")
 	channelBase = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(channelBase, "/"), "/videos"), "/streams")
 	channelName := envOr("PATRIOTS_CHANNEL_NAME", "C14") // שם הערוץ כפי שיוטיוב מציג — לסינון תוצאות חיפוש
-	showName := envOr("PATRIOTS_SHOW", "הפטריוטים")     // בערוץ יש גם תוכניות אחרות עם "התוכנית המלאה"
+	showName := envOr("PATRIOTS_SHOW", "הפטריוטים")      // בערוץ יש גם תוכניות אחרות עם "התוכנית המלאה"
 	now := time.Now().In(loc)
 
 	var vids []c14Video
@@ -319,7 +321,7 @@ func parentExt(ext string) string {
 // לדיווח המצב ב-GitHub, כדי שיופיע בדאשבורד. כישלון כאן לא נורא (רק הדיווח).
 func writePatriotsStatus(y *yemot, ext string, done, skipped, failed int, lastReplaced string, lastSecs int, found []string) {
 	b, _ := json.Marshal(map[string]any{
-		"last_run": time.Now().UTC().Format(time.RFC3339),
+		"last_run":      time.Now().UTC().Format(time.RFC3339),
 		"last_replaced": lastReplaced, "last_duration_sec": lastSecs,
 		"done": done, "skipped": skipped, "failed": failed,
 		"found": found,
@@ -416,6 +418,22 @@ func patriotsTransport() http.RoundTripper {
 // לקחה ~3 דק' *בלי קשר לכמות* (10 סרטונים = 3 דק', 2,500 = 3 דק') — תקורה קבועה
 // של בקשה שלא נענית + ניסיונות חוזרים. מתייאשים אחרי 10 שניות, פחות ניסיונות;
 // הקוד שלנו ממילא מנסה שוב ברמה שלו.
+// ytCookieArgs: עוגיות ליוטיוב. בשרת (לינוקס, בלי דפדפן) — קובץ cookies.txt
+// (YT_COOKIES, פורמט Netscape שמייצאים מתוסף "Get cookies.txt"); במחשב —
+// ישירות מהדפדפן (YT_COOKIES_BROWSER). קובץ קודם לדפדפן.
+func ytCookieArgs() []string {
+	if f := strings.TrimSpace(os.Getenv("YT_COOKIES")); f != "" {
+		if _, err := os.Stat(f); err == nil {
+			return []string{"--cookies", f}
+		}
+		log.Printf("YT_COOKIES=%s לא נמצא — ממשיכים בלי עוגיות", f)
+	}
+	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
+		return []string{"--cookies-from-browser", b}
+	}
+	return nil
+}
+
 func ytFastFlags() []string {
 	return []string{"--force-ipv4", "--socket-timeout", "10", "--retries", "2", "--extractor-retries", "1"}
 }
@@ -484,9 +502,7 @@ func ytdlpSearchDay(ytdlp, show, channelName string, d time.Time) []c14Video {
 	if patriotsInsecure {
 		args = append(args, "--no-check-certificate")
 	}
-	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
-		args = append(args, "--cookies-from-browser", b)
-	}
+	args = append(args, ytCookieArgs()...)
 	args = append(args, "ytsearch5:"+q)
 	// עד 2 ניסיונות; לכל אחד 6 דקות (ב-6.11 חיפוש נהרג בדיוק אחרי 2:00 — timeout).
 	for try := 1; try <= 2; try++ {
@@ -552,9 +568,7 @@ func ytdlpList(ytdlp, url string, limit int) ([]c14Video, error) {
 	if patriotsInsecure {
 		args = append(args, "--no-check-certificate")
 	}
-	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
-		args = append(args, "--cookies-from-browser", b)
-	}
+	args = append(args, ytCookieArgs()...)
 	args = append(args, url)
 
 	// קריאת 2600+ סרטונים על חיבור מסונן יכולה לקחת זמן — נותנים 6 דקות, ועד 3
@@ -626,7 +640,7 @@ func ytdlpAudio(ytdlp, videoID, out string) error {
 	if patriotsInsecure {
 		common = append(common, "--no-check-certificate") // נטפרי/רימון
 	}
-	cookies := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER"))
+	cookies := ytCookieArgs()
 
 	type attempt struct {
 		name string
@@ -641,11 +655,11 @@ func ytdlpAudio(ytdlp, videoID, out string) error {
 		{"לקוח tv", []string{"-f", "bestaudio/best",
 			"--extractor-args", "youtube:player_client=tv"}},
 	}
-	if cookies != "" {
+	if len(cookies) > 0 {
 		for i := range attempts { // המשתמש ביקש עוגיות — בכל הניסיונות
-			attempts[i].args = append(attempts[i].args, "--cookies-from-browser", cookies)
+			attempts[i].args = append(attempts[i].args, cookies...)
 		}
-	} else {
+	} else if runtime.GOOS == "windows" {
 		// ניסיון אחרון: עוגיות מדפדפן מותקן (אם יש) — בקשות מזוהות נחסמות פחות.
 		for _, b := range []string{"chrome", "edge", "firefox"} {
 			attempts = append(attempts, attempt{"עוגיות מ-" + b,

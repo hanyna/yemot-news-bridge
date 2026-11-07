@@ -101,6 +101,8 @@ $ffLine
 PATRIOTS_INSECURE_TLS=on
 # אם יוטיוב מבקש אימות ('Sign in to confirm') — כתבו כאן את הדפדפן: chrome / edge / firefox
 YT_COOKIES_BROWSER=
+# או קובץ cookies.txt מיוצא (למשל C:\cookies.txt) — קודם לדפדפן
+YT_COOKIES=
 "@ | Set-Content -Path $env1 -Encoding UTF8
 Write-Host "✓ הגדרות נשמרו: $env1"
 
