@@ -126,6 +126,14 @@ var (
 // אימוג'ים וסמלים שהמנוע מקריא כמילים (כוכבית, סולמית...), מחליף קיצורים
 // לפי מילון ההגייה, והופך ירידות שורה לנקודה — קובץ TTS צריך להיות רצף
 // טקסט אחד פשוט.
+// isNiqqud: סימני ניקוד עבריים (שווא, פתח, דגש, נקודת שין...) — נשארים בטקסט.
+func isNiqqud(r rune) bool {
+	return r >= 0x05B0 && r <= 0x05C7 && r != 0x05BE && r != 0x05C0 && r != 0x05C3 && r != 0x05C6
+}
+
+// isTaam: טעמי המקרא (U+0591–U+05AF) — נשמטים.
+func isTaam(r rune) bool { return r >= 0x0591 && r <= 0x05AF }
+
 func cleanForSpeech(s string) string {
 	s = quoteLike.Replace(s)
 	s = reURL.ReplaceAllString(s, " ")
@@ -144,6 +152,12 @@ func cleanForSpeech(s string) string {
 			b.WriteString(". ")
 		case unicode.IsLetter(r), unicode.IsDigit(r):
 			b.WriteRune(r)
+		case isNiqqud(r):
+			// ניקוד (פסוקים, ציטוטים, שמות) נשאר צמוד לאות — אחרת המילה מתפרקת
+			// לאותיות בודדות ("ב ר אש ית") והקול מקריא אותה מעוותת.
+			b.WriteRune(r)
+		case isTaam(r):
+			// טעמי המקרא — נשמטים (לא משפיעים על ההגייה, ומבלבלים את הקול).
 		case unicode.IsSpace(r):
 			b.WriteRune(' ')
 		case strings.ContainsRune(".,!?:;()'\"-–—/", r):

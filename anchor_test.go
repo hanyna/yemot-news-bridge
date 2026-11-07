@@ -114,3 +114,21 @@ func TestStoneThrowing(t *testing.T) {
 		}
 	}
 }
+
+// TestCleanKeepsNiqqud: טקסט מנוקד (פסוק, ציטוט) נשאר מילים שלמות — לא מתפרק
+// לאותיות בודדות. טעמי המקרא וסוף-פסוק נשמטים.
+func TestCleanKeepsNiqqud(t *testing.T) {
+	got := cleanForSpeech("בְּרֵאשִׁ֖ית בָּרָ֣א אֱלֹהִ֑ים׃ הַלְלוּיָהּ 🔥")
+	if got != "בְּרֵאשִׁית בָּרָא אֱלֹהִים הַלְלוּיָהּ" {
+		t.Fatalf("%q", got)
+	}
+	if got := cleanForSpeech("בֵּית־לֶחֶם"); got != "בֵּית לֶחֶם" {
+		t.Fatalf("maqaf: %q", got)
+	}
+	// השמות המנוקדים שהקול מקבל עוברים את הניקוי כמו שהם.
+	for _, n := range speechNames {
+		if cleanForSpeech(n) != n {
+			t.Fatalf("name %q → %q", n, cleanForSpeech(n))
+		}
+	}
+}
