@@ -42,7 +42,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v9 (6.11.2026) — מתייאש מהר מבקשות חסומות (מהיר)"
+const patriotsVersion = "v10 (7.11.2026) — הורדה כמו מוריד השירים (force-ipv4) + שרשרת גיבויים"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
@@ -386,7 +386,7 @@ func patriotsTransport() http.RoundTripper {
 // של בקשה שלא נענית + ניסיונות חוזרים. מתייאשים אחרי 10 שניות, פחות ניסיונות;
 // הקוד שלנו ממילא מנסה שוב ברמה שלו.
 func ytFastFlags() []string {
-	return []string{"--socket-timeout", "10", "--retries", "2", "--extractor-retries", "1"}
+	return []string{"--force-ipv4", "--socket-timeout", "10", "--retries", "2", "--extractor-retries", "1"}
 }
 
 // utf8Env: מכריח את yt-dlp (פייתון) להוציא UTF-8 ל-pipe. בלי זה, בווינדוס
@@ -576,38 +576,96 @@ func ytdlpList(ytdlp, url string, limit int) ([]c14Video, error) {
 }
 
 // ytdlpAudio מוריד את הקול של סרטון יוטיוב לקובץ MP3 (דרך yt-dlp + ffmpeg).
+//
+// ב-7.11 ההורדה נכשלה ב-"HTTP Error 403: Forbidden" על קובץ הקול (לקוח android_vr,
+// פורמט 251) — בעוד שהחיפוש עבד, ו"מוריד השירים" מוריד באותו מחשב בלי בעיה.
+// ההבדל: מוריד השירים משתמש ב---force-ipv4 (כל הבקשות באותו נתיב — כתובות
+// ההורדה של יוטיוב קשורות ל-IP, ובסינון הנתיב יכול להתפצל → 403), בלקוחות
+// android,web (לא android_vr), וביותר ניסיונות. הניסיון הראשון כאן הוא בדיוק
+// המתכון הזה; אם גם הוא נחסם — שרשרת דרכים אחרות (m4a/לקוח web, tv, עוגיות).
 func ytdlpAudio(ytdlp, videoID, out string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
-	args := []string{
-		"--no-playlist", "--no-progress", "--no-warnings",
-		"-f", "bestaudio/best",
+	base := strings.TrimSuffix(out, ".mp3")
+	common := []string{
+		"--no-playlist", "--no-progress", "--force-ipv4",
 		"-x", "--audio-format", "mp3", "--audio-quality", "0",
-		"-o", strings.TrimSuffix(out, ".mp3") + ".%(ext)s",
-		"--socket-timeout", "15", "--retries", "3", "--fragment-retries", "3",
+		"-o", base + ".%(ext)s",
+		"--socket-timeout", "20", "--retries", "10", "--fragment-retries", "10", "--extractor-retries", "3",
+		"--throttled-rate", "100K",
 	}
 	if patriotsInsecure {
-		args = append(args, "--no-check-certificate") // נטפרי/רימון
+		common = append(common, "--no-check-certificate") // נטפרי/רימון
 	}
-	if b := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER")); b != "" {
-		args = append(args, "--cookies-from-browser", b)
+	cookies := strings.TrimSpace(os.Getenv("YT_COOKIES_BROWSER"))
+
+	type attempt struct {
+		name string
+		args []string
 	}
-	args = append(args, "https://www.youtube.com/watch?v="+videoID)
-	cmd := exec.CommandContext(ctx, ytdlp, args...)
-	cmd.Env = utf8Env()
-	outBuf := &strings.Builder{}
-	cmd.Stdout, cmd.Stderr = outBuf, outBuf
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(outBuf.String())
-		if strings.Contains(msg, "Sign in to confirm") || strings.Contains(msg, "bot") {
-			return fmt.Errorf("יוטיוב ביקש אימות — הגדירו YT_COOKIES_BROWSER (למשל chrome): %v: %.300s", err, msg)
+	attempts := []attempt{
+		{"כמו מוריד השירים (android,web)", []string{"-f", "bestaudio/best",
+			"--extractor-args", "youtube:player_client=android,web"}},
+		{"m4a דרך לקוח web", []string{"-f", "140/bestaudio[ext=m4a]/bestaudio/best",
+			"--extractor-args", "youtube:player_client=web_safari,web"}},
+		{"ברירת מחדל של yt-dlp", []string{"-f", "bestaudio/best"}},
+		{"לקוח tv", []string{"-f", "bestaudio/best",
+			"--extractor-args", "youtube:player_client=tv"}},
+	}
+	if cookies != "" {
+		for i := range attempts { // המשתמש ביקש עוגיות — בכל הניסיונות
+			attempts[i].args = append(attempts[i].args, "--cookies-from-browser", cookies)
 		}
-		return fmt.Errorf("yt-dlp: %v: %.400s", err, msg)
+	} else {
+		// ניסיון אחרון: עוגיות מדפדפן מותקן (אם יש) — בקשות מזוהות נחסמות פחות.
+		for _, b := range []string{"chrome", "edge", "firefox"} {
+			attempts = append(attempts, attempt{"עוגיות מ-" + b,
+				[]string{"-f", "bestaudio/best", "--extractor-args", "youtube:player_client=android,web",
+					"--cookies-from-browser", b}})
+		}
 	}
-	if _, err := os.Stat(out); err != nil {
-		return fmt.Errorf("yt-dlp לא יצר קובץ קול: %.300s", strings.TrimSpace(outBuf.String()))
+
+	var fails []string
+	for i, a := range attempts {
+		// ניקוי שאריות מניסיון קודם (קבצי .part וכו').
+		if m, _ := filepath.Glob(base + ".*"); len(m) > 0 {
+			for _, f := range m {
+				os.Remove(f)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		args := append(append([]string{}, common...), a.args...)
+		args = append(args, "https://www.youtube.com/watch?v="+videoID)
+		cmd := exec.CommandContext(ctx, ytdlp, args...)
+		cmd.Env = utf8Env()
+		outBuf := &strings.Builder{}
+		cmd.Stdout, cmd.Stderr = outBuf, outBuf
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			if _, e := os.Stat(out); e == nil {
+				if i > 0 {
+					log.Printf("ההורדה הצליחה בניסיון %d (%s).", i+1, a.name)
+				}
+				return nil
+			}
+			err = fmt.Errorf("לא נוצר קובץ קול")
+		}
+		short := lastLines(strings.TrimSpace(outBuf.String()), 2)
+		fails = append(fails, fmt.Sprintf("%s: %.200s", a.name, short))
+		log.Printf("הורדה (%s) נכשלה: %v — %.220s", a.name, err, short)
 	}
-	return nil
+	return fmt.Errorf("כל %d דרכי ההורדה נכשלו: %s", len(attempts), strings.Join(fails, " | "))
+}
+
+// lastLines: n השורות האחרונות שאינן ריקות (ה-ERROR האמיתי, בלי כל הפלט).
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	var keep []string
+	for i := len(lines) - 1; i >= 0 && len(keep) < n; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			keep = append([]string{t}, keep...)
+		}
+	}
+	return strings.Join(keep, " / ")
 }
 
 // ffprobeSeconds — אורך קובץ הקול בשניות (0 אם לא הצליח).
