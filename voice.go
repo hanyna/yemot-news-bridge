@@ -133,6 +133,8 @@ type speaker struct {
 	pausedTil  time.Time
 	bg         bool
 	warned     map[string]bool
+	names      map[string][]byte // קול|שם → הקול של שם הכתב (namevoice.go)
+	nameFails  map[string]int
 }
 
 // newSpeaker: nil כשאין מפתח או ש-SPEECH=off.
@@ -180,7 +182,8 @@ func newSpeakerKeys(keys []string, voice, menuVoice, mode string) *speaker {
 		menuVoice = "Puck"
 	}
 	return &speaker{keys: ks, voice: voice, menuVoice: menuVoice, client: &http.Client{Timeout: speechTimeout},
-		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, noLang: map[string]bool{}, noSys: map[string]bool{}, noStyle: map[string]bool{}, styleOK: map[string]bool{}, warned: map[string]bool{}}
+		jobs: map[string]*speechJob{}, modelPause: map[[2]int]time.Time{}, noLang: map[string]bool{}, noSys: map[string]bool{}, noStyle: map[string]bool{}, styleOK: map[string]bool{}, warned: map[string]bool{},
+		names: map[string][]byte{}, nameFails: map[string]int{}}
 }
 
 // add: קול להודעה בשלוחה. אותה הודעה בכמה שלוחות (1 ושלוחת הכתב) — קובץ קול
@@ -325,7 +328,7 @@ func (s *speaker) step(cfg *config) bool {
 	start := time.Now()
 	data, model, err := job.data, "", error(nil)
 	if data == nil {
-		data, model, err = s.synthesize(job.text, job.voice)
+		data, model, err = s.render(job) // שם הכתב כקטע קבוע + ההודעה (namevoice.go)
 		if err == nil {
 			data, err = prepareSpeech(data)
 		}

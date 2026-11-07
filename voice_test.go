@@ -477,3 +477,86 @@ func TestSpeechHebrewLanguage(t *testing.T) {
 		}
 	}
 }
+
+// TestNameClip: שם הכתב נוצר פעם אחת לבדו ומודבק לפני כל הודעה; ההודעה עצמה
+// נוצרת בלי השם. שלוחת הכתב (בלי שם) — כמו קודם.
+func TestNameClip(t *testing.T) {
+	g := &fakeTTS{}
+	withFakeTTS(t, g)
+	oldMin := nameMinSec
+	nameMinSec = 0 // ה-WAV המזויף קצר מאוד
+	defer func() { nowFunc, nameMinSec = time.Now, oldMin }()
+	loc, _ := time.LoadLocation("Asia/Jerusalem")
+	day := time.Date(2026, 9, 24, 20, 0, 0, 0, loc)
+	nowFunc = func() time.Time { return day }
+	f := archiveServer([]FeedItem{
+		{ID: 1, Channel: "a", TS: day.Add(-time.Hour).Unix(), Text: "הודעה ראשונה"},
+		{ID: 2, Channel: "a", TS: day.Add(-30 * time.Minute).Unix(), Text: "הודעה שנייה"},
+	}, `{"channels":[{"name":"a","title":"אלישע ירד"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg := newTestCfg(srv)
+	cfg.speech = newSpeaker("GKEY", "", "on")
+	if err := syncOnce(&cfg, &state{}); err != nil {
+		t.Fatal(err)
+	}
+	gap := strings.Repeat("\x00", 16800) // 0.35 שניות ב-24000 הרץ, 16 ביט
+	want := "AUDIO:PHONE:" + voiceText("אלישע ירד") + "." + gap + "בשעה 7 בערב. הודעה ראשונה;convert=1"
+	if got := f.files["ivr2:/1/10001.wav"]; got != want {
+		t.Fatalf("first: %q", got)
+	}
+	if got := f.files["ivr2:/1/10003.wav"]; !strings.HasPrefix(got, "AUDIO:PHONE:"+voiceText("אלישע ירד")+"."+gap+"בשעה 7 וחצי בערב. הודעה שנייה") {
+		t.Fatalf("second: %q", got)
+	}
+	// שלוחת הכתב: אותו קול (עם השם) — כמו קודם, קובץ אחד לשתי השלוחות
+	if f.files["ivr2:/2/1/10001.wav"] != f.files["ivr2:/1/10001.wav"] {
+		t.Fatalf("reporter ext: %q", f.files["ivr2:/2/1/10001.wav"])
+	}
+	// השם נוצר פעם אחת בלבד; ההודעות נוצרו בלי השם
+	var names, bodies int
+	for _, txt := range g.texts {
+		switch {
+		case txt == voiceText("אלישע ירד")+".":
+			names++
+		case strings.HasPrefix(txt, "בשעה "):
+			bodies++
+		default:
+			t.Fatalf("unexpected text sent to voice: %q", txt)
+		}
+	}
+	if names != 1 || bodies != 2 {
+		t.Fatalf("names=%d bodies=%d texts=%q", names, bodies, g.texts)
+	}
+}
+
+func TestSplitNamed(t *testing.T) {
+	n, r, ok := splitNamed("אלישע ירד, בשעה 7 בערב. שלום, עולם")
+	if !ok || n != "אלישע ירד" || r != "בשעה 7 בערב. שלום, עולם" {
+		t.Fatalf("%q %q %v", n, r, ok)
+	}
+	if _, _, ok := splitNamed("בשעה 7 בערב. בלי שם"); ok {
+		t.Fatal("no comma should not split")
+	}
+	if _, _, ok := splitNamed(strings.Repeat("א", 70) + ", בשעה"); ok {
+		t.Fatal("too long")
+	}
+}
+
+func TestJoinWav(t *testing.T) {
+	a := asWav([]byte("AB"), "audio/L16;rate=8000")
+	b := asWav([]byte("CD"), "audio/L16;rate=8000")
+	out, err := joinWav(a, b, 1*time.Millisecond) // 8 דגימות = 16 בייט שקט
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := wavPCM(out)
+	if err != nil || p.rate != 8000 || string(p.data) != "AB"+strings.Repeat("\x00", 16)+"CD" {
+		t.Fatalf("%v %+v %q", err, p, p.data)
+	}
+	if sec, _ := wavSeconds(out); sec <= 0 {
+		t.Fatal("seconds")
+	}
+	if _, err := joinWav(a, asWav([]byte("CD"), "audio/L16;rate=24000"), 0); err == nil {
+		t.Fatal("different rate should fail")
+	}
+}
