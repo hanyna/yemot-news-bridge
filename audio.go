@@ -719,9 +719,18 @@ var transcode = func(in, out string, maxSecs int, podcast bool) error {
 	var tail []string
 	if podcast {
 		timeout = 15 * time.Minute
+		// על מכונה איטית (שרת ענן חינמי) loudnorm על פרק של שעה וחצי יכול לקחת
+		// יותר מ-15 דק' ואז הקוד הורג את ffmpeg ("signal: killed"). אפשר להאריך
+		// עם XCODE_TIMEOUT_MIN, ולהחליף את ה-nормализация הכבדה (loudnorm) בקלה
+		// ומהירה (dynaudnorm) עם XCODE_PODCAST_NORM=dynaudnorm. ברירת המחדל (גשר
+		// ב-GitHub, ffmpeg מלא ומהיר) נשארת loudnorm — שם ההמרה ממילא דקה-שתיים.
+		if m := envInt("XCODE_TIMEOUT_MIN", 0); m > 0 {
+			timeout = time.Duration(m) * time.Minute
+		}
 		// עוצמה אחידה גם לפרקים: הקלטה מהטלוויזיה (ערוץ 14) מגיעה חלשה (בערך -26dB) ונשמעת רע בטלפון.
-		// highpass — בלי זמזום נמוך שהטלפון ממילא לא מעביר. (פרק של שעה וחצי: כדקה-שתיים של עיבוד.)
-		filters = []string{"highpass=f=70,loudnorm=I=-16:TP=-1.5:LRA=11", "loudnorm=I=-16:TP=-1.5:LRA=11", ""}
+		// highpass — בלי זמזום נמוך שהטלפון ממילא לא מעביר.
+		norm := envOr("XCODE_PODCAST_NORM", "loudnorm=I=-16:TP=-1.5:LRA=11")
+		filters = []string{"highpass=f=70," + norm, norm, "loudnorm=I=-16:TP=-1.5:LRA=11", ""}
 		tail = []string{"-ar", "16000", "-b:a", "32k", "-t", strconv.Itoa(podcastMaxSecs)}
 	} else {
 		filters = []string{"loudnorm=I=-16:TP=-1.5:LRA=11", ""}
