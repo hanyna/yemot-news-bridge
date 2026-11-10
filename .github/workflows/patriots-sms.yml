@@ -1,0 +1,39 @@
+name: Patriots SMS alert
+
+# התראת SMS יומית דרך ימות המשיח כשתוכנית הפטריוטים לא עלתה (scripts/patriots_sms.py).
+# שולח SMS רק אם משהו לא תקין: פרק נכשל בהחלפה, או שכלי הפטריוטים (ה-VM) לא רץ.
+# אם הכול תקין — שקט. מספר היעד נשמר ב-Secret בשם SMS_TO (לא בקוד).
+#
+# השעה: 06:20 UTC = 08:20 בחורף / 09:20 בקיץ (שעון ישראל) — אחרי ריצת הבוקר של
+# ה-VM (06:30 שעון ישראל) ואחרי שהגשר הספיק לקרוא את הסטטוס. GitHub עובד לפי UTC.
+on:
+  schedule:
+    - cron: "20 6 * * *"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "שליחת SMS בדיקה מיד (1 = כן)"
+        required: false
+        default: "0"
+
+permissions:
+  issues: read
+
+concurrency:
+  group: patriots-sms
+
+jobs:
+  sms:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check patriots and alert by SMS
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+          YEMOT_SMS_TOKEN: ${{ secrets.YEMOT_SMS_TOKEN }}   # אופציונלי: מספר-מערכת:סיסמה
+          SMS_TO: ${{ secrets.SMS_TO }}                     # חובה: מספר היעד
+          SMS_FROM: ${{ secrets.SMS_FROM }}                 # אופציונלי: שם/מספר שולח
+          SMS_TEST: ${{ github.event.inputs.test }}
+        run: python3 scripts/patriots_sms.py
