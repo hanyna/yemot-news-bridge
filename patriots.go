@@ -44,7 +44,7 @@ const patriotsDefaultPlaylist = "PL8E54R76rowCcCOn_HQf36o1RF3_oD3z4"
 
 // patriotsVersion נכתב בתחילת כל ריצה — כדי שתמיד יהיה ברור איזו גרסה רצה
 // (היו מקרים שהותקנה גרסה ישנה מ-zip באותו שם).
-const patriotsVersion = "v13 (8.11.2026) — רץ גם בשרת לינוקס (ענן), עוגיות מקובץ YT_COOKIES"
+const patriotsVersion = "v14 (11.11.2026) — סיבת הכישלון נשמרת בסטטוס (errors) ומגיעה לדוח מצב הקו"
 
 // patriotsMain — נקודת הכניסה של תת-הפקודה (מ-main.go).
 func patriotsMain() {
@@ -243,6 +243,7 @@ func patriotsMain() {
 	done, skipped, failed := 0, 0, 0
 	lastReplaced := ""
 	lastSecs := 0
+	errs := map[string]string{} // תאריך → סיבת הכישלון (מקוצרת), לדוח המצב
 	seen := map[string]bool{}
 	for _, v := range vids {
 		if !c14IsFull(v.title) {
@@ -295,6 +296,7 @@ func patriotsMain() {
 		if err != nil {
 			log.Printf("%s: ההחלפה בגרסה המוכנה נכשלה (נשארת ההקלטה): %v", day, err)
 			failed++
+			errs[day] = shortErr(err)
 			continue
 		}
 		_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)+"\n"+v.id+"\n"+strconv.Itoa(secs)+"\n"), 0o644)
@@ -306,7 +308,16 @@ func patriotsMain() {
 	log.Printf("סיום: %d הוחלפו, %d דילוגים, %d נכשלו.", done, skipped, failed)
 
 	// שומרים סטטוס על הקו כדי שהדאשבורד (דרך הגשר) יראה שהכלי רץ ומתי הוחלף לאחרונה.
-	writePatriotsStatus(y, parentExt(ext), done, skipped, failed, lastReplaced, lastSecs, fullDates)
+	writePatriotsStatus(y, parentExt(ext), done, skipped, failed, lastReplaced, lastSecs, fullDates, errs)
+}
+
+// shortErr: סיבת כישלון מקוצרת לשורה אחת (עד 400 תווים) — נכנסת לסטטוס ולדוח.
+func shortErr(err error) string {
+	s := strings.Join(strings.Fields(err.Error()), " ")
+	if r := []rune(s); len(r) > 400 {
+		s = string(r[:400]) + "…"
+	}
+	return s
 }
 
 // parentExt: שלוחת האב ("3/3" → "3"); בלי "/" מחזיר כמו שהוא.
@@ -319,8 +330,10 @@ func parentExt(ext string) string {
 
 // writePatriotsStatus מעלה patriots-status.json לשלוחה — הגשר קורא אותו ומצרף
 // לדיווח המצב ב-GitHub, כדי שיופיע בדאשבורד. כישלון כאן לא נורא (רק הדיווח).
-func writePatriotsStatus(y *yemot, ext string, done, skipped, failed int, lastReplaced string, lastSecs int, found []string) {
+func writePatriotsStatus(y *yemot, ext string, done, skipped, failed int, lastReplaced string, lastSecs int, found []string, errs map[string]string) {
 	b, _ := json.Marshal(map[string]any{
+		"version":       strings.SplitN(patriotsVersion, " ", 2)[0],
+		"errors":        errs, // למה נכשל כל תאריך — כדי שיהיה אפשר לאבחן בלי להיכנס לשרת
 		"last_run":      time.Now().UTC().Format(time.RFC3339),
 		"last_replaced": lastReplaced, "last_duration_sec": lastSecs,
 		"done": done, "skipped": skipped, "failed": failed,
