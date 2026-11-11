@@ -4,11 +4,13 @@ name: Patriots SMS alert
 # שולח SMS רק אם משהו לא תקין: פרק נכשל בהחלפה, או שכלי הפטריוטים (ה-VM) לא רץ.
 # אם הכול תקין — שקט. מספר היעד נשמר ב-Secret בשם SMS_TO (לא בקוד).
 #
-# השעה: 06:20 UTC = 08:20 בחורף / 09:20 בקיץ (שעון ישראל) — אחרי ריצת הבוקר של
-# ה-VM (06:30 שעון ישראל) ואחרי שהגשר הספיק לקרוא את הסטטוס. GitHub עובד לפי UTC.
+# השעה: 00:40 שעון ישראל — אחרי שריצת הלילה של ה-VM (23:40) מסתיימת (בערך 00:05)
+# והגשר קורא את הסטטוס. GitHub עובד לפי UTC ואין לו שעון קיץ, לכן שתי שעות:
+# 22:40 UTC (חורף) ו-21:40 UTC (קיץ), והצעד הראשון מדלג על זו שלא נופלת על 00:30–01:30.
 on:
   schedule:
-    - cron: "20 6 * * *"
+    - cron: "40 22 * * *"
+    - cron: "40 21 * * *"
   workflow_dispatch:
     inputs:
       test:
@@ -27,8 +29,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Only around 00:40 Israel time
+        id: when
+        run: |
+          m=$(( 10#$(TZ=Asia/Jerusalem date +%H) * 60 + 10#$(TZ=Asia/Jerusalem date +%M) ))
+          if [ "${{ github.event_name }}" != "schedule" ] || { [ "$m" -ge 30 ] && [ "$m" -lt 90 ]; }; then
+            echo "go=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "לא השעה (שעון ישראל) — מדלג."
+          fi
       - uses: actions/checkout@v5
+        if: steps.when.outputs.go == '1'
       - name: Check patriots and alert by SMS
+        if: steps.when.outputs.go == '1'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
