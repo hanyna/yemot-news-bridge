@@ -157,6 +157,11 @@ def main():
         failed = int(p.get("failed") or 0)
         last_run = parse_time(p.get("last_run"))
         found = p.get("found") or []
+        if failed > 0 and "version" not in p:
+            # סטטוס בלי version = נכתב מגרסה ישנה (לפני v14), למשל הכלי הישן שעוד
+            # מותקן במחשב הביתי ודורס את הסטטוס של השרת. לא מתריעים על סמך זה.
+            print(f"failed={failed} בסטטוס בלי version (כלי ישן, לא השרת) — מתעלם.")
+            failed = 0
         if failed > 0:
             dates = ", ".join(str(d) for d in found[:3])
             tail = f" ({dates})" if dates else ""
