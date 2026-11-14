@@ -38,7 +38,7 @@ const (
 	menuMusicMarker  = "menu-music.txt" // בשלוחה הראשית: החתימה של השיר שבתפריט
 	menuMusicNone    = "none"
 	menuMusicMaxSize = 40 << 20
-	menuMusicTail    = 2.0 // כמה שניות השיר ממשיך (ודועך) אחרי סוף התפריט
+	menuMusicTail    = 2.0 // ברירת מחדל: כמה שניות השיר ממשיך (ודועך) אחרי סוף התפריט
 )
 
 type menuMusic struct {
@@ -46,6 +46,7 @@ type menuMusic struct {
 	name  string
 	intro float64 // שניות של שיר בעוצמה מלאה לפני התפריט
 	level float64 // עוצמת השיר מתחת לדיבור (0..1)
+	tail  float64 // שניות שהשיר ממשיך אחרי סוף התפריט (0 = ברירת המחדל)
 	sig   string
 }
 
@@ -84,6 +85,28 @@ func loadMenuMusic(src, intro, level string) *menuMusic {
 	h := sha256.Sum256(data)
 	m.sig = fmt.Sprintf("%x|%g|%g", h[:6], m.intro, m.level)
 	return m
+}
+
+// setTail: כמה שניות השיר ממשיך להתנגן אחרי שהתפריט נגמר (MENU_MUSIC_TAIL).
+// ריק / לא תקין = ברירת המחדל. שינוי הערך יוצר את התפריט מחדש (חלק מה-sig).
+func (m *menuMusic) setTail(s string) {
+	if m == nil {
+		return
+	}
+	t := numEnv(s, menuMusicTail, 0, 120)
+	if t == menuMusicTail {
+		return
+	}
+	m.tail = t
+	m.sig += fmt.Sprintf("|tail%g", t)
+}
+
+// tailSeconds: אורך ההמשך בפועל.
+func (m *menuMusic) tailSeconds() float64 {
+	if m.tail > 0 {
+		return m.tail
+	}
+	return menuMusicTail
 }
 
 func numEnv(s string, def, lo, hi float64) float64 {
@@ -167,17 +190,26 @@ var mixMenuMusic = func(voice []byte, m *menuMusic) ([]byte, error) {
 		return nil, err
 	}
 	intro, lvl := m.intro, m.level
-	total := intro + dur + menuMusicTail
+	tail := m.tailSeconds()
+	end := intro + dur // סוף הדיבור
+	total := end + tail
 	duck := 1.0 // שנייה של ירידה הדרגתית בעוצמה, לפני שהדיבור מתחיל
 	if intro < duck {
 		duck = intro
 	}
+	// המשך ארוך (מעל 3 שניות): אחרי הדיבור השיר חוזר לעוצמה מלאה (תוך שנייה),
+	// ממשיך להתנגן, ודועך בשתי השניות האחרונות. המשך קצר — רק דועך, כמו קודם.
+	after, fade := fmt.Sprintf("%.3f", lvl), tail
+	if tail > 3 {
+		after = fmt.Sprintf("if(lt(t\\,%.3f)\\,%.3f\\,min(1\\,%.3f+(1-%.3f)*(t-%.3f)))", end, lvl, lvl, lvl, end)
+		fade = 2
+	}
 	var vol string
 	if duck > 0 {
-		vol = fmt.Sprintf("if(lt(t\\,%.3f)\\,1\\,if(lt(t\\,%.3f)\\,1-(1-%.3f)*(t-%.3f)/%.3f\\,%.3f))",
-			intro-duck, intro, lvl, intro-duck, duck, lvl)
+		vol = fmt.Sprintf("if(lt(t\\,%.3f)\\,1\\,if(lt(t\\,%.3f)\\,1-(1-%.3f)*(t-%.3f)/%.3f\\,%s))",
+			intro-duck, intro, lvl, intro-duck, duck, after)
 	} else {
-		vol = fmt.Sprintf("%.3f", lvl)
+		vol = after
 	}
 	filter := fmt.Sprintf(
 		"[1:a]aformat=channel_layouts=mono,"+
@@ -188,7 +220,7 @@ var mixMenuMusic = func(voice []byte, m *menuMusic) ([]byte, error) {
 			"afade=t=in:d=0.3,afade=t=out:st=%.3f:d=%.3f[m];"+
 			"[0:a]aformat=channel_layouts=mono,aresample=8000,adelay=%d:all=1,apad=whole_dur=%.3f[v];"+
 			"[v][m]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[out]",
-		total, vol, intro+dur, menuMusicTail, int(intro*1000), total)
+		total, vol, total-fade, fade, int(intro*1000), total)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var buf bytes.Buffer

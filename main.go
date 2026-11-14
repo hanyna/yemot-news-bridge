@@ -237,6 +237,7 @@ func main() {
 		log.Printf("קול מוכן מראש (Gemini, קול %s, %d מפתחות): פעיל — כל הודעה עולה גם כקובץ שמע, בלי המתנה בהאזנה.", cfg.speech.voice, len(cfg.speech.keys))
 	}
 	cfg.music = loadMenuMusic(os.Getenv("MENU_MUSIC"), os.Getenv("MENU_MUSIC_INTRO"), os.Getenv("MENU_MUSIC_VOLUME"))
+	cfg.music.setTail(os.Getenv("MENU_MUSIC_TAIL"))
 	switch {
 	case cfg.music != nil && cfg.speech == nil:
 		log.Println("הערה: מוזיקה בתפריט צריכה את הקול המוכן (SPEECH=on ומפתח GEMINI_API_KEY) — בינתיים התפריט בלי מוזיקה.")
