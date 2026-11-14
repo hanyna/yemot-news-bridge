@@ -1,0 +1,27 @@
+name: Gemini line on/off
+
+# כיבוי / הפעלה של שלוחת קו ג'מיני (שלוחה 7): משנים את gemini/state.txt ל-off או on.
+# off — ההגדרה נשמרת בצד והשלוחה מפנה לתפריט הראשי; on — ההגדרה מוחזרת.
+# ראו scripts/gemini_line.py.
+on:
+  push:
+    paths:
+      - "gemini/state.txt"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yemot-gemini-line
+
+jobs:
+  toggle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Switch extension
+        env:
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+        run: python3 scripts/gemini_line.py
