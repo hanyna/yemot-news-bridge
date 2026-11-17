@@ -372,7 +372,7 @@ func fetchPodcast(link string) (string, []*podEpisode, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	req.Header.Set("User-Agent", "yemot-news-bridge (podcast feed reader)")
+	req.Header.Set("User-Agent", podcastUA)
 	resp, err := feedHTTP.Do(req)
 	if err != nil {
 		return "", nil, err

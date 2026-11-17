@@ -605,6 +605,12 @@ func fetchToFile(src, path string, maxBytes int64, timeout time.Duration) error 
 	return nil
 }
 
+// הזהות (User-Agent) בהורדות: דפדפן לסרטונים/קוליות, ושם הגשר לפרקי פודקאסט.
+const (
+	browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+	podcastUA = "yemot-news-bridge (podcast feed reader)"
+)
+
 // errDirectFailed: ההורדה הישירה מטלגרם (אחרי הפניה מהשרת) נכשלה — מנסים דרך השרת.
 var errDirectFailed = errors.New("הורדה ישירה נכשלה")
 
@@ -649,8 +655,20 @@ func downloadMediaVia(cfg *config, j *audioJob, path string, direct bool) error 
 	if err != nil {
 		return errors.New(hide(err.Error()))
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+	req.Header.Set("User-Agent", browserUA)
+	if j.kind == "p" {
+		// שרתי פודקאסטים (Buzzsprout) חוסמים ב-403 דפדפן "מזויף" שמגיע משרת,
+		// ומשרתים תוכנת פודקאסטים שמזדהה בשמה — כמו בקריאת ההזנה.
+		req.Header.Set("User-Agent", podcastUA)
+	}
 	resp, err := mediaClient.Do(req)
+	if err == nil && j.kind == "p" && resp.StatusCode == http.StatusForbidden {
+		// שרת שדווקא לא מקבל את השם שלנו: ניסיון אחד בזהות של דפדפן, כמו קודם.
+		resp.Body.Close()
+		req2 := req.Clone(ctx)
+		req2.Header.Set("User-Agent", browserUA)
+		resp, err = mediaClient.Do(req2)
+	}
 	if err != nil {
 		if direct {
 			return errDirectFailed
