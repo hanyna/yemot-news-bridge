@@ -1,0 +1,45 @@
+name: Podcast 403 probe (temporary)
+on:
+  push:
+    branches: [probe-403]
+    paths: [".github/workflows/probe-403.yml"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe
+        run: |
+          set +e
+          CHROME="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          probe() { # name, url, extra curl args...
+            n="$1"; u="$2"; shift 2
+            r=$(curl -s -m 40 -L -r 0-2047 -o /tmp/b -D /tmp/h -w "%{http_code} redirects=%{num_redirects} type=%{content_type} final=%{url_effective}" "$@" "$u")
+            echo "[$n] $r"
+            grep -i -E "^(HTTP/|location:|server:|cf-mitigated:|cf-ray:)" /tmp/h | tr -d '\r' | sed 's/^/      /'
+            case "$r" in 2*) ;; *) head -c 300 /tmp/b | tr '\n' ' '; echo;; esac
+          }
+          for u in \
+            https://www.buzzsprout.com/278171/episodes/15196257-548.mp3 \
+            https://www.buzzsprout.com/278171/episodes/15196257.mp3 \
+            https://www.buzzsprout.com/278171/episodes/18747562-887.mp3 \
+            https://www.buzzsprout.com/278171/episodes/19961759-1044.mp3 \
+            https://www.buzzsprout.com/2448765/episodes/18809353.mp3 ; do
+            echo "=================== $u"
+            probe chrome-ua "$u" -A "$CHROME"
+            probe curl-default "$u"
+            probe go-default "$u" -A "Go-http-client/2.0"
+            probe podcast-app "$u" -A "AppleCoreMedia/1.0.0.21G93 (iPhone; U; CPU OS 17_6_1 like Mac OS X; en_us)"
+            probe bridge-feed-ua "$u" -A "yemot-news-bridge (podcast feed reader)"
+            probe chrome-no-range "$u" -A "$CHROME" -r 0-
+            sleep 2
+          done
+          echo "=================== feed"
+          curl -s -m 60 -L -A "yemot-news-bridge (podcast feed reader)" -o /tmp/feed.xml -w "feed: %{http_code} size=%{size_download}\n" https://feeds.buzzsprout.com/278171.rss
+          for id in 15196257 15390549 16562231 17181815 18493554 18747562 19961759; do
+            echo "-- $id: $(grep -o "<enclosure[^>]*$id[^>]*>" /tmp/feed.xml | head -1)"
+          done
+          enc=$(grep -o "<enclosure[^>]*15196257[^>]*>" /tmp/feed.xml | head -1 | sed -E 's/.*url="([^"]+)".*/\1/' | sed 's/&amp;/\&/g')
+          if [ -n "$enc" ]; then echo "=================== enclosure $enc"; probe chrome-ua "$enc" -A "$CHROME"; probe curl-default "$enc"; fi
