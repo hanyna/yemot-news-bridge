@@ -8,7 +8,14 @@ on:
     branches: [main]
     paths:
       - "routing/config.txt"
-  workflow_dispatch: {}
+  # הרצה ידנית עם code = קוד גישה שבעל הקו בוחר. לא להשתמש ב-inputs.code בשום
+  # ביטוי בקובץ הזה (env / run) — הערך היה מודפס בלוג. הסקריפט קורא אותו לבד.
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "קוד גישה לבחירתך (4 עד 10 ספרות). ריק = בלי שינוי קוד"
+        required: false
+        default: ""
 
 permissions:
   contents: read

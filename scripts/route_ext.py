@@ -13,6 +13,10 @@
 קוד חדש: מעלים את code_version ב-routing/config.txt (1 → 2) — יוגרל קוד חדש
 ויישלח ב-SMS. שינוי המספר בלבד (phone) משאיר את הקוד הקיים.
 
+קוד שבעל הקו בוחר בעצמו: הרצה ידנית של route-ext.yml (Run workflow) עם השדה
+code. הקוד נקרא ישר מקובץ האירוע של ההרצה (לא ממשתנה סביבה), כדי שלא יודפס
+בלוג, ולא נשלח SMS — בעל הקו יודע אותו.
+
 השלוחה היא גם השלוחה של קו ג'מיני (gemini_line.py): כשקו ג'מיני פעיל בה
 (type=api) הסקריפט לא נוגע בה. ההגדרה השמורה שלו (gemini-off.ini) לא נמחקת.
 """
@@ -119,6 +123,23 @@ def send_sms(message):
     return True, ""
 
 
+def chosen_code():
+    """קוד שבעל הקו בחר — רק בהרצה ידנית (workflow_dispatch, שדה code). "" כשאין."""
+    path = os.environ.get("GITHUB_EVENT_PATH", "")
+    if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            inputs = json.load(f).get("inputs") or {}
+    except (OSError, ValueError):
+        return ""
+    code = str(inputs.get("code") or "").strip()
+    if code:
+        _hide.append(code)
+        print("::add-mask::" + code)  # GitHub מסתיר את הערך בכל הלוג מכאן והלאה
+    return code
+
+
 def new_code():
     """קוד גישה בן 4 ספרות (בלי 0 בהתחלה)."""
     return str(secrets.randbelow(9000) + 1000)
@@ -139,6 +160,9 @@ def main():
         sys.exit("routing/config.txt: ext צריך להיות מספר שלוחה")
     if want == "on" and not (phone.isdigit() and 7 <= len(phone) <= 12):
         sys.exit("routing/config.txt: phone צריך להיות מספר טלפון (ספרות בלבד)")
+    picked = chosen_code()
+    if picked and not (picked.isdigit() and 4 <= len(picked) <= 10):
+        sys.exit("קוד הגישה שנבחר צריך להיות 4 עד 10 ספרות — לא שיניתי כלום.")
 
     ini_path = f"ivr2:/{ext}/ext.ini"
     state_path = f"ivr2:/{ext}/routing-state.ini"
@@ -163,11 +187,14 @@ def main():
 
     saved = values(read(state_path))
     old_code = cv.get("password", "") if cur_type == "routing" else ""
-    keep_code = bool(old_code) and old_code.isdigit() and saved.get("code_version") == version
+    if picked:
+        keep_code = old_code == picked
+    else:
+        keep_code = bool(old_code) and old_code.isdigit() and saved.get("code_version") == version
     if keep_code and cv.get("routing_to_phone") == phone:
-        print(f"שלוחה {ext} כבר מעבירה למספר המבוקש עם קוד גישה — אין מה לשנות.")
+        print(f"שלוחה {ext} כבר מעבירה למספר המבוקש עם קוד הגישה המבוקש — אין מה לשנות.")
         return
-    code = old_code if keep_code else new_code()
+    code = picked or (old_code if keep_code else new_code())
     _hide.append(code)
 
     ini = "\n".join([
@@ -182,7 +209,9 @@ def main():
         sys.exit(err)
     print(f"שלוחה {ext} מוגדרת כהעברה ל-{phone}, נעולה בקוד גישה.")
 
-    if keep_code:
+    if picked:
+        print("קוד הגישה הוחלף לקוד שבעל הקו בחר — לא נשלח SMS.")
+    elif keep_code:
         print("קוד הגישה נשאר כמו שהיה (רק המספר השתנה) — לא נשלח SMS.")
     else:
         ok, why = send_sms(f"קו עדכוני ארץ ישראל: קוד הגישה לשלוחה {ext} הוא {code}")
