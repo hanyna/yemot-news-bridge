@@ -225,7 +225,7 @@
   הבדיקות; רק אם עברו — התיקון נכנס והגשר מופעל מחדש. תיקון שמשנה קבצי Workflow לא נכנס לבד.
 - בדיקה ותיקון שבועיים (`weekly-fix.yml`): כל מוצאי שבת (00:00 בחורף, 01:00 בקיץ) Claude רץ כאן ב-GitHub,
   בלי אישורים: קורא את הדוחות של השבוע, ומתקן באג בקוד אם יש. התיקון נכנס רק אם כל הבדיקות עוברות; שינוי ב-.github/
-  לא נכנס. בסוף נפתח Issue "דוח שבועי" (מייל). צריך Secret ‏`CLAUDE_CODE_OAUTH_TOKEN` (מ-`claude setup-token`)
+  לא נכנס. בסוף הדוח השבועי נכתב בסיכום ההרצה (Summary) — בלי Issue ובלי מייל (המייל בוטל ב-18.11.2026). צריך Secret ‏`CLAUDE_CODE_OAUTH_TOKEN` (מ-`claude setup-token`)
   או ‏`ANTHROPIC_API_KEY`. הרצה ידנית: Actions → Weekly check and fix → Run workflow.
 - `STATUS: "off"` ב-bridge.yml מכבה את הדוח.
 

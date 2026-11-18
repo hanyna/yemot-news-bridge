@@ -4,7 +4,7 @@ name: Weekly check and fix (Claude)
 # Claude רק עורך קבצים. הוא לא דוחף בעצמו: אחריו השלב "Test and apply" מריץ את כל
 # הבדיקות, ורק אם הכול עובר — התיקון נכנס ל-main והגשר מופעל מחדש. אם בדיקה נכשלת
 # — התיקון נזרק והקו ממשיך עם הקוד הקודם. שינוי בתיקייה .github/ לעולם לא נכנס.
-# בסוף נפתח Issue "דוח שבועי" — GitHub שולח עליו מייל.
+# בסוף הדוח השבועי נכתב בסיכום ההרצה (Summary) — בלי Issue ובלי מייל (בוטל 18.11.2026).
 #
 # צריך Secret אחד (Settings → Secrets and variables → Actions):
 #   CLAUDE_CODE_OAUTH_TOKEN — מהפקודה `claude setup-token` (מנוי Claude Pro/Max), או
@@ -18,7 +18,7 @@ on:
 
 permissions:
   contents: write   # לדחוף תיקון שעבר את הבדיקות
-  issues: write     # לקרוא את דוח המצב ולפתוח דוח שבועי
+  issues: write     # לקרוא את דוח המצב (נשאר כמו שהיה)
   actions: write    # לקרוא לוגים ולהפעיל את הגשר מחדש אחרי תיקון
   id-token: write
 
@@ -117,33 +117,23 @@ jobs:
             echo "applied=failed" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Weekly report issue
+      # הדוח השבועי כבר לא נשלח במייל (18.11.2026, לבקשת בעל הקו): במקום לפתוח Issue
+      # "דוח שבועי" הוא נכתב בסיכום ההרצה (Actions → ההרצה → Summary). הבדיקה והתיקון
+      # השבועיים ממשיכים כרגיל. להחזרת המייל: לשחזר את השלב "Weekly report issue" מההיסטוריה.
+      - name: Weekly report (run summary, no email)
         if: ${{ always() }}
         env:
           APPLIED: ${{ steps.apply.outputs.applied }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 - <<'EOF'
-          import json, os, urllib.request, datetime
-          repo, tok = os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"]
-          def api(m, p, b=None):
-              r = urllib.request.Request("https://api.github.com" + p, method=m,
-                  data=json.dumps(b).encode() if b is not None else None,
-                  headers={"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"})
-              with urllib.request.urlopen(r, timeout=30) as f:
-                  raw = f.read(); return json.loads(raw) if raw else None
+          import os
           try:
               report = open(os.environ["REPORT"], encoding="utf-8").read().strip()
           except OSError:
-              report = "❓ לא הצלחתי לבדוק את הקו\n\nClaude לא סיים את הבדיקה (אולי חסר Secret, או שהמנוי/המפתח לא בתוקף). פרטים בקישור למטה."
-          first = report.splitlines()[0].strip("# ").strip() if report else "❓ לא הצלחתי לבדוק את הקו"
+              report = "❓ לא הצלחתי לבדוק את הקו\n\nClaude לא סיים את הבדיקה (אולי חסר Secret, או שהמנוי/המפתח לא בתוקף)."
           applied = {"yes": "✅ התיקון עבר את כל הבדיקות, נכנס, והגשר הופעל מחדש.",
                      "failed": "❌ Claude הציע תיקון, אבל הבדיקות נכשלו — התיקון לא נכנס. הקו ממשיך כרגיל.",
                      "rejected": "❌ התיקון שינה קבצים שאסור לשנות — לא נכנס."}.get(os.environ.get("APPLIED", ""), "")
-          body = report + ("\n\n" + applied if applied else "") + f"\n\nההרצה: {os.environ['RUN_URL']}\n\n@{repo.split('/')[0]}"
-          today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3))).strftime("%d.%m.%Y")
-          for i in api("GET", f"/repos/{repo}/issues?state=open&per_page=100"):
-              if i["title"].startswith("דוח שבועי"):
-                  api("PATCH", f"/repos/{repo}/issues/{i['number']}", {"state": "closed"})
-          api("POST", f"/repos/{repo}/issues", {"title": f"דוח שבועי: {first[:80]} — {today}", "body": body})
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("# דוח שבועי\n\n" + report + ("\n\n" + applied if applied else "") + "\n")
           EOF
