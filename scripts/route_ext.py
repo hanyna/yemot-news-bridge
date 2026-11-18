@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""העברת שלוחה למספר טלפון אחר, עם קוד גישה — רץ ב-GitHub Actions (route-ext.yml).
+
+קורא את routing/config.txt:
+  state=on   — השלוחה מוגדרת כהעברה (type=routing) למספר שב-phone, נעולה בקוד גישה.
+  state=off  — השלוחה חוזרת להפנות לתפריט הראשי.
+
+קוד הגישה לא נכתב בריפו (הריפו ציבורי) ולא מודפס לעולם: הסקריפט מגריל קוד,
+שומר אותו רק בתוך ext.ini במערכת ימות המשיח, ושולח אותו ב-SMS לבעל הקו
+(SMS_TO, כמו בהתראת הפטריוטים). אם ה-SMS נכשל — ההגדרה הקודמת של השלוחה
+מוחזרת, כדי שלא תישאר שלוחה נעולה בקוד שאף אחד לא יודע.
+
+קוד חדש: מעלים את code_version ב-routing/config.txt (1 → 2) — יוגרל קוד חדש
+ויישלח ב-SMS. שינוי המספר בלבד (phone) משאיר את הקוד הקיים.
+
+השלוחה היא גם השלוחה של קו ג'מיני (gemini_line.py): כשקו ג'מיני פעיל בה
+(type=api) הסקריפט לא נוגע בה. ההגדרה השמורה שלו (gemini-off.ini) לא נמחקת.
+"""
+import json
+import os
+import secrets
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+BASE = os.environ.get("YEMOT_API_BASE", "").strip() or "https://www.call2all.co.il/ym/api/"
+KEY = os.environ.get("YEMOT_API_KEY", "").strip()
+SMS_TOKEN = os.environ.get("YEMOT_SMS_TOKEN", "").strip()
+SMS_TO = os.environ.get("SMS_TO", "").strip()
+SMS_FROM = os.environ.get("SMS_FROM", "").strip()
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG = os.environ.get("ROUTE_CONFIG", "").strip() or os.path.join(ROOT, "routing", "config.txt")
+OFF_INI = "type=go_to_folder\ngo_to_folder=/"
+
+_hide = [KEY, SMS_TOKEN, SMS_TO]  # ערכים שאסור שיופיעו בלוג (הקוד מתווסף כשהוא מוגרל)
+
+
+def mask(s):
+    for sec in _hide:
+        if sec:
+            s = s.replace(sec, "***")
+    return s
+
+
+def post(method, form, auth=True):
+    req = urllib.request.Request(BASE + method, data=urllib.parse.urlencode(form).encode(), method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+    if auth:
+        req.add_header("Authorization", KEY)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310
+            body = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        return None, f"שגיאת רשת ב-{method}: {mask(str(e))}"
+    try:
+        return json.loads(body), ""
+    except ValueError:
+        return None, f"תגובה לא צפויה מימות המשיח ב-{method}"
+
+
+def call(method, **form):
+    r, err = post(method, form)
+    if r is None:
+        sys.exit(err)
+    return r
+
+
+def read(path):
+    """תוכן קובץ טקסט, או "" כשאינו קיים."""
+    r = call("GetTextFile", what=path)
+    if r.get("responseStatus") != "OK":
+        return ""
+    return (r.get("contents") or "").replace("\r\n", "\n").strip()
+
+
+def write(path, text):
+    """כותב קובץ ומוודא שנשמר. מחזיר "" כשהצליח, אחרת תיאור התקלה (בלי תוכן הקובץ)."""
+    name = path.rsplit("/", 1)[-1]
+    r, err = post("UploadTextFile", {"what": path, "contents": text})
+    if r is None:
+        return err
+    if r.get("responseStatus") != "OK":
+        return f"העלאה נכשלה ({name}): {mask(str(r.get('responseStatus')))}"
+    if read(path) != text.strip():
+        return f"הקובץ {name} לא נשמר כמו שנשלח."
+    return ""
+
+
+def values(ini):
+    out = {}
+    for line in ini.splitlines():
+        line = line.strip()
+        if line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip().lower()] = v.strip()
+    return out
+
+
+def send_sms(message):
+    if not SMS_TO:
+        return False, "אין SMS_TO (מספר יעד) ב-Secrets"
+    if not (KEY or SMS_TOKEN):
+        return False, "אין מפתח לשליחת SMS"
+    form = {"phones": SMS_TO, "message": message}
+    if SMS_FROM:
+        form["from"] = SMS_FROM
+    if SMS_TOKEN:
+        form["token"] = SMS_TOKEN
+    r, err = post("SendSms", form, auth=not SMS_TOKEN)
+    if r is None:
+        return False, err
+    status = str(r.get("responseStatus", ""))
+    if status.upper() != "OK":
+        return False, mask(f"{status}: {r.get('message', '')}")
+    return True, ""
+
+
+def new_code():
+    """קוד גישה בן 4 ספרות (בלי 0 בהתחלה)."""
+    return str(secrets.randbelow(9000) + 1000)
+
+
+def main():
+    if not KEY:
+        sys.exit("חסר YEMOT_API_KEY")
+    with open(CONFIG, encoding="utf-8") as f:
+        cfg = values(f.read())
+    ext = cfg.get("ext", "7").strip("/ ") or "7"
+    want = cfg.get("state", "").lower()
+    phone = cfg.get("phone", "").replace("-", "").replace(" ", "")
+    version = cfg.get("code_version", "1")
+    if want not in ("on", "off"):
+        sys.exit("routing/config.txt: state צריך להיות on או off")
+    if not ext.replace("/", "").isdigit():
+        sys.exit("routing/config.txt: ext צריך להיות מספר שלוחה")
+    if want == "on" and not (phone.isdigit() and 7 <= len(phone) <= 12):
+        sys.exit("routing/config.txt: phone צריך להיות מספר טלפון (ספרות בלבד)")
+
+    ini_path = f"ivr2:/{ext}/ext.ini"
+    state_path = f"ivr2:/{ext}/routing-state.ini"
+    cur = read(ini_path)
+    cv = values(cur)
+    cur_type = cv.get("type", "(אין)")
+    print(f"שלוחה {ext}: מצב נוכחי type={cur_type}; מבוקש: {want}")
+    if not cur:
+        sys.exit(f"שלוחה {ext} לא קיימת או בלי הגדרות — לא נוגע בה.")
+    if cur_type == "api":
+        sys.exit(f"שלוחה {ext} פעילה כרגע כקו ג'מיני — לא נוגע בה. כבו אותו קודם (gemini/state.txt = off).")
+
+    if want == "off":
+        if cur_type != "routing":
+            print("השלוחה לא מוגדרת כהעברה — אין מה לשנות.")
+            return
+        err = write(ini_path, OFF_INI)
+        if err:
+            sys.exit(err)
+        print(f"שלוחה {ext}: ההעברה כבויה, השלוחה מפנה לתפריט הראשי.")
+        return
+
+    saved = values(read(state_path))
+    old_code = cv.get("password", "") if cur_type == "routing" else ""
+    keep_code = bool(old_code) and old_code.isdigit() and saved.get("code_version") == version
+    if keep_code and cv.get("routing_to_phone") == phone:
+        print(f"שלוחה {ext} כבר מעבירה למספר המבוקש עם קוד גישה — אין מה לשנות.")
+        return
+    code = old_code if keep_code else new_code()
+    _hide.append(code)
+
+    ini = "\n".join([
+        "type=routing",
+        "routing_to_phone=" + phone,
+        "password=" + code,
+        "password_always_required=yes",
+        "password_error_goto=/",
+    ])
+    err = write(ini_path, ini)
+    if err:
+        sys.exit(err)
+    print(f"שלוחה {ext} מוגדרת כהעברה ל-{phone}, נעולה בקוד גישה.")
+
+    if keep_code:
+        print("קוד הגישה נשאר כמו שהיה (רק המספר השתנה) — לא נשלח SMS.")
+    else:
+        ok, why = send_sms(f"קו עדכוני ארץ ישראל: קוד הגישה לשלוחה {ext} הוא {code}")
+        if not ok:
+            print("שליחת ה-SMS עם הקוד נכשלה:", why, file=sys.stderr)
+            back = write(ini_path, cur)
+            if back:
+                sys.exit("...וגם החזרת ההגדרה הקודמת נכשלה: " + back)
+            sys.exit(f"שלוחה {ext} הוחזרה להגדרה הקודמת (הקוד לא הגיע לבעל הקו).")
+        print("קוד הגישה נשלח ב-SMS לבעל הקו.")
+
+    err = write(state_path, f"phone={phone}\ncode_version={version}")
+    if err:
+        print("הערה: קובץ המצב לא נשמר —", err, "(ההעברה עצמה פעילה).")
+
+
+if __name__ == "__main__":
+    main()

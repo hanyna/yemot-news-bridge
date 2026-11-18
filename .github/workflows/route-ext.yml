@@ -1,0 +1,32 @@
+name: Route extension to phone
+
+# העברת שלוחה (7) למספר טלפון אחר עם קוד גישה: משנים את routing/config.txt.
+# קוד הגישה מוגרל, נשמר רק במערכת ימות המשיח ונשלח ב-SMS לבעל הקו (SMS_TO) —
+# הוא לא נכתב בריפו ולא מודפס בלוג. ראו scripts/route_ext.py.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "routing/config.txt"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# אותה קבוצה של gemini-line.yml — שניהם משנים את אותה שלוחה, שלא ירוצו יחד.
+concurrency:
+  group: yemot-gemini-line
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set routing
+        env:
+          YEMOT_API_KEY: ${{ secrets.YEMOT_API_KEY }}
+          YEMOT_SMS_TOKEN: ${{ secrets.YEMOT_SMS_TOKEN }}   # אופציונלי: מספר-מערכת:סיסמה
+          SMS_TO: ${{ secrets.SMS_TO }}                     # מספר בעל הקו — אליו נשלח הקוד
+          SMS_FROM: ${{ secrets.SMS_FROM }}                 # אופציונלי: שם/מספר שולח
+        run: python3 scripts/route_ext.py

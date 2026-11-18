@@ -84,6 +84,13 @@ def main():
     cur_type = values(cur).get("type", "(אין)")
     print(f"שלוחה {EXT}: מצב נוכחי type={cur_type}; מבוקש: {want}")
 
+    # השלוחה משמשת כרגע כהעברה למספר אחר (scripts/route_ext.py) — לא דורסים אותה.
+    if cur_type == "routing":
+        if want == "off":
+            print(f"שלוחה {EXT} מוגדרת כהעברה למספר אחר — קו ג'מיני ממילא לא פעיל בה, לא נוגע.")
+            return
+        sys.exit(f"שלוחה {EXT} תפוסה בהעברה למספר אחר — כבו אותה קודם (routing/config.txt: state=off).")
+
     if want == "off":
         if is_api(cur):
             write(BACKUP, cur)
