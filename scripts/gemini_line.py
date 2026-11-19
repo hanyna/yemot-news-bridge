@@ -85,7 +85,7 @@ def main():
     print(f"שלוחה {EXT}: מצב נוכחי type={cur_type}; מבוקש: {want}")
 
     # השלוחה משמשת כרגע כהעברה למספר אחר (scripts/route_ext.py) — לא דורסים אותה.
-    if cur_type in ("routing", "routing_yemot", "nitoviya"):
+    if cur_type in ("routing", "routing_yemot", "nitoviya", "routing_1800"):
         if want == "off":
             print(f"שלוחה {EXT} מוגדרת כהעברה למספר אחר — קו ג'מיני ממילא לא פעיל בה, לא נוגע.")
             return

@@ -6,7 +6,9 @@
                kind=phone — העברה למספר טלפון רגיל (type=routing; עולה יחידות לפי דקות).
                kind=yemot — העברה למערכת אחרת של ימות המשיח (type=routing_yemot; בלי יחידות).
                kind=nitoviya — העברה במודול ניתוביה ליעד קבוע (type=nitoviya + nitoviya_dial_to;
-                               בלי יחידות מאז 29.7.2025, ייתכנו פרסומות לפני השיחה).
+                               בלי יחידות מאז 29.7.2025, ייתכנו פרסומות לפני השיחה;
+                               רק ליעד רגיל — נייח או נייד).
+               kind=1800 — מודול ההפניה למספרי 1800/1801 (type=routing_1800; בלי יחידות).
   state=off  — השלוחה חוזרת להפנות לתפריט הראשי.
 
 קוד הגישה לא נכתב בריפו (הריפו ציבורי) ולא מודפס לעולם: הסקריפט מגריל קוד,
@@ -44,6 +46,7 @@ KINDS = {  # kind → (type של השלוחה, המפתח של מספר היעד
     "phone": ("routing", "routing_to_phone"),
     "yemot": ("routing_yemot", "routing_yemot_number"),
     "nitoviya": ("nitoviya", "nitoviya_dial_to"),
+    "1800": ("routing_1800", "routing_1800"),
 }
 ROUTE_TYPES = tuple(t for t, _ in KINDS.values())
 
@@ -166,7 +169,7 @@ def main():
     version = cfg.get("code_version", "1")
     kind = cfg.get("kind", "phone").lower()
     if kind not in KINDS:
-        sys.exit("routing/config.txt: kind צריך להיות phone, yemot או nitoviya")
+        sys.exit("routing/config.txt: kind צריך להיות phone, yemot, nitoviya או 1800")
     rtype, rkey = KINDS[kind]
     if want not in ("on", "off"):
         sys.exit("routing/config.txt: state צריך להיות on או off")
