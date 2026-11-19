@@ -2,7 +2,9 @@
 """העברת שלוחה למספר טלפון אחר, עם קוד גישה — רץ ב-GitHub Actions (route-ext.yml).
 
 קורא את routing/config.txt:
-  state=on   — השלוחה מוגדרת כהעברה (type=routing) למספר שב-phone, נעולה בקוד גישה.
+  state=on   — השלוחה מוגדרת כהעברה למספר שב-phone, נעולה בקוד גישה.
+               kind=phone — העברה למספר טלפון רגיל (type=routing; עולה יחידות לפי דקות).
+               kind=yemot — העברה למערכת אחרת של ימות המשיח (type=routing_yemot; בלי יחידות).
   state=off  — השלוחה חוזרת להפנות לתפריט הראשי.
 
 קוד הגישה לא נכתב בריפו (הריפו ציבורי) ולא מודפס לעולם: הסקריפט מגריל קוד,
@@ -36,6 +38,7 @@ SMS_FROM = os.environ.get("SMS_FROM", "").strip()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.environ.get("ROUTE_CONFIG", "").strip() or os.path.join(ROOT, "routing", "config.txt")
 OFF_INI = "type=go_to_folder\ngo_to_folder=/"
+ROUTE_TYPES = ("routing", "routing_yemot")
 
 _hide = [KEY, SMS_TOKEN, SMS_TO]  # ערכים שאסור שיופיעו בלוג (הקוד מתווסף כשהוא מוגרל)
 
@@ -154,6 +157,10 @@ def main():
     want = cfg.get("state", "").lower()
     phone = cfg.get("phone", "").replace("-", "").replace(" ", "")
     version = cfg.get("code_version", "1")
+    kind = cfg.get("kind", "phone").lower()
+    if kind not in ("phone", "yemot"):
+        sys.exit("routing/config.txt: kind צריך להיות phone או yemot")
+    rtype, rkey = ("routing_yemot", "routing_yemot_number") if kind == "yemot" else ("routing", "routing_to_phone")
     if want not in ("on", "off"):
         sys.exit("routing/config.txt: state צריך להיות on או off")
     if not ext.replace("/", "").isdigit():
@@ -176,7 +183,7 @@ def main():
         sys.exit(f"שלוחה {ext} פעילה כרגע כקו ג'מיני — לא נוגע בה. כבו אותו קודם (gemini/state.txt = off).")
 
     if want == "off":
-        if cur_type != "routing":
+        if cur_type not in ROUTE_TYPES:
             print("השלוחה לא מוגדרת כהעברה — אין מה לשנות.")
             return
         err = write(ini_path, OFF_INI)
@@ -186,20 +193,20 @@ def main():
         return
 
     saved = values(read(state_path))
-    old_code = cv.get("password", "") if cur_type == "routing" else ""
+    old_code = cv.get("password", "") if cur_type in ROUTE_TYPES else ""
     if picked:
         keep_code = old_code == picked
     else:
         keep_code = bool(old_code) and old_code.isdigit() and saved.get("code_version") == version
-    if keep_code and cv.get("routing_to_phone") == phone:
+    if keep_code and cur_type == rtype and cv.get(rkey) == phone:
         print(f"שלוחה {ext} כבר מעבירה למספר המבוקש עם קוד הגישה המבוקש — אין מה לשנות.")
         return
     code = picked or (old_code if keep_code else new_code())
     _hide.append(code)
 
     ini = "\n".join([
-        "type=routing",
-        "routing_to_phone=" + phone,
+        "type=" + rtype,
+        rkey + "=" + phone,
         "password=" + code,
         "password_always_required=yes",
         "password_error_goto=/",
@@ -207,12 +214,12 @@ def main():
     err = write(ini_path, ini)
     if err:
         sys.exit(err)
-    print(f"שלוחה {ext} מוגדרת כהעברה ל-{phone}, נעולה בקוד גישה.")
+    print(f"שלוחה {ext} מוגדרת כהעברה ל-{phone} (type={rtype}), נעולה בקוד גישה.")
 
     if picked:
         print("קוד הגישה הוחלף לקוד שבעל הקו בחר — לא נשלח SMS.")
     elif keep_code:
-        print("קוד הגישה נשאר כמו שהיה (רק המספר השתנה) — לא נשלח SMS.")
+        print("קוד הגישה נשאר כמו שהיה (רק יעד ההעברה השתנה) — לא נשלח SMS.")
     else:
         ok, why = send_sms(f"קו עדכוני ארץ ישראל: קוד הגישה לשלוחה {ext} הוא {code}")
         if not ok:
