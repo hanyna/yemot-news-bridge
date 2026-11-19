@@ -175,7 +175,7 @@ def main():
         sys.exit("routing/config.txt: state צריך להיות on או off")
     if not ext.replace("/", "").isdigit():
         sys.exit("routing/config.txt: ext צריך להיות מספר שלוחה")
-    if want == "on" and not (phone.isdigit() and 7 <= len(phone) <= 12):
+    if want == "on" and not (phone.isdigit() and 7 <= len(phone) <= 15):
         sys.exit("routing/config.txt: phone צריך להיות מספר טלפון (ספרות בלבד)")
     picked = chosen_code()
     if picked and not (picked.isdigit() and 4 <= len(picked) <= 10):
