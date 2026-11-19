@@ -5,6 +5,8 @@
   state=on   — השלוחה מוגדרת כהעברה למספר שב-phone, נעולה בקוד גישה.
                kind=phone — העברה למספר טלפון רגיל (type=routing; עולה יחידות לפי דקות).
                kind=yemot — העברה למערכת אחרת של ימות המשיח (type=routing_yemot; בלי יחידות).
+               kind=nitoviya — העברה במודול ניתוביה ליעד קבוע (type=nitoviya + nitoviya_dial_to;
+                               בלי יחידות מאז 29.7.2025, ייתכנו פרסומות לפני השיחה).
   state=off  — השלוחה חוזרת להפנות לתפריט הראשי.
 
 קוד הגישה לא נכתב בריפו (הריפו ציבורי) ולא מודפס לעולם: הסקריפט מגריל קוד,
@@ -38,7 +40,12 @@ SMS_FROM = os.environ.get("SMS_FROM", "").strip()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.environ.get("ROUTE_CONFIG", "").strip() or os.path.join(ROOT, "routing", "config.txt")
 OFF_INI = "type=go_to_folder\ngo_to_folder=/"
-ROUTE_TYPES = ("routing", "routing_yemot")
+KINDS = {  # kind → (type של השלוחה, המפתח של מספר היעד)
+    "phone": ("routing", "routing_to_phone"),
+    "yemot": ("routing_yemot", "routing_yemot_number"),
+    "nitoviya": ("nitoviya", "nitoviya_dial_to"),
+}
+ROUTE_TYPES = tuple(t for t, _ in KINDS.values())
 
 _hide = [KEY, SMS_TOKEN, SMS_TO]  # ערכים שאסור שיופיעו בלוג (הקוד מתווסף כשהוא מוגרל)
 
@@ -158,9 +165,9 @@ def main():
     phone = cfg.get("phone", "").replace("-", "").replace(" ", "")
     version = cfg.get("code_version", "1")
     kind = cfg.get("kind", "phone").lower()
-    if kind not in ("phone", "yemot"):
-        sys.exit("routing/config.txt: kind צריך להיות phone או yemot")
-    rtype, rkey = ("routing_yemot", "routing_yemot_number") if kind == "yemot" else ("routing", "routing_to_phone")
+    if kind not in KINDS:
+        sys.exit("routing/config.txt: kind צריך להיות phone, yemot או nitoviya")
+    rtype, rkey = KINDS[kind]
     if want not in ("on", "off"):
         sys.exit("routing/config.txt: state צריך להיות on או off")
     if not ext.replace("/", "").isdigit():
