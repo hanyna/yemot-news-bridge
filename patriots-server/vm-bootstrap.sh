@@ -15,11 +15,17 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "[1/5] חבילות (ffmpeg, git, python)..."
 apt-get update -qq >/dev/null
-apt-get install -y -qq ffmpeg curl ca-certificates git python3 >/dev/null
+apt-get install -y -qq ffmpeg curl ca-certificates git python3 unzip >/dev/null
 
 echo "[2/5] yt-dlp..."
 curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
 chmod 755 /usr/local/bin/yt-dlp
+# deno — מנוע JavaScript ש-yt-dlp צריך כדי לפתור את האתגר של יוטיוב כשעובדים עם עוגיות.
+# בלעדיו, עם cookies.txt, יוטיוב מחזיר "Only images are available for download".
+if [ ! -x /usr/local/bin/deno ]; then
+  curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- -y >/dev/null 2>&1 \
+    || echo "⚠ התקנת deno נכשלה — בלי עוגיות זה לא מפריע; עם עוגיות ההורדה תיכשל"
+fi
 
 echo "[3/5] Go $GOVER + בניית התוכנה..."
 if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "$GOVER"; then

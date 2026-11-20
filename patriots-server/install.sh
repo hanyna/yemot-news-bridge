@@ -59,10 +59,17 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 echo "מתקין ffmpeg (דקה-שתיים)..."
 apt-get update -qq >/dev/null
-apt-get install -y -qq ffmpeg curl ca-certificates python3 >/dev/null
+apt-get install -y -qq ffmpeg curl ca-certificates python3 unzip >/dev/null
 echo "מוריד yt-dlp עדכני..."
 curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
 chmod 755 /usr/local/bin/yt-dlp
+# deno — מנוע JavaScript ש-yt-dlp צריך כדי לפתור את האתגר של יוטיוב כשעובדים עם עוגיות.
+# בלעדיו, עם cookies.txt, יוטיוב מחזיר "Only images are available for download".
+if [ ! -x /usr/local/bin/deno ]; then
+  echo "מתקין deno (נדרש ל-yt-dlp עם עוגיות)..."
+  curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- -y >/dev/null 2>&1 \
+    || echo "⚠ התקנת deno נכשלה — בלי עוגיות זה לא מפריע; עם עוגיות ההורדה תיכשל"
+fi
 echo "✓ ffmpeg $(ffmpeg -version | head -1 | cut -d' ' -f3)  |  yt-dlp $(yt-dlp --version)"
 
 # 5) שעון ישראל — הכלי מחשב לפי Asia/Jerusalem בכל מקרה, אבל שהלוגים יהיו קריאים

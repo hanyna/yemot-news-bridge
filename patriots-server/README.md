@@ -100,6 +100,13 @@ ssh -i KEY ubuntu@IP "cd ~/patriots-server-update && sudo bash update.sh"
 ## אם משהו לא עובד
 
 - **"Sign in to confirm you're not a bot"** בלוג → צריך/לרענן `cookies.txt` (שלב ג').
+  בשרת Google Cloud: כפתור **SSH** בדפדפן → **UPLOAD FILE** (הקובץ שהתוסף הוריד) → ואז:
+  `sudo install -m 600 ~/www.youtube.com_cookies.txt /opt/yemot-patriots/cookies.txt && rm ~/www.youtube.com_cookies.txt && sudo yt-dlp -U; patriots`
+  **אף פעם לא לשים את הקובץ במאגר** — המאגר ציבורי, והעוגיות נותנות גישה לחשבון.
+- **"Only images are available for download" / "Requested format is not available"** (מופיע
+  רק כשיש `cookies.txt`) → חסר `deno`, מנוע ה-JavaScript ש-yt-dlp צריך עם חשבון מחובר.
+  ההתקנה מוסיפה אותו אוטומטית; בשרת ישן:
+  `sudo apt-get install -y unzip && curl -fsSL https://deno.land/install.sh | sudo DENO_INSTALL=/usr/local sh -s -- -y`
 - **"אין עדיין podcast.txt"** → הגשר עוד לא יצר את הפרק של היום; ההרצה הבאה תטפל.
 - **לא מצליחים להתחבר ב-ssh** → לבדוק שהמכונה RUNNING, שה-IP נכון, ושהמפתח הוא הקובץ
   שהורד ב-"Save private key". אם נטפרי חוסם SSH — לבקש פתיחה של פורט 22 לכתובת השרת.
